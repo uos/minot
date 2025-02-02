@@ -1,4 +1,8 @@
+use core::panic;
+use std::collections::HashMap;
+
 use log::error;
+use network::Rat;
 use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
 use sea::{coordinator::CoordinatorImpl, ImuMsg, ShipName};
 use tokio::sync::{mpsc, oneshot};
@@ -18,15 +22,6 @@ impl Network {
     }
 }
 
-pub type RatId = u32;
-
-#[derive(Debug, Copy, Clone)]
-enum VariableOptions {
-    NoOp,
-    MoveTo(RatId),
-    ReceiveFrom(RatId),
-}
-
 #[derive(Debug, Copy, Clone)]
 enum BagReaderTask {
     LidarFrame(u32),
@@ -38,10 +33,16 @@ enum BagReaderTask {
 // All possible variables that should be acted on must be known beforehand.
 // They get an ID or get generated into a type? TODO
 // ID => VariableRule
-// All
+// hashmap[string] => ID
+// ID => VariableRule
 
-#[derive(Debug, Copy, Clone)]
-enum VariableRule {}
+#[derive(Copy, Clone, Debug)]
+struct Variable {
+    pub ship: sea::ShipName,
+    pub strategy: Option<sea::Action>,
+}
+
+type VarPair = (Variable, Variable);
 
 use sea::Coordinator;
 
@@ -61,12 +62,63 @@ enum CoordinatorTask {
     },
 }
 
+fn get_strategy(
+    haystack: &HashMap<String, VarPair>,
+    rat_ship: sea::ShipName,
+    variable: String,
+) -> sea::Action {
+    match haystack.get(&variable) {
+        None => sea::Action::default(),
+        Some((left_var, right_var)) => match (left_var.ship, right_var.ship) {
+            (ship_l, ship_r) if ship_l == rat_ship && ship_r == rat_ship => {
+                panic!("should have been checked before");
+            }
+            (ship, _) if ship == rat_ship => left_var.strategy.unwrap_or_default(),
+            (_, ship) if ship == rat_ship => right_var.strategy.unwrap_or_default(),
+            _ => sea::Action::default(),
+        },
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // TODO parse from somewhere later, just temporary hardcoded
-    let variables = std::sync::Arc::new(vec!["bla".to_string()]);
+    // TODO Initialize Sea Network - detect all ships.
+    // We will make us known to the rest and they should answer.
+    // Everyone that answered within 100ms will be part of the network.
 
-    // TODO Initialize Sea Network - detect all ships
+    // TODO collect all available rats from network.
+
+    // TODO collect all winds.
+
+    // TODO parse config/ratlang and see if all mentioned rats are registered
+    // err and exit if not.
+    // On exit: disconnect all members of the network.
+    // only use the rats that are mentioned. filter out the rest.
+    // Winds are not mapped to rats, so they won't be filtered.
+
+    // TODO variables come dynamically from the network. We prepare them from the
+    // rat config and ignore the rest. The known ones are parsed to pairs.
+
+    // TODO a function must build this one and check that the names are the same
+    // if a variable is asking what to do but it is not part of the structure,
+    // answer with a "keep".
+    let mut pairs = HashMap::new();
+    pairs.insert(
+        "var1".to_string(),
+        (
+            Variable {
+                ship: 2,
+                strategy: Some(sea::Action::Shoot { target: 1 }),
+            },
+            Variable {
+                // TODO this step should be implied by the one before
+                ship: 1,
+                strategy: Some(sea::Action::Catch { source: 2 }),
+            },
+        ),
+    );
+
+    let pairs = std::sync::Arc::new(pairs);
 
     // TODO polulate Network by rats and winds
 
@@ -124,18 +176,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
         let mut queue = answer_rx.await.unwrap();
 
-        let var_clone = variables.clone();
         let rat_coord_tx = coord_tx.clone();
+        let rat_pairs = pairs.clone();
         tokio::spawn({
             async move {
                 while let Some(variable) = queue.recv().await {
-                    // TODO handle variable based on rules
-                    let action = if !var_clone.contains(&variable) {
-                        sea::Action::Sail
-                    } else {
-                        sea::Action::Sail // TODO actually evaluate rules
-                    };
-
+                    let action = get_strategy(&rat_pairs, rat.network_id, variable);
                     rat_coord_tx
                         .send(CoordinatorTask::SendRatAction {
                             ship_name: rat.network_id,

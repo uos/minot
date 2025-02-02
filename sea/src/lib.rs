@@ -25,11 +25,16 @@ pub enum ShipKind {
 
 pub type ShipName = u128;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub enum Action {
+    #[default]
     Sail,
-    Shoot { target: ShipName },
-    Catch { source: ShipName },
+    Shoot {
+        target: ShipName,
+    },
+    Catch {
+        source: ShipName,
+    },
 }
 
 #[async_trait::async_trait]
