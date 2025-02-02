@@ -25,6 +25,7 @@ pub enum ShipKind {
 
 pub type ShipName = u128;
 
+#[derive(Debug, Copy, Clone)]
 pub enum Action {
     Sail,
     Shoot { target: ShipName },
@@ -104,7 +105,9 @@ pub trait Coordinator: Send + Sync + 'static {
         ship: ShipName,
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<String>>;
 
-    async fn wind_set_sail(&self, ship: crate::ShipName, data: WindData) -> anyhow::Result<()>;
+    async fn blow_wind(&self, ship: crate::ShipName, data: WindData) -> anyhow::Result<()>;
+
+    async fn rat_action_send(&self, ship: ShipName, action: crate::Action) -> anyhow::Result<()>;
 }
 
 #[cfg(test)]

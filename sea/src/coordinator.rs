@@ -10,10 +10,13 @@ impl crate::Coordinator for CoordinatorImpl {
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<String>> {
         todo!()
     }
-    async fn wind_set_sail(
+    async fn blow_wind(&self, ship: crate::ShipName, data: crate::WindData) -> anyhow::Result<()> {
+        todo!()
+    }
+    async fn rat_action_send(
         &self,
         ship: crate::ShipName,
-        data: crate::WindData,
+        action: crate::Action,
     ) -> anyhow::Result<()> {
         todo!()
     }
