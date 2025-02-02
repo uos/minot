@@ -1,0 +1,22 @@
+[package]
+name = "sea"
+edition.workspace = true
+include.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+nalgebra.workspace = true
+log.workspace = true
+env_logger.workspace = true
+async-trait = "0.1.71"
+bimap = "0.6.3"
+etherparse = "0.13.0"
+ipnet = "2.8.0"
+rand = "0.8.5"
+tokio.workspace = true
+anyhow.workspace = true
+ros_pointcloud2.workspace = true
+serde.workspace = true

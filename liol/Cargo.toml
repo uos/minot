@@ -1,0 +1,20 @@
+[package]
+name = "liol"
+edition.workspace = true
+include.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+sea.workspace = true
+env_logger.workspace = true
+log.workspace = true
+nalgebra.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+bincode.workspace = true
+anyhow.workspace = true
+ros_pointcloud2.workspace = true
