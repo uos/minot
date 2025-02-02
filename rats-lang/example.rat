@@ -1,0 +1,67 @@
+// Example of rats (.rat -- Rats Language)
+#rats <- flio
+#rats <- mlio
+
+[bacon2] flio -> mlio
+
+[bacon1]
+C <- .n_call
+if C > 10 {
+  flio <- mlio
+}
+
+[bacon3] ==
+.print <- true
+.verbose <- true
+
+// runs network here
+
+#dbg
+play_frames l 10
+play_frames m 10 l
+play_frames o 100
+
+reset
+
+i <- 0
+while i++ < 10 {
+//  play_frames l 1
+// play_frames o 100
+  play_frames m 1s
+}
+
+// optimize on chef rat
+#rats <- sfasterlio_cpu
+#rats <- sfasterlio_gpu
+
+
+[rcc <- r(check1,check2)] // could be after neighbor search. r promotes to report, so latency, cpu_usage is available
+.print <- false // disable printing report to console or TUI
+.act <- param_opt, method_switch // handle must be an act bacon
+
+[[param_opt]]
+.check1.accuracy <- -
+.check1.accuracy.min <- 10cm
+.check1.accuracy.max <- ~
+
+// act by changing parameters only
+.params.map_voxel_size <- 0.1 .. 0.25
+
+[[method_switch]]
+.rcc.time <- ---
+.rcc.cpu_usage <- ~
+.rcc.memory_mb <- -
+
+.params.choice.choices.MappingOnly.switch_weight <- 1
+.params.choice.choicses.ActiveRegistration.switch_weight <- 1
+.params.choice.choicses.Inactive.switch_weight <- 3
+
+.params.choice.keep_min <- 4s // minimal time to keep this choice before evaluating the report
+
+// !! NetworkShipImpl and ThreadShipImpl
+
+
+// optimize on network or "lego lio" -> switch variables to different methods, optimize over best combination of methods.
+// Does not work because both methods still run. Only makes sense when it is possible to skip work between bacons.
+// "goto" can do that but then we may jump over variable initialisations etc.
+
