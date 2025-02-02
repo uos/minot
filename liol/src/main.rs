@@ -1,18 +1,7 @@
 use log::error;
-use nalgebra::*;
-use ros_pointcloud2::{points::PointXYZ, CloudDimensions, PointCloud2Msg, PointCloud2MsgBuilder};
-use sea::{coordinator::CoordinatorImpl, Action, ImuMsg, ShipName};
-use serde::{Deserialize, Serialize};
-use std::{
-    future::IntoFuture,
-    sync::{Arc, Mutex},
-};
-use tokio::sync::{
-    broadcast::Sender,
-    mpsc::{UnboundedReceiver, UnboundedSender},
-};
+use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
+use sea::{coordinator::CoordinatorImpl, ImuMsg, ShipName};
 use tokio::sync::{mpsc, oneshot};
-use tokio::task;
 mod network;
 
 struct Network {
@@ -158,13 +147,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Winds get posted by us. For demo, just push 1 second of a bag file to all winds
-    //let duration = std::time::Duration::from_secs(1);
-
-    // The bag reader is a different task that can be notified with a channel what to do
-    //let bagfile = "bagfile";
-    // TODO bag reader task, create random data for now, bagfile later!
-
     // Wind Sender Task
     let (wind_tx, mut wind_rx) = tokio::sync::mpsc::unbounded_channel::<sea::WindData>();
     let wind_coord_tx = coord_tx.clone();
@@ -180,6 +162,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+
+    // The bag reader is a different task that can be notified with a channel what to do
+    //let bagfile = "bagfile";
+    // TODO bag reader task, create random data for now, bagfile later!
 
     let rand_imu = ImuMsg::default();
     let imu_data = sea::WindData::Imu(rand_imu);
