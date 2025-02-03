@@ -1,18 +1,44 @@
 // Example of rats (.rat -- Rats Language)
-#rats <- flio
-#rats <- mlio
+#rats <- flio, mlio
 
-[bacon2] flio -> mlio
+==._print <- false
+==._verbose <- true
+  
+[bacon2]
+flio -> mlio
 
 [bacon1]
-C <- .n_call
+C <- ._num_call
 if C > 10 {
   flio <- mlio
 }
 
-[bacon3] ==
-.print <- true
-.verbose <- true
+[bacon3]
+==._print <- true
+==._verbose <- true
+
+==
+
+// Lexer
+[
+  bacon2
+  ->
+  $flio
+  $mlio
+]
+
+[
+  bacon1
+  <-
+  C
+  ._num_call
+  if
+  C > 10
+  {
+    $flio <- $mlio
+  }
+]
+
 
 // runs network here
 
@@ -23,40 +49,34 @@ play_frames o 100
 
 reset
 
-i <- 0
-while i++ < 10 {
-//  play_frames l 1
-// play_frames o 100
-  play_frames m 1s
-}
-
 // optimize on chef rat
-#rats <- sfasterlio_cpu
-#rats <- sfasterlio_gpu
+#rats <- sfasterlio_cpu, sfasterlio_gpu
 
-
-[rcc <- r(check1,check2)] // could be after neighbor search. r promotes to report, so latency, cpu_usage is available
-.print <- false // disable printing report to console or TUI
-.act <- param_opt, method_switch // handle must be an act bacon
+[check1]
+._act <- param_opt
 
 [[param_opt]]
-.check1.accuracy <- -
++ -> .check1.accuracy
 .check1.accuracy.min <- 10cm
-.check1.accuracy.max <- ~
+~ -> .check1.accuracy.max
 
 // act by changing parameters only
-.params.map_voxel_size <- 0.1 .. 0.25
+.map_voxel_size <- 10cm .. 25cm
+
+[rcc <- report(check1, check2)]
+._print <- false // disable printing report to console or TUI
+._act <- method_switch // handle must be an act bacon
 
 [[method_switch]]
 .rcc.time <- ---
 .rcc.cpu_usage <- ~
 .rcc.memory_mb <- -
 
-.params.choice.choices.MappingOnly.switch_weight <- 1
-.params.choice.choicses.ActiveRegistration.switch_weight <- 1
-.params.choice.choicses.Inactive.switch_weight <- 3
+._choice.choices.MappingOnly.sfasterlio_cpu.weight <- 0
+._choice.choices.ActiveRegistration.switch_weight <- 1
+._choice.choices.Inactive.switch_weight <- 3
 
-.params.choice.keep_min <- 4s // minimal time to keep this choice before evaluating the report
+._choice.keep_min <- 4s // minimal time to keep this choice before evaluating the report
 
 // !! NetworkShipImpl and ThreadShipImpl
 
