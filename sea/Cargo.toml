@@ -20,3 +20,5 @@ tokio.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 serde.workspace = true
+bincode.workspace = true
+pnet = "0.35.0"
