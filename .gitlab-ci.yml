@@ -38,7 +38,6 @@ rust-nightly:
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
-    - mv target/$RUST_TARGET/release/librat.rlib librat.rlib
     - cargo build --target $RUST_TARGET --release --lib
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
