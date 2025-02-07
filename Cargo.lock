@@ -722,6 +722,7 @@ dependencies = [
  "rand",
  "ros_pointcloud2",
  "serde",
+ "socket2",
  "tokio",
 ]
 

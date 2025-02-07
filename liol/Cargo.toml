@@ -18,3 +18,11 @@ serde.workspace = true
 bincode.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
+
+[profile.release]
+lto = true          # Link Time Optimization
+codegen-units = 1   # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
+strip = "debuginfo" # Significantly reduce binary size
+
+[profile.dev.package.backtrace]
+opt-level = 3
