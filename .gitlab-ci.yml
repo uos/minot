@@ -36,13 +36,14 @@ rust-nightly:
   script:
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol liol-$RUST_TARGET
-    - mv target/$RUST_TARGET/release/librat.so librat.so
+    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
     - mv target/$RUST_TARGET/release/librat.rlib librat.rlib
+    - cargo build --target $RUST_TARGET --release --lib
+    - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
-      - liol-$RUST_TARGET
+      - liol-$TRIPLE
       - librat.so
       - librat.a
       - librat.rlib
