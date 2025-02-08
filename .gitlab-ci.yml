@@ -98,6 +98,7 @@ snapshot:linux:riscv64-musl:
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
+    - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
