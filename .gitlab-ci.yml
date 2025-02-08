@@ -42,9 +42,9 @@ rust-nightly:
     - mv target/$RUST_TARGET/release/librat.so librat-nightly-$(date +%Y-%m-%d).so
   artifacts:
     paths:
-      - liol-$TRIPLE
-      - librat.so
-      - librat.a
+      - liol-$TRIPLE-nightly-$(date +%Y-%m-%d)
+      - librat-nightly-$(date +%Y-%m-%d).so
+      - librat-nightly-$(date +%Y-%m-%d).a
     expire_in: 1 week
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
@@ -59,8 +59,8 @@ snapshot:linux:x86_64-musl:
     - mv target/$RUST_TARGET/release/librat.a librat-nightly-$(date +%Y-%m-%d).a
   artifacts:
     paths:
-      - liol-$TRIPLE
-      - librat.a
+      - liol-$TRIPLE-nightly-$(date +%Y-%m-%d)
+      - librat-nightly-$(date +%Y-%m-%d).a
     expire_in: 1 week
   variables:
     RUST_TARGET: x86_64-unknown-linux-musl
@@ -105,9 +105,9 @@ snapshot:linux:riscv64-musl:
     - mv target/$RUST_TARGET/release/librat.so librat-nightly-$(date +%Y-%m-%d).so
   artifacts:
     paths:
-      - liol-$TRIPLE
-      - librat.so
-      - librat.a
+      - liol-$TRIPLE-nightly-$(date +%Y-%m-%d)
+      - librat-nightly-$(date +%Y-%m-%d).so
+      - librat-nightly-$(date +%Y-%m-%d).a
     expire_in: 1 week
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-musl
