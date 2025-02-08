@@ -34,17 +34,18 @@ rust-nightly:
 .build_template: &build_defaults
   stage: snapshot
   script:
+    - export DATE=$(date +%Y-%m-%d)
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-nightly-$DATE
-    - mv target/$RUST_TARGET/release/librat.a librat-nightly-$DATE.a
+    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
-    - mv target/$RUST_TARGET/release/librat.so librat-nightly-$DATE.so
+    - mv target/$RUST_TARGET/release/librat.so librat-$DATE-nightly.so
   artifacts:
     paths:
-      - liol-$TRIPLE-nightly-$DATE
-      - librat-nightly-$DATE.so
-      - librat-nightly-$DATE.a
+      - liol-$TRIPLE-*-nightly
+      - librat-*-nightly.so
+      - librat-*-nightly.a
     expire_in: 1 week
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
@@ -53,19 +54,19 @@ rust-nightly:
 snapshot:linux:x86_64-musl:
   stage: snapshot
   script:
+    - export DATE=$(date +%Y-%m-%d)
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-nightly-$DATE
-    - mv target/$RUST_TARGET/release/librat.a librat-nightly-$DATE.a
+    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
   artifacts:
     paths:
-      - liol-$TRIPLE-nightly-$DATE
-      - librat-nightly-$DATE.a
+      - liol-$TRIPLE-*-nightly
+      - librat-nightly-*-nightly.a
     expire_in: 1 week
   variables:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
-    DATE: $(date +%Y-%m-%d)
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: always
@@ -75,49 +76,45 @@ snapshot:linux:x86_64-gnu:
   variables:
     RUST_TARGET: x86_64-unknown-linux-gnu
     TRIPLE: x86_64-linux-gnu
-    DATE: $(date +%Y-%m-%d)
 
 snapshot:linux:aarch64:
   <<: *build_defaults
   variables:
     RUST_TARGET: aarch64-unknown-linux-gnu
     TRIPLE: aarch64-linux-gnu
-    DATE: $(date +%Y-%m-%d)
 
 snapshot:linux:armv7:
   <<: *build_defaults
   variables:
     RUST_TARGET: armv7-unknown-linux-gnueabihf
     TRIPLE: armv7-linux-gnueabihf
-    DATE: $(date +%Y-%m-%d)
 
 snapshot:linux:riscv64:
   <<: *build_defaults
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-gnu
     TRIPLE: riscv64gc-linux-gnu
-    DATE: $(date +%Y-%m-%d)
 
 snapshot:linux:riscv64-musl:
   stage: snapshot
   script:
+    - export DATE=$(date +%Y-%m-%d)
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-nightly-$DATE
-    - mv target/$RUST_TARGET/release/librat.a librat-nightly-$DATE.a
+    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
-    - mv target/$RUST_TARGET/release/librat.so librat-nightly-$DATE.so
+    - mv target/$RUST_TARGET/release/librat.so librat-$DATE-nightly.so
   artifacts:
     paths:
-      - liol-$TRIPLE-nightly-$DATE
-      - librat-nightly-$DATE.so
-      - librat-nightly-$DATE.a
+      - liol-$TRIPLE-*-nightly
+      - librat-*-nightly.so
+      - librat-*-nightly.a
     expire_in: 1 week
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-musl
     TRIPLE: riscv64gc-linux-musl
-    DATE: $(date +%Y-%m-%d)
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: always
