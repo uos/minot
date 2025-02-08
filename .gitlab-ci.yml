@@ -45,6 +45,7 @@ rust-nightly:
       - liol-$TRIPLE
       - librat.so
       - librat.a
+    expire_in: 1 week
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: always
@@ -60,6 +61,7 @@ snapshot:linux:x86_64-musl:
     paths:
       - liol-$TRIPLE
       - librat.a
+    expire_in: 1 week
   variables:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
@@ -106,6 +108,7 @@ snapshot:linux:riscv64-musl:
       - liol-$TRIPLE
       - librat.so
       - librat.a
+    expire_in: 1 week
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-musl
     TRIPLE: riscv64gc-linux-musl
