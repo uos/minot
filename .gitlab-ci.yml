@@ -6,7 +6,7 @@ variables:
 
 stages:
   - build
-  - archive
+  - snapshot
 
 before_script:
   - apt-get update
@@ -51,14 +51,13 @@ rust-nightly:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: always
 
-build:linux:x86_64-musl:
-  stage: archive
+snapshot:linux:x86_64-musl:
+  stage: snapshot
   script:
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
-    - mv target/$RUST_TARGET/release/librat.rlib librat.rlib
   artifacts:
     paths:
       - liol-$TRIPLE
@@ -68,40 +67,38 @@ build:linux:x86_64-musl:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
 
-build:linux:x86_64-gnu:
+snapshot:linux:x86_64-gnu:
   <<: *build_defaults
   variables:
     RUST_TARGET: x86_64-unknown-linux-gnu
     TRIPLE: x86_64-linux-gnu
 
-build:linux:aarch64:
+snapshot:linux:aarch64:
   <<: *build_defaults
   variables:
     RUST_TARGET: aarch64-unknown-linux-gnu
     TRIPLE: aarch64-linux-gnu
 
-build:linux:armv7:
+snapshot:linux:armv7:
   <<: *build_defaults
   variables:
     RUST_TARGET: armv7-unknown-linux-gnueabihf
     TRIPLE: armv7-linux-gnueabihf
 
-build:linux:riscv64:
+snapshot:linux:riscv64:
   <<: *build_defaults
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-gnu
     TRIPLE: riscv64gc-linux-gnu
 
-build:linux:riscv64-musl:
-  stage: archive
+snapshot:linux:riscv64-musl:
+  stage: snapshot
   script:
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
-    - mv target/$RUST_TARGET/release/librat.rlib librat.rlib
-    - cargo build --target $RUST_TARGET --release --lib
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
