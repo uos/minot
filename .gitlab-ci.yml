@@ -32,7 +32,7 @@ rust-nightly:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 .build_template: &build_defaults
-  stage: build
+  stage: snapshot
   script:
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
