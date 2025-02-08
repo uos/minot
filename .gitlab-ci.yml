@@ -1,4 +1,4 @@
-image: rust:latest
+image: rust:nightly
 
 variables:
   CARGO_INCREMENTAL: "0"
@@ -12,10 +12,10 @@ before_script:
   - apt-get update
   - apt-get install -y curl gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
 
-rust-latest:
+rust-stable:
   stage: build
+  image: rust:latest
   script:
-    - rustup default stable
     - cargo build --verbose
     - cargo test --verbose
   rules:
@@ -23,7 +23,6 @@ rust-latest:
 
 rust-nightly:
   stage: build
-  image: rust:nightly
   script:
     - cargo build --verbose
     - cargo test --verbose
@@ -39,14 +38,12 @@ rust-nightly:
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
-    - cargo build --target $RUST_TARGET --release --lib
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
       - liol-$TRIPLE
       - librat.so
       - librat.a
-      - librat.rlib
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: always
@@ -62,10 +59,12 @@ snapshot:linux:x86_64-musl:
     paths:
       - liol-$TRIPLE
       - librat.a
-      - librat.rlib
   variables:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: always
 
 snapshot:linux:x86_64-gnu:
   <<: *build_defaults
@@ -105,7 +104,9 @@ snapshot:linux:riscv64-musl:
       - liol-$TRIPLE
       - librat.so
       - librat.a
-      - librat.rlib
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-musl
     TRIPLE: riscv64gc-linux-musl
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: always
