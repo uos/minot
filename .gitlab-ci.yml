@@ -9,7 +9,7 @@ stages:
 
 before_script:
   - apt-get update
-  - apt-get install -y gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+  - apt-get install -y curl gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
 
 rust-latest:
   stage: build
@@ -48,10 +48,22 @@ rust-nightly:
       - librat.a
       - librat.rlib
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: always
 
 build:linux:x86_64-musl:
-  <<: *build_defaults
+  stage: archive
+  script:
+    - rustup target add $RUST_TARGET
+    - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
+    - mv target/$RUST_TARGET/release/librat.a librat.a
+    - mv target/$RUST_TARGET/release/librat.rlib librat.rlib
+  artifacts:
+    paths:
+      - liol-$TRIPLE
+      - librat.a
+      - librat.rlib
   variables:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
@@ -72,10 +84,31 @@ build:linux:armv7:
   <<: *build_defaults
   variables:
     RUST_TARGET: armv7-unknown-linux-gnueabihf
-    TRIPLE: arm-linux-gnueabihf
+    TRIPLE: armv7-linux-gnueabihf
 
 build:linux:riscv64:
   <<: *build_defaults
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-gnu
-    TRIPLE: riscv64-linux-gnu
+    TRIPLE: riscv64gc-linux-gnu
+
+build:linux:riscv64-musl:
+  stage: archive
+  script:
+    - rustup target add $RUST_TARGET
+    - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
+    - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE
+    - mv target/$RUST_TARGET/release/librat.a librat.a
+    - mv target/$RUST_TARGET/release/librat.rlib librat.rlib
+    - cargo build --target $RUST_TARGET --release --lib
+    - mv target/$RUST_TARGET/release/librat.so librat.so
+  artifacts:
+    paths:
+      - liol-$TRIPLE
+      - librat.so
+      - librat.a
+      - librat.rlib
+  variables:
+    RUST_TARGET: riscv64gc-unknown-linux-musl
+    TRIPLE: riscv64gc-linux-musl
