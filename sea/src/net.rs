@@ -1,4 +1,7 @@
-use std::net::{IpAddr, TcpStream};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, TcpStream},
+};
 
 use anyhow::{anyhow, Error};
 use log::{error, info, warn};
@@ -19,6 +22,7 @@ const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 const CLIENT_LISTEN_PORT: u16 = 6969;
 const BI_CLIENT_LISTEN_PORT: u16 = 6970;
 const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const CLIENT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 enum PacketKind {
@@ -58,6 +62,292 @@ struct Header {
 struct Packet {
     header: Header,
     data: PacketKind,
+}
+
+struct Sea {
+    coordinator_client: Client,
+    network_clients: std::sync::Arc<
+        std::sync::Mutex<
+            HashMap<
+                ShipName,
+                (
+                    tokio::sync::broadcast::Sender<bool>,
+                    tokio::sync::mpsc::Receiver<(Packet, tokio::sync::mpsc::Sender<Packet>)>,
+                ),
+            >,
+        >,
+    >,
+}
+
+impl Sea {
+    pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
+        let (rejoin_req_tx, mut rejoin_req_rx) = tokio::sync::mpsc::channel::<(String, Packet)>(10);
+
+        tokio::spawn(async move {
+            // gather udp packets until we have a full rejoin request
+            tokio::spawn(async move {
+                let udp_listener = Client::get_udp_socket(external_ip).await;
+                let rejoin_request = Packet {
+                    header: Header {
+                        source: ShipName::MAX,
+                        target: CONTROLLER_CLIENT_ID,
+                    },
+                    data: PacketKind::JoinRequest(0),
+                };
+                let bytes_rejoin_request = bincode::serialize(&rejoin_request)
+                    .expect("could not serialize rejoin request");
+                let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len() + 1;
+                let mut clients = HashMap::<String, (usize, Vec<u8>)>::new();
+
+                loop {
+                    let mut buf = [0; 1024];
+                    let (n, addr) = udp_listener.recv_from(&mut buf).await.unwrap();
+                    let id = format!("{}:{}", addr.ip(), addr.port());
+
+                    match clients.get_mut(&id) {
+                        Some((kum, buffer)) => {
+                            if *kum == 0 {
+                                if buf[0] != PROTO_IDENTIFIER {
+                                    clients.remove(&id); // TODO does this work? We are inside a get_mut but removing the id we are in
+                                    continue;
+                                } else {
+                                    let nbuf = [0; 1024];
+                                    // clean the first byte from the buffer
+                                    for i in 0..n {
+                                        buf[i] = nbuf[i + 1];
+                                    }
+                                    buf = nbuf;
+
+                                    buffer.extend_from_slice(&buf[..n]);
+                                }
+                            }
+                            *kum += n;
+                        }
+                        None => {
+                            let mut buffer = Vec::with_capacity(1024);
+                            buffer.extend_from_slice(&buf[..n]);
+                            clients.insert(id, (n, buffer));
+                        }
+                    }
+
+                    let mut to_delete = Vec::<String>::new();
+                    for (id, (kum, buffer)) in clients.iter_mut() {
+                        if *kum != expected_n_bytes_for_rejoin_request {
+                            continue;
+                        }
+
+                        let packet: Packet = match bincode::deserialize(&buffer) {
+                            Err(e) => {
+                                error!("Received package is broken: {e}");
+                                continue;
+                            }
+                            Ok(packet) => packet,
+                        };
+
+                        match rejoin_req_tx.send((id.clone(), packet)).await {
+                            Err(e) => {
+                                error!("Could not send rejoin request to internal channel: {e}");
+                            }
+                            Ok(_) => {
+                                to_delete.push(id.clone());
+                            }
+                        };
+                    }
+
+                    for id in to_delete {
+                        clients.remove(&id);
+                    }
+                }
+            });
+        });
+
+        let clients = std::sync::Arc::new(std::sync::Mutex::new(HashMap::<
+            ShipName,
+            (
+                tokio::sync::broadcast::Sender<bool>,
+                tokio::sync::mpsc::Receiver<(Packet, tokio::sync::mpsc::Sender<Packet>)>,
+            ),
+        >::new()));
+
+        // wait for join requests, send welcome to their tcp port
+        let client_add = clients.clone();
+        tokio::spawn(async move {
+            loop {
+                let (addr, packet) = rejoin_req_rx.recv().await.unwrap();
+                match packet.data {
+                    PacketKind::JoinRequest(client_tcp_port) => {
+                        let mut found_id = false;
+                        let mut generated_id = 0;
+                        {
+                            let clients = client_add.lock().expect("could not lock mutex");
+                            while !found_id {
+                                generated_id = rand::random::<ShipName>().abs();
+                                if !clients.contains_key(&generated_id) {
+                                    found_id = true;
+                                }
+                            }
+                        }
+
+                        let (disconnect_tx, mut disconnect_rx) =
+                            tokio::sync::broadcast::channel::<bool>(1);
+
+                        let inner_clients = client_add.clone();
+                        tokio::spawn(async move {
+                            // create tcp listener for this client
+                            let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:0")
+                                .await
+                                .expect("could not bind tcp socket");
+
+                            let server_tcp_client_listen_port = tcp_listener
+                                .local_addr()
+                                .expect("could not get tcp listener adress")
+                                .port();
+                            let tcp_listener =
+                                tokio::net::TcpListener::from_std(tcp_listener.into_std().unwrap())
+                                    .unwrap();
+
+                            let ip = addr.split(':').next().unwrap();
+                            let mut gen_id_send_stream = tokio::net::TcpStream::connect(format!(
+                                "{}:{}",
+                                ip, client_tcp_port
+                            ))
+                            .await
+                            .expect("could not connect to client");
+
+                            // send welcome with the generated client_id
+                            let welcome_packet = Packet {
+                                header: Header {
+                                    source: CONTROLLER_CLIENT_ID,
+                                    target: generated_id,
+                                },
+                                data: PacketKind::Welcome(
+                                    generated_id,
+                                    server_tcp_client_listen_port,
+                                ),
+                            };
+
+                            let welcome_packet_bytes = bincode::serialize(&welcome_packet)
+                                .expect("could not serialize welcome packet");
+                            let mut welcome_packet = vec![PROTO_IDENTIFIER];
+                            welcome_packet.extend(welcome_packet_bytes);
+                            match gen_id_send_stream.write_all(&welcome_packet).await {
+                                Err(e) => {
+                                    error!("could not send welcome packet: {e}");
+                                    return;
+                                }
+                                Ok(_) => {}
+                            }
+
+                            let (tx, rx) = tokio::sync::mpsc::channel::<(
+                                Packet,
+                                tokio::sync::mpsc::Sender<Packet>,
+                            )>(10);
+                            tokio::spawn(async move {
+                                loop {
+                                    tokio::select! {
+                                        _ = disconnect_rx.recv() => {
+                                            return;
+                                        }
+                                        accepted = tcp_listener.accept() => {
+                                            match accepted {
+                                                Ok((mut stream, _addr)) => {
+                                                    let mut buffer = Vec::with_capacity(1024);
+                                                    let mut first = true;
+
+                                                    let mut is_for_us = true;
+                                                    loop {
+                                                        let mut buf = [0; 1024];
+                                                        let n = match stream.read(&mut buf).await {
+                                                            Err(e) => {
+                                                                error!("Could not read from TCP stream: {e}");
+                                                                0
+                                                            }
+                                                            Ok(n) => n,
+                                                        };
+
+                                                        if first {
+                                                            first = false;
+                                                            if buf[0] != PROTO_IDENTIFIER {
+                                                                is_for_us = false;
+                                                                break;
+                                                            }
+                                                        }
+                                                        if n == 0 {
+                                                            break;
+                                                        }
+
+                                                        buffer.extend_from_slice(&buf[..n]);
+                                                    }
+
+                                                    if is_for_us {
+                                                        return; // TODO is this just returning from the case in the select?
+                                                    }
+                                                    info!("Received stream");
+                                                    let cleaned_buf = &buffer[1..];
+                                                    let packet: Packet = match bincode::deserialize(&cleaned_buf) {
+                                                        Err(e) => {
+                                                            error!("Received package is broken: {e}");
+                                                            return; // TODO Same as above
+                                                        }
+                                                        Ok(packet) => packet,
+                                                    };
+
+                                                    let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
+                                                    match tx.send((packet, response_tx)).await {
+                                                        Err(e) => {
+                                                            error!("could not send to internal channel: {e}");
+                                                        }
+                                                        _ => {}
+                                                    }
+
+                                                    if let Some(response) = response_rx.recv().await {
+                                                        let packet = bincode::serialize(&response).expect("could not serialize packet");
+                                                        if let Err(e) = stream.write_all(&packet).await {
+                                                            error!("could not respond tcp socket: {e}");
+                                                        }
+
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!("Error while receiving from client: {e}");
+                                                }
+
+                                            }
+
+                                        }
+                                    }
+                                }
+                            });
+
+                            inner_clients
+                                .lock()
+                                .unwrap()
+                                .insert(generated_id, (disconnect_tx, rx));
+                        });
+                    }
+                    _ => {
+                        warn!("Received unexpected packet: {packet:?}");
+                    }
+                }
+            }
+        });
+
+        Self {
+            coordinator_client: Client::new(true, external_ip).await,
+            network_clients: clients,
+        }
+    }
+
+    // TODO need to wait for ctrl-c to handle this with grace and async
+    pub async fn dissolve_network(&mut self) -> anyhow::Result<()> {
+        let network_lock = self.network_clients.lock().unwrap();
+        for (_k, v) in network_lock.iter() {
+            // Tells all Client TCP Listener on the Server side to close, so the hearbeat will fail on each client and they disconnect.
+            v.0.send(true)?;
+        }
+
+        Ok(())
+    }
 }
 
 struct Client {
@@ -156,6 +446,12 @@ impl Client {
                                 if buf[0] != PROTO_IDENTIFIER {
                                     is_for_us = false;
                                     break;
+                                } else {
+                                    let nbuf = [0; 1024];
+                                    for i in 0..n {
+                                        buf[i] = nbuf[i + 1];
+                                    }
+                                    buf = nbuf;
                                 }
                             }
                             if n == 0 {
@@ -201,11 +497,6 @@ impl Client {
             ip,
             tcp_coordinator_task: None,
         }
-    }
-
-    // TODO need to wait for ctrl-c to handle this with grace and async
-    pub async fn dissolve_network(clients: &[Client]) {
-        // TODO tell all our clients to gtfo. They need to reschedule their request to get back into a network again.
     }
 
     pub fn get_active_interfaces() -> Vec<NetworkInterface> {
@@ -307,7 +598,7 @@ impl Client {
 
         // Heartbeat interval if no message send to coordinator
         let heartbeat_task = tokio::spawn(async move {
-            let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            let mut heartbeat_interval = tokio::time::interval(CLIENT_REJOIN_POLL_INTERVAL);
             loop {
                 tokio::select! {
                     packet = coord_rx.recv() => {
@@ -363,7 +654,6 @@ impl Client {
         let stream: TcpStream = socket.into();
         let mut stream = tokio::net::TcpStream::from_std(stream).unwrap();
 
-        // tcp socket sending and receving TODO save handlde
         let coord_tcp_task = tokio::spawn(async move {
             let mut buffer = Vec::with_capacity(1024);
             stream.readable().await.unwrap();
@@ -626,19 +916,5 @@ impl Client {
         }
 
         Ok(())
-    }
-}
-
-struct Sea {
-    coordinator_client: Client,
-    network_clients: Vec<Client>,
-}
-
-impl Sea {
-    pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
-        Self {
-            coordinator_client: Client::new(true, external_ip).await,
-            network_clients: Vec::new(),
-        }
     }
 }
