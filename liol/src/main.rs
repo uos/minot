@@ -1,8 +1,6 @@
-use core::panic;
 use std::collections::HashMap;
 
 use log::error;
-use network::Rat;
 use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
 use sea::{coordinator::CoordinatorImpl, ImuMsg, ShipName};
 use tokio::sync::{mpsc, oneshot};
@@ -74,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
-    let sea = sea::net::Sea::init(None, &pairs).await;
+    let sea = sea::net::Sea::init(None).await;
 
     // TODO collect all available rats from network.
 
