@@ -23,6 +23,9 @@ const CLIENT_LISTEN_PORT: u16 = 6969;
 const BI_CLIENT_LISTEN_PORT: u16 = 6970;
 const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 const CLIENT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 enum PacketKind {
@@ -64,136 +67,157 @@ struct Packet {
     data: PacketKind,
 }
 
-struct Sea {
-    coordinator_client: Client,
-    network_clients: std::sync::Arc<
-        std::sync::Mutex<
-            HashMap<
-                ShipName,
-                (
-                    tokio::sync::broadcast::Sender<bool>,
-                    tokio::sync::mpsc::Receiver<(Packet, tokio::sync::mpsc::Sender<Packet>)>,
-                ),
-            >,
-        >,
-    >,
+#[derive(Clone, Debug)]
+struct ShipHandle {
+    ship: ShipName,
+    // Send here to disconnect the tcp listener
+    disconnect: tokio::sync::broadcast::Sender<bool>,
+    // get requests from the client and send response back via the sender
+    req_resp:
+        std::sync::Arc<tokio::sync::mpsc::Receiver<(Packet, tokio::sync::mpsc::Sender<Packet>)>>,
 }
 
+struct Sea {
+    coordinator_client: Client,
+    network_clients_chan: tokio::sync::broadcast::Sender<ShipHandle>,
+    dissolve_network: tokio::sync::mpsc::Sender<tokio::sync::mpsc::Sender<()>>,
+}
+
+/// Server handling the Sea network
 impl Sea {
     pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
         let (rejoin_req_tx, mut rejoin_req_rx) = tokio::sync::mpsc::channel::<(String, Packet)>(10);
 
+        let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(10);
+
+        let (dissolve_network_tx, mut dissolve_network_rx) =
+            tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(10);
+
+        // task to disconnect all clients i.e. dissolve
         tokio::spawn(async move {
-            // gather udp packets until we have a full rejoin request
-            tokio::spawn(async move {
-                let udp_listener = Client::get_udp_socket(external_ip).await;
-                let rejoin_request = Packet {
-                    header: Header {
-                        source: ShipName::MAX,
-                        target: CONTROLLER_CLIENT_ID,
-                    },
-                    data: PacketKind::JoinRequest(0),
-                };
-                let bytes_rejoin_request = bincode::serialize(&rejoin_request)
-                    .expect("could not serialize rejoin request");
-                let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len() + 1;
-                let mut clients = HashMap::<String, (usize, Vec<u8>)>::new();
-
-                loop {
-                    let mut buf = [0; 1024];
-                    let (n, addr) = udp_listener.recv_from(&mut buf).await.unwrap();
-                    let id = format!("{}:{}", addr.ip(), addr.port());
-
-                    match clients.get_mut(&id) {
-                        Some((kum, buffer)) => {
-                            if *kum == 0 {
-                                if buf[0] != PROTO_IDENTIFIER {
-                                    clients.remove(&id); // TODO does this work? We are inside a get_mut but removing the id we are in
-                                    continue;
-                                } else {
-                                    let nbuf = [0; 1024];
-                                    // clean the first byte from the buffer
-                                    for i in 0..n {
-                                        buf[i] = nbuf[i + 1];
-                                    }
-                                    buf = nbuf;
-
-                                    buffer.extend_from_slice(&buf[..n]);
+            let mut clients: Vec<tokio::sync::broadcast::Sender<bool>> = Vec::new();
+            loop {
+                tokio::select! {
+                    answer = dissolve_network_rx.recv() => {
+                        match answer {
+                            None => {
+                                // channel closed
+                                return;
+                            }
+                            Some(answer) => {
+                                for c in clients.iter() {
+                                    c.send(true).unwrap();
                                 }
+                                // notify that we are finished
+                                answer.send(()).await.unwrap();
+                                return;
                             }
-                            *kum += n;
-                        }
-                        None => {
-                            let mut buffer = Vec::with_capacity(1024);
-                            buffer.extend_from_slice(&buf[..n]);
-                            clients.insert(id, (n, buffer));
                         }
                     }
-
-                    let mut to_delete = Vec::<String>::new();
-                    for (id, (kum, buffer)) in clients.iter_mut() {
-                        if *kum != expected_n_bytes_for_rejoin_request {
-                            continue;
+                    newclient = clients_rx.recv() => {
+                        match newclient {
+                            Err(e) => {
+                                error!("Error receiving new client in dissolve handler: {e}");
+                            }
+                            Ok(client) => {
+                                clients.push(client.disconnect);
+                            }
                         }
-
-                        let packet: Packet = match bincode::deserialize(&buffer) {
-                            Err(e) => {
-                                error!("Received package is broken: {e}");
-                                continue;
-                            }
-                            Ok(packet) => packet,
-                        };
-
-                        match rejoin_req_tx.send((id.clone(), packet)).await {
-                            Err(e) => {
-                                error!("Could not send rejoin request to internal channel: {e}");
-                            }
-                            Ok(_) => {
-                                to_delete.push(id.clone());
-                            }
-                        };
-                    }
-
-                    for id in to_delete {
-                        clients.remove(&id);
                     }
                 }
-            });
+            }
         });
 
-        let clients = std::sync::Arc::new(std::sync::Mutex::new(HashMap::<
-            ShipName,
-            (
-                tokio::sync::broadcast::Sender<bool>,
-                tokio::sync::mpsc::Receiver<(Packet, tokio::sync::mpsc::Sender<Packet>)>,
-            ),
-        >::new()));
+        // task to handle join requests on udp socket
+        tokio::spawn(async move {
+            let udp_listener = Client::get_udp_socket(external_ip).await;
+            let rejoin_request = Packet {
+                header: Header {
+                    source: ShipName::MAX,
+                    target: CONTROLLER_CLIENT_ID,
+                },
+                data: PacketKind::JoinRequest(0),
+            };
+            let bytes_rejoin_request =
+                bincode::serialize(&rejoin_request).expect("could not serialize rejoin request");
+            let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len() + 1;
+            let mut new_clients_without_response = HashMap::<String, (usize, Vec<u8>)>::new();
 
-        // wait for join requests, send welcome to their tcp port
-        let client_add = clients.clone();
+            loop {
+                let mut buf = [0; 1024];
+                let (n, addr) = udp_listener.recv_from(&mut buf).await.unwrap();
+                let id = format!("{}:{}", addr.ip(), addr.port());
+
+                match new_clients_without_response.get_mut(&id) {
+                    Some((kum, buffer)) => {
+                        if *kum == 0 {
+                            if buf[0] != PROTO_IDENTIFIER {
+                                new_clients_without_response.remove(&id); // TODO does this work? We are inside a get_mut but removing the id we are in
+                                continue;
+                            } else {
+                                let nbuf = [0; 1024];
+                                // clean the first byte from the buffer
+                                for i in 0..n {
+                                    buf[i] = nbuf[i + 1];
+                                }
+                                buf = nbuf;
+
+                                buffer.extend_from_slice(&buf[..n]);
+                            }
+                        }
+                        *kum += n;
+                    }
+                    None => {
+                        let mut buffer = Vec::with_capacity(1024);
+                        buffer.extend_from_slice(&buf[..n]);
+                        new_clients_without_response.insert(id, (n, buffer));
+                    }
+                }
+
+                let mut to_delete = Vec::<String>::new();
+                for (id, (kum, buffer)) in new_clients_without_response.iter_mut() {
+                    if *kum != expected_n_bytes_for_rejoin_request {
+                        continue;
+                    }
+
+                    let packet: Packet = match bincode::deserialize(&buffer) {
+                        Err(e) => {
+                            error!("Received package is broken: {e}");
+                            continue;
+                        }
+                        Ok(packet) => packet,
+                    };
+
+                    match rejoin_req_tx.send((id.clone(), packet)).await {
+                        Err(e) => {
+                            error!("Could not send rejoin request to internal channel: {e}");
+                        }
+                        Ok(_) => {
+                            to_delete.push(id.clone());
+                        }
+                    };
+                }
+
+                for id in to_delete {
+                    new_clients_without_response.remove(&id);
+                }
+            }
+        });
+
+        // task to wait for each new join request
+        let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
             loop {
                 let (addr, packet) = rejoin_req_rx.recv().await.unwrap();
                 match packet.data {
                     PacketKind::JoinRequest(client_tcp_port) => {
-                        let mut found_id = false;
-                        let mut generated_id = 0;
-                        {
-                            let clients = client_add.lock().expect("could not lock mutex");
-                            while !found_id {
-                                generated_id = rand::random::<ShipName>().abs();
-                                if !clients.contains_key(&generated_id) {
-                                    found_id = true;
-                                }
-                            }
-                        }
-
+                        let generated_id = rand::random::<ShipName>().abs();
                         let (disconnect_tx, mut disconnect_rx) =
                             tokio::sync::broadcast::channel::<bool>(1);
 
-                        let inner_clients = client_add.clone();
+                        // task to handle tcp connection to this client
+                        let curr_client_create_sender = clients_tx_inner.clone();
                         tokio::spawn(async move {
-                            // create tcp listener for this client
                             let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:0")
                                 .await
                                 .expect("could not bind tcp socket");
@@ -242,6 +266,8 @@ impl Sea {
                                 Packet,
                                 tokio::sync::mpsc::Sender<Packet>,
                             )>(10);
+
+                            // task to handle all packet communication from and to each client
                             tokio::spawn(async move {
                                 loop {
                                     tokio::select! {
@@ -319,10 +345,12 @@ impl Sea {
                                 }
                             });
 
-                            inner_clients
-                                .lock()
-                                .unwrap()
-                                .insert(generated_id, (disconnect_tx, rx));
+                            let ship_handle = ShipHandle {
+                                ship: generated_id,
+                                disconnect: disconnect_tx,
+                                req_resp: std::sync::Arc::new(rx),
+                            };
+                            curr_client_create_sender.send(ship_handle).unwrap();
                         });
                     }
                     _ => {
@@ -333,23 +361,39 @@ impl Sea {
         });
 
         Self {
+            network_clients_chan: clients_tx,
             coordinator_client: Client::new(true, external_ip).await,
-            network_clients: clients,
+            dissolve_network: dissolve_network_tx,
         }
-    }
-
-    // TODO need to wait for ctrl-c to handle this with grace and async
-    pub async fn dissolve_network(&mut self) -> anyhow::Result<()> {
-        let network_lock = self.network_clients.lock().unwrap();
-        for (_k, v) in network_lock.iter() {
-            // Tells all Client TCP Listener on the Server side to close, so the hearbeat will fail on each client and they disconnect.
-            v.0.send(true)?;
-        }
-
-        Ok(())
     }
 }
 
+impl Drop for Sea {
+    fn drop(&mut self) {
+        tokio::runtime::Handle::current().block_on(async move {
+            let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
+            match self.dissolve_network.send(answer_tx).await {
+                Err(e) => {
+                    error!("Error while droppping network: {e}");
+                }
+                Ok(_) => {}
+            }
+
+            let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());
+            match answer_timeout.await {
+                Err(e) => {
+                    error!("Dropping network timeout, discarding waiting for completion: {e}");
+                }
+                Ok(None) => {
+                    error!("Sender already closed in dissolving answer");
+                }
+                _ => {}
+            }
+        });
+    }
+}
+
+#[derive(Debug)]
 struct Client {
     heartbeat_task: Option<tokio::task::JoinHandle<()>>,
     tcp_listen_task: tokio::task::JoinHandle<()>,
@@ -647,8 +691,8 @@ impl Client {
 
         socket.set_tcp_keepalive(
             &socket2::TcpKeepalive::new()
-                .with_time(std::time::Duration::from_secs(5))
-                .with_interval(std::time::Duration::from_secs(1)),
+                .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
+                .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
         )?;
 
         let stream: TcpStream = socket.into();
