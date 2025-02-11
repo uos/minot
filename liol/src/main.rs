@@ -36,14 +36,6 @@ enum BagReaderTask {
 // hashmap[string] => ID
 // ID => VariableRule
 
-#[derive(Copy, Clone, Debug)]
-struct Variable {
-    pub ship: sea::ShipName,
-    pub strategy: Option<sea::Action>,
-}
-
-type VarPair = (Variable, Variable);
-
 use sea::Coordinator;
 
 #[derive(Debug)]
@@ -62,29 +54,27 @@ enum CoordinatorTask {
     },
 }
 
-fn get_strategy(
-    haystack: &HashMap<String, VarPair>,
-    rat_ship: sea::ShipName,
-    variable: String,
-) -> sea::Action {
-    match haystack.get(&variable) {
-        None => sea::Action::default(),
-        Some((left_var, right_var)) => match (left_var.ship, right_var.ship) {
-            (ship_l, ship_r) if ship_l == rat_ship && ship_r == rat_ship => {
-                panic!("should have been checked before");
-            }
-            (ship, _) if ship == rat_ship => left_var.strategy.unwrap_or_default(),
-            (_, ship) if ship == rat_ship => right_var.strategy.unwrap_or_default(),
-            _ => sea::Action::default(),
-        },
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // TODO Initialize Sea Network - detect all ships.
-    // We will make us known to the rest and they should answer.
-    // Everyone that answered within 100ms will be part of the network.
+    // TODO config logic
+
+    let mut pairs = HashMap::new();
+    pairs.insert(
+        "var1".to_string(),
+        (
+            sea::Variable {
+                ship: 2,
+                strategy: Some(sea::Action::Shoot { target: vec![1] }),
+            },
+            sea::Variable {
+                // TODO this step should be implied by the one before
+                ship: 1,
+                strategy: Some(sea::Action::Catch { source: 2 }),
+            },
+        ),
+    );
+
+    let sea = sea::net::Sea::init(None, &pairs).await;
 
     // TODO collect all available rats from network.
 
@@ -102,21 +92,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO a function must build this one and check that the names are the same
     // if a variable is asking what to do but it is not part of the structure,
     // answer with a "keep".
-    let mut pairs = HashMap::new();
-    pairs.insert(
-        "var1".to_string(),
-        (
-            Variable {
-                ship: 2,
-                strategy: Some(sea::Action::Shoot { target: 1 }),
-            },
-            Variable {
-                // TODO this step should be implied by the one before
-                ship: 1,
-                strategy: Some(sea::Action::Catch { source: 2 }),
-            },
-        ),
-    );
 
     let pairs = std::sync::Arc::new(pairs);
 
@@ -181,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn({
             async move {
                 while let Some(variable) = queue.recv().await {
-                    let action = get_strategy(&rat_pairs, rat.network_id, variable);
+                    let action = sea::get_strategy(&rat_pairs, rat.network_id, variable);
                     rat_coord_tx
                         .send(CoordinatorTask::SendRatAction {
                             ship_name: rat.network_id,

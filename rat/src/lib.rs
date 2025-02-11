@@ -93,11 +93,11 @@ where
                 Ok(())
             }
             Ok(sea::Action::Shoot { target }) => {
-                info!("Rat {} shoots {} at {}", rat.name, variable_name, target);
-                rat.ship.get_cannon().shoot(target, &bytes).await;
+                info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
+                rat.ship.get_cannon().shoot(&target, &bytes).await;
 
                 info!(
-                    "Rat {} finished shooting {} at {}",
+                    "Rat {} finished shooting {} at {:?}",
                     rat.name, variable_name, target
                 );
 

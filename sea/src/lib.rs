@@ -1,7 +1,9 @@
 pub mod cannon;
 pub mod coordinator;
-mod net;
+pub mod net;
 pub mod ship;
+
+use std::collections::HashMap;
 
 use nalgebra::{UnitQuaternion, Vector3};
 use ros_pointcloud2::PointCloud2Msg;
@@ -16,16 +18,48 @@ pub enum ShipKind {
 
 pub type ShipName = i128;
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum Action {
     #[default]
     Sail,
     Shoot {
-        target: ShipName,
+        target: Vec<ShipName>,
     },
     Catch {
         source: ShipName,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct Variable {
+    pub ship: ShipName,
+    pub strategy: Option<Action>,
+}
+
+pub type VarPair = (Variable, Variable);
+
+pub fn get_strategy(
+    haystack: &HashMap<String, VarPair>,
+    rat_ship: crate::ShipName,
+    variable: String,
+) -> Action {
+    match haystack.get(&variable) {
+        None => Action::default(),
+        Some((left_var, right_var)) => match (left_var.ship, right_var.ship) {
+            (ship_l, ship_r) if ship_l == rat_ship && ship_r == rat_ship => {
+                panic!("should have been checked before");
+            }
+            (ship, _) if ship == rat_ship => match left_var.strategy.as_ref() {
+                Some(action) => action.clone(),
+                None => Action::default(),
+            },
+            (_, ship) if ship == rat_ship => match right_var.strategy.as_ref() {
+                Some(action) => action.clone(),
+                None => Action::default(),
+            },
+            _ => Action::default(),
+        },
+    }
 }
 
 #[async_trait::async_trait]
@@ -57,7 +91,7 @@ pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
-    async fn shoot(&self, target: crate::ShipName, data: &[u8]);
+    async fn shoot(&self, targets: &Vec<crate::ShipName>, data: &[u8]);
 
     /// Catch the dumped data from the source.
     async fn catch(&self, target: crate::ShipName) -> Vec<u8>;

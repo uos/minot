@@ -6,7 +6,7 @@ pub struct CannonImpl {}
 impl crate::Cannon for CannonImpl {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
     /// Dump the data to the target.
-    async fn shoot(&self, target: crate::ShipName, data: &[u8]) {
+    async fn shoot(&self, target: &Vec<crate::ShipName>, data: &[u8]) {
         todo!()
     }
 

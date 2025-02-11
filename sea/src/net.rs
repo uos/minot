@@ -77,15 +77,19 @@ struct ShipHandle {
         std::sync::Arc<tokio::sync::mpsc::Receiver<(Packet, tokio::sync::mpsc::Sender<Packet>)>>,
 }
 
-struct Sea {
-    coordinator_client: Client,
+#[derive(Debug)]
+pub struct Sea {
+    // coordinator_client: Client,
     network_clients_chan: tokio::sync::broadcast::Sender<ShipHandle>,
     dissolve_network: tokio::sync::mpsc::Sender<tokio::sync::mpsc::Sender<()>>,
 }
 
 /// Server handling the Sea network
 impl Sea {
-    pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
+    pub async fn init(
+        external_ip: Option<[u8; 4]>,
+        rules: &HashMap<String, crate::VarPair>,
+    ) -> Self {
         let (rejoin_req_tx, mut rejoin_req_rx) = tokio::sync::mpsc::channel::<(String, Packet)>(10);
 
         let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(10);
@@ -267,8 +271,98 @@ impl Sea {
                                 tokio::sync::mpsc::Sender<Packet>,
                             )>(10);
 
+                            let (client_sender_tx, mut client_sender_rx) =
+                                tokio::sync::mpsc::channel::<Packet>(10);
+
                             // task to handle all packet communication from and to each client
+                            let client_answer_sender = client_sender_tx.clone();
                             tokio::spawn(async move {
+                                let accepted = tcp_listener.accept().await;
+                                match accepted {
+                                    Err(e) => {
+                                        error!("Could not accept Client connection: {e}");
+                                    }
+                                    Ok((stream, _info)) => {
+                                        let (mut rh, wh) = stream.into_split(); // TODO inefficient because into but don't know other way right now
+
+                                        // TODO write on received client_sender_rx
+                                        tokio::spawn(async move {});
+
+                                        // TODO tokio select over read and disconnect
+                                        tokio::spawn(async move {
+                                            // This streams keeps open for the entirety of the client being connected to the coordinator
+                                            let mut buffer = Vec::with_capacity(1024);
+                                            let mut first = true;
+
+                                            let mut buf = [0; 1024];
+                                            let mut is_for_us = true;
+                                            loop {
+                                                tokio::select! {
+                                                    _ = disconnect_rx.recv() => {
+                                                        return;
+                                                    }
+                                                    read = rh.read(&mut buf) => {
+                                                        let n = match read {
+                                                            Err(e) => {
+                                                                error!(
+                                                                    "Could not read from TCP stream: {e}"
+                                                                );
+                                                                0
+                                                            }
+                                                            Ok(n) => n,
+                                                        };
+                                                        if first {
+                                                            first = false;
+                                                            if buf[0] != PROTO_IDENTIFIER {
+                                                                is_for_us = false;
+                                                                break;
+                                                            }
+                                                        }
+                                                        if n == 0 {
+                                                            break;
+                                                        }
+
+                                                        buffer.extend_from_slice(&buf[..n]);
+                                                    }
+                                                }
+                                            }
+
+                                            if is_for_us {
+                                                return; // TODO is this just returning from the case in the select?
+                                            }
+                                            info!("Received stream");
+                                            let cleaned_buf = &buffer[1..];
+                                            let packet: Packet =
+                                                match bincode::deserialize(&cleaned_buf) {
+                                                    Err(e) => {
+                                                        error!("Received package is broken: {e}");
+                                                        return; // TODO Same as above
+                                                    }
+                                                    Ok(packet) => packet,
+                                                };
+
+                                            let (response_tx, mut response_rx) =
+                                                tokio::sync::mpsc::channel(1);
+                                            match tx.send((packet, response_tx)).await {
+                                                Err(e) => {
+                                                    error!(
+                                                        "could not send to internal channel: {e}"
+                                                    );
+                                                }
+                                                _ => {}
+                                            }
+
+                                            if let Some(response) = response_rx.recv().await {
+                                                client_answer_sender.send(response).await.unwrap();
+                                                // let packet = bincode::serialize(&response).expect("could not serialize packet");
+                                                // if let Err(e) = stream.write_all(&packet).await {
+                                                // error!("could not respond tcp socket: {e}");
+                                                // }
+                                            }
+                                        });
+                                    }
+                                }
+
                                 loop {
                                     tokio::select! {
                                         _ = disconnect_rx.recv() => {
@@ -276,14 +370,23 @@ impl Sea {
                                         }
                                         accepted = tcp_listener.accept() => {
                                             match accepted {
-                                                Ok((mut stream, _addr)) => {
+                                                Ok((stream, _addr)) => {
+                                                    // This streams keeps open for the entirety of the client being connected to the coordinator
                                                     let mut buffer = Vec::with_capacity(1024);
                                                     let mut first = true;
+
+                                                    let (mut rh, wh) = stream.into_split(); // TODO inefficient because into but don't know other way right now
+
+                                                    tokio::spawn(async move {
+                                                        while let Some(msg) = client_sender_rx.recv().await {
+
+                                                        }
+                                                    });
 
                                                     let mut is_for_us = true;
                                                     loop {
                                                         let mut buf = [0; 1024];
-                                                        let n = match stream.read(&mut buf).await {
+                                                        let n = match rh.read(&mut buf).await {
                                                             Err(e) => {
                                                                 error!("Could not read from TCP stream: {e}");
                                                                 0
@@ -327,10 +430,11 @@ impl Sea {
                                                     }
 
                                                     if let Some(response) = response_rx.recv().await {
-                                                        let packet = bincode::serialize(&response).expect("could not serialize packet");
-                                                        if let Err(e) = stream.write_all(&packet).await {
-                                                            error!("could not respond tcp socket: {e}");
-                                                        }
+                                                        client_answer_sender.send(response).await.unwrap();
+                                                        // let packet = bincode::serialize(&response).expect("could not serialize packet");
+                                                        // if let Err(e) = stream.write_all(&packet).await {
+                                                            // error!("could not respond tcp socket: {e}");
+                                                        // }
 
                                                     }
                                                 }
@@ -360,9 +464,20 @@ impl Sea {
             }
         });
 
+        // TODO mak
+
+        // TODO enforce the rules by listening to all new clients and checking what they send.
+        tokio::spawn(async move {
+            // clients_tx.
+        });
+
+        // TODO the coordinator needs clients because the coordinator can not send from itself to the wind clients.
+        // But the client can ask the coordinator. So if we do a flag or special id for the coordinator client (0),
+        // we can set variables or bacon to ros messages where each ros message has a separate client. As soon as the reader code toggles the variable,
+        // it asks the coordinator what to do. it then says to sync it with one or more
         Self {
             network_clients_chan: clients_tx,
-            coordinator_client: Client::new(true, external_ip).await,
+            // coordinator_client: Client::init(true, external_ip).await,
             dissolve_network: dissolve_network_tx,
         }
     }
@@ -394,7 +509,7 @@ impl Drop for Sea {
 }
 
 #[derive(Debug)]
-struct Client {
+pub struct Client {
     heartbeat_task: Option<tokio::task::JoinHandle<()>>,
     tcp_listen_task: tokio::task::JoinHandle<()>,
     pub tcp_listener_chan: tokio::sync::broadcast::Sender<(Packet, std::net::SocketAddr)>,
@@ -432,7 +547,7 @@ impl Client {
         udp_socket
     }
 
-    pub async fn new(controller: bool, external_ip: Option<[u8; 4]>) -> Self {
+    pub async fn init(controller: bool, external_ip: Option<[u8; 4]>) -> Self {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
         let tcp_port = if controller { CLIENT_LISTEN_PORT } else { 0 };
         let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], tcp_port);
