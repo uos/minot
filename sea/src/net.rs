@@ -24,6 +24,7 @@ const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::fr
 const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 enum PacketKind {
@@ -426,10 +427,10 @@ impl Drop for Sea {
 #[derive(Debug)]
 pub struct Client {
     heartbeat_task: Option<tokio::task::JoinHandle<()>>,
-    pub tcp_listener_chan: tokio::sync::broadcast::Sender<(Packet, std::net::SocketAddr)>,
+    tcp_listener_chan: tokio::sync::broadcast::Sender<(Packet, std::net::SocketAddr)>,
     tcp_port: u16,
-    coordinator_send: Option<tokio::sync::mpsc::Sender<Packet>>,
-    coordinator_receive: Option<tokio::sync::broadcast::Sender<Packet>>,
+    pub coordinator_send: Option<tokio::sync::mpsc::Sender<Packet>>,
+    pub coordinator_receive: Option<tokio::sync::broadcast::Sender<Packet>>,
     tcp_coordinator_task: Option<tokio::task::JoinHandle<()>>,
     ip: [u8; 4],
     other_client_listener: tokio::net::TcpListener,
@@ -826,10 +827,8 @@ impl Client {
     }
 
     async fn recv_raw_from_other_client(&self) -> anyhow::Result<Vec<u8>> {
-        let initial_connection_timeout = std::time::Duration::from_secs(1);
-
         let stream = tokio::time::timeout(
-            initial_connection_timeout.clone(),
+            CLIENT_TO_CLIENT_TIMEOUT,
             self.other_client_listener.accept(),
         )
         .await;
@@ -837,7 +836,7 @@ impl Client {
         match stream {
             Err(_) => {
                 return Err(anyhow!(
-                    "Could not connect to other client within {initial_connection_timeout:?}"
+                    "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
                 ));
             }
             Ok(Err(e)) => {

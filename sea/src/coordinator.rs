@@ -1,9 +1,13 @@
 use async_trait::async_trait;
+use log::error;
 
-pub struct CoordinatorImpl {}
+pub struct CoordinatorImpl {
+    pub sea: crate::net::Sea,
+}
 
 #[async_trait]
 impl crate::Coordinator for CoordinatorImpl {
+    /// Get a channel that only returns the variable from this rat
     async fn rat_action_request_queue(
         &self,
         ship: crate::ShipName,
@@ -23,7 +27,24 @@ impl crate::Coordinator for CoordinatorImpl {
 }
 
 impl CoordinatorImpl {
-    pub fn new() -> Self {
-        Self {}
+    pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
+        let sea = crate::net::Sea::init(external_ip).await;
+
+        let clients = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
+        let mut incoming_clients = sea.network_clients_chan.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match incoming_clients.recv().await {
+                    Err(e) => {
+                        error!("Coordinator missed clients: {e}");
+                    }
+                    Ok(client) => {
+                        clients.write().unwrap().push(client);
+                    }
+                }
+            }
+        });
+
+        Self { sea }
     }
 }

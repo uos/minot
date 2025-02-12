@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
-    let sea = sea::net::Sea::init(None).await;
+    // let sea = sea::net::Sea::init(None).await;
 
     // TODO collect all available rats from network.
 
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Task for centralized coordinator work
     let (coord_tx, mut coord_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorTask>();
     tokio::spawn(async move {
-        let coordinator = CoordinatorImpl::new();
+        let coordinator = CoordinatorImpl::new(None).await;
 
         while let Some(task) = coord_rx.recv().await {
             match task {

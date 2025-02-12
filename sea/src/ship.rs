@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use log::{error, info};
 
 use crate::cannon::CannonImpl;
 
@@ -34,10 +35,44 @@ impl crate::Ship for NetworkShipImpl {
 }
 
 impl NetworkShipImpl {
-    pub fn new() -> Self {
-        Self {
-            cannon: Box::new(CannonImpl::new()),
+    async fn spawn_recursive_rejoin_task(
+        disconnect_handle: tokio::sync::oneshot::Receiver<()>,
+        mut client: crate::net::Client,
+    ) {
+        match disconnect_handle.await {
+            Err(e) => {
+                error!("Error receiving disconnect signla: {e}");
+            }
+            Ok(_) => match client.register().await {
+                Err(e) => {
+                    error!("Could not register after dropped connection: {e}");
+                }
+                Ok(recv) => {
+                    let future = Box::pin(Self::spawn_recursive_rejoin_task(recv, client));
+                    future.await;
+                }
+            },
         }
+    }
+
+    // TODO add external ip
+    pub async fn init(controller: bool) -> anyhow::Result<Self> {
+        let mut client = crate::net::Client::init(controller, None).await;
+        let my_tcp_port_for_1on1 = client.other_client_entrance;
+
+        info!("Registering for network...");
+        let disconnect_handle = client.register().await?;
+        info!("Registered :)");
+        // TODO should also have receving channel when server sends us something without us requesting it
+
+        // handle reconnecting to the network
+        tokio::spawn(async move {
+            Self::spawn_recursive_rejoin_task(disconnect_handle, client).await;
+        });
+
+        Ok(Self {
+            cannon: Box::new(CannonImpl::new()),
+        })
     }
 }
 
