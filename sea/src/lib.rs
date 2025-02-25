@@ -133,7 +133,7 @@ pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_request_queue(
         &self,
         ship: ShipName,
-    ) -> anyhow::Result<tokio::sync::mpsc::Receiver<String>>;
+    ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>>;
 
     async fn blow_wind(&self, ship: crate::ShipName, data: WindData) -> anyhow::Result<()>;
 

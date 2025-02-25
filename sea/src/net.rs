@@ -27,7 +27,7 @@ const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_milli
 const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-enum PacketKind {
+pub enum PacketKind {
     Acknowledge,
     JoinRequest(u16),
     Welcome(ShipName, u16), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
@@ -36,6 +36,7 @@ enum PacketKind {
     RawDataf64(nalgebra::DMatrix<f64>), // TODO maybe we need to have a more generic type here but for now it is enough
     RawDataf32(nalgebra::DMatrix<f32>),
     RawDatai32(nalgebra::DMatrix<i32>),
+    VariableTaskRequest(String),
 }
 
 pub trait SeaSendableScalar: nalgebra::Scalar {}
@@ -62,8 +63,8 @@ pub struct Header {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Packet {
-    header: Header,
-    data: PacketKind,
+    pub header: Header,
+    pub data: PacketKind,
 }
 
 #[derive(Clone, Debug)]
@@ -72,7 +73,7 @@ pub struct ShipHandle {
     // Send here to disconnect the tcp listener
     pub disconnect: tokio::sync::broadcast::Sender<bool>,
     // get requests from the client
-    pub recv: std::sync::Arc<tokio::sync::mpsc::Receiver<Packet>>,
+    pub recv: tokio::sync::broadcast::Sender<Packet>,
     // send to this client
     pub send: tokio::sync::mpsc::Sender<Packet>,
 }
@@ -264,7 +265,8 @@ impl Sea {
                                 Ok(_) => {}
                             }
 
-                            let (tx, rx) = tokio::sync::mpsc::channel::<Packet>(10);
+                            let (tx, _) = tokio::sync::broadcast::channel::<Packet>(10);
+                            let tx_out = tx.clone();
 
                             let (client_sender_tx, mut client_sender_rx) =
                                 tokio::sync::mpsc::channel::<Packet>(10);
@@ -363,7 +365,7 @@ impl Sea {
                                                     Ok(packet) => packet,
                                                 };
 
-                                            match tx.send(packet).await {
+                                            match tx.send(packet) {
                                                 Err(e) => {
                                                     error!(
                                                         "could not send to internal channel: {e}"
@@ -379,7 +381,7 @@ impl Sea {
                             let ship_handle = ShipHandle {
                                 ship: generated_id,
                                 disconnect: disconnect_tx,
-                                recv: std::sync::Arc::new(rx),
+                                recv: tx_out,
                                 send: client_sender_tx,
                             };
                             curr_client_create_sender.send(ship_handle).unwrap();
