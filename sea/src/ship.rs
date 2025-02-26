@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use log::{error, info};
 
 use crate::cannon::CannonImpl;
@@ -7,7 +6,6 @@ pub struct NetworkShipImpl {
     cannon: Box<dyn crate::Cannon>,
 }
 
-#[async_trait]
 impl crate::Ship for NetworkShipImpl {
     async fn water(&mut self, kind: crate::ShipKind) -> anyhow::Result<crate::ShipName> {
         todo!()

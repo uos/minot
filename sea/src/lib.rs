@@ -9,7 +9,7 @@ use nalgebra::{UnitQuaternion, Vector3};
 use ros_pointcloud2::PointCloud2Msg;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ShipKind {
     Rat(String),
     Wind(String),
@@ -18,7 +18,7 @@ pub enum ShipKind {
 
 pub type ShipName = i128;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum Action {
     #[default]
     Sail,
@@ -62,7 +62,6 @@ pub fn get_strategy(
     }
 }
 
-#[async_trait::async_trait]
 pub trait Ship: Send + Sync + 'static {
     /// Register the client to the network and return the assigned member id (unique to the network).
     /// It is needed for every communication on the network.
@@ -86,7 +85,6 @@ pub trait Ship: Send + Sync + 'static {
     fn get_cannon(&self) -> &Box<dyn Cannon>;
 }
 
-#[async_trait::async_trait]
 pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
@@ -128,7 +126,6 @@ pub enum WindData {
     Imu(ImuMsg),
 }
 
-#[async_trait::async_trait]
 pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_request_queue(
         &self,

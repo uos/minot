@@ -11,7 +11,6 @@ version.workspace = true
 nalgebra.workspace = true
 log.workspace = true
 env_logger.workspace = true
-async-trait = "0.1.71"
 bimap = "0.6.3"
 etherparse = "0.13.0"
 ipnet = "2.8.0"

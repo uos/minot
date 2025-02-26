@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
+use anyhow::anyhow;
 use log::error;
 
 use crate::{
-    net::{Packet, PacketKind, ShipHandle},
+    net::{Packet, PacketKind},
     ShipName,
 };
 
@@ -17,7 +17,6 @@ pub struct CoordinatorImpl {
     >,
 }
 
-#[async_trait]
 impl crate::Coordinator for CoordinatorImpl {
     /// Get a channel that only returns the variable from this rat
     async fn rat_action_request_queue(
@@ -29,11 +28,23 @@ impl crate::Coordinator for CoordinatorImpl {
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        return self.rat_action_request_queue(ship).await;
+        return Box::pin(self.rat_action_request_queue(ship)).await;
     }
 
     async fn blow_wind(&self, ship: crate::ShipName, data: crate::WindData) -> anyhow::Result<()> {
-        todo!()
+        if let Some(sender) = self.senders.read().unwrap().get(&ship) {
+            let paket = Packet {
+                header: crate::net::Header::default(),
+                data: PacketKind::Wind(data),
+            };
+            return sender
+                .send(paket)
+                .await
+                .map_err(|e| anyhow!("Error while sending rat action: {e}"));
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        return Box::pin(self.blow_wind(ship, data)).await;
     }
 
     async fn rat_action_send(
@@ -44,14 +55,16 @@ impl crate::Coordinator for CoordinatorImpl {
         if let Some(sender) = self.senders.read().unwrap().get(&ship) {
             let paket = Packet {
                 header: crate::net::Header::default(),
-                data: PacketKind::Disconnect,
+                data: PacketKind::RatAction(action),
             };
-            // TODO add packet types for actions and send it via packet
-            sender.send(paket).await?;
+            return sender
+                .send(paket)
+                .await
+                .map_err(|e| anyhow!("Error while sending rat action: {e}"));
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        return self.rat_action_request_queue(ship).await;
+        return Box::pin(self.rat_action_send(ship, action)).await;
     }
 }
 
@@ -60,6 +73,7 @@ impl CoordinatorImpl {
         let sea = crate::net::Sea::init(external_ip).await;
 
         let clients_senders = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let client_senders_out = clients_senders.clone();
         let rat_queues = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
         let mut incoming_clients = sea.network_clients_chan.subscribe();
         let inner_client_rat_queues = rat_queues.clone();
@@ -71,9 +85,6 @@ impl CoordinatorImpl {
                         error!("Coordinator missed clients: {e}");
                     }
                     Ok(client) => {
-                        // TODO check if wind or rat and push differently
-                        // clients.write().unwrap().push(client);
-                        // create action queue from this rat
                         let (rat_queue_tx, _rat_queue_rx) = tokio::sync::broadcast::channel(10);
                         inner_client_loop_rat_queues
                             .write()
@@ -101,7 +112,7 @@ impl CoordinatorImpl {
         Self {
             sea,
             rat_qs: rat_queues,
-            senders: clients_senders,
+            senders: client_senders_out,
         }
     }
 }

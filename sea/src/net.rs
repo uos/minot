@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use pnet::datalink::{self, NetworkInterface};
 
-use crate::ShipName;
+use crate::{Action, ShipKind, ShipName, WindData};
 
 const PROTO_IDENTIFIER: u8 = 69;
 const CONTROLLER_CLIENT_ID: ShipName = 0;
@@ -29,7 +29,7 @@ const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
-    JoinRequest(u16),
+    JoinRequest(u16, ShipKind),
     Welcome(ShipName, u16), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
@@ -37,6 +37,8 @@ pub enum PacketKind {
     RawDataf32(nalgebra::DMatrix<f32>),
     RawDatai32(nalgebra::DMatrix<i32>),
     VariableTaskRequest(String),
+    RatAction(Action),
+    Wind(WindData),
 }
 
 pub trait SeaSendableScalar: nalgebra::Scalar {}
@@ -138,7 +140,8 @@ impl Sea {
                     source: ShipName::MAX,
                     target: CONTROLLER_CLIENT_ID,
                 },
-                data: PacketKind::JoinRequest(0),
+                // names are padded with maximal length 64 chars
+                data: PacketKind::JoinRequest(0, ShipKind::Rat("a".repeat(64))),
             };
             let bytes_rejoin_request =
                 bincode::serialize(&rejoin_request).expect("could not serialize rejoin request");
@@ -212,7 +215,7 @@ impl Sea {
             loop {
                 let (addr, packet) = rejoin_req_rx.recv().await.unwrap();
                 match packet.data {
-                    PacketKind::JoinRequest(client_tcp_port) => {
+                    PacketKind::JoinRequest(client_tcp_port, _ship_kind) => {
                         let generated_id = rand::random::<ShipName>().abs();
                         let (disconnect_tx, _disconnect_rx) =
                             tokio::sync::broadcast::channel::<bool>(1);
@@ -437,6 +440,7 @@ pub struct Client {
     ip: [u8; 4],
     other_client_listener: tokio::net::TcpListener,
     pub other_client_entrance: u16, // tcp port for 1:1 connections
+    pub kind: ShipKind,
 }
 
 impl Client {
@@ -457,9 +461,13 @@ impl Client {
         udp_socket
     }
 
-    pub async fn init(controller: bool, external_ip: Option<[u8; 4]>) -> Self {
+    pub async fn init(ship_kind: ShipKind, external_ip: Option<[u8; 4]>) -> Self {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let tcp_port = if controller { CLIENT_LISTEN_PORT } else { 0 };
+        let tcp_port = if matches!(ship_kind, ShipKind::God) {
+            CLIENT_LISTEN_PORT
+        } else {
+            0
+        };
         let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], tcp_port);
         let socket = std::net::TcpListener::bind(&bind_address).expect("could not bind tcp socket");
         let tcp_port = socket
@@ -555,6 +563,7 @@ impl Client {
         });
 
         Self {
+            kind: ship_kind,
             other_client_entrance: client_listener_port,
             other_client_listener: client_listener,
             coordinator_send: None,
@@ -624,7 +633,7 @@ impl Client {
                 source: ShipName::MAX,
                 target: CONTROLLER_CLIENT_ID,
             },
-            data: PacketKind::JoinRequest(self.tcp_port),
+            data: PacketKind::JoinRequest(self.tcp_port, self.kind.clone()),
         };
 
         let udp_socket = Self::get_udp_socket(Some(self.ip)).await;

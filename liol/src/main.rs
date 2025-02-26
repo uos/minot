@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use log::error;
 use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
 use sea::{coordinator::CoordinatorImpl, ImuMsg, ShipName};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 mod network;
 
 struct Network {
@@ -40,7 +40,7 @@ use sea::Coordinator;
 enum CoordinatorTask {
     GetVariableChannel {
         ship: ShipName,
-        answer: oneshot::Sender<mpsc::Receiver<String>>,
+        answer: oneshot::Sender<broadcast::Receiver<String>>,
     },
     SendWind {
         ship_name: ShipName,
@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rat_pairs = pairs.clone();
         tokio::spawn({
             async move {
-                while let Some(variable) = queue.recv().await {
+                while let Ok(variable) = queue.recv().await {
                     let action = sea::get_strategy(&rat_pairs, rat.network_id, variable);
                     rat_coord_tx
                         .send(CoordinatorTask::SendRatAction {
