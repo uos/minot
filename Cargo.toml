@@ -21,6 +21,7 @@ anyhow = "1"
 ros_pointcloud2 = { version = "0.5.2", features = [
   "serde",
 ], git = "https://github.com/stelzo/ros_pointcloud2.git" }
+async-trait = "0.1.86"
 
 [workspace.package]
 edition = "2021"

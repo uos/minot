@@ -63,12 +63,6 @@ pub fn get_strategy(
 }
 
 pub trait Ship: Send + Sync + 'static {
-    /// Register the client to the network and return the assigned member id (unique to the network).
-    /// It is needed for every communication on the network.
-    //async fn init(&self, node_name: &str) -> Self;
-
-    async fn water(&mut self, kind: ShipKind) -> anyhow::Result<ShipName>;
-
     /// Indicate a trigger point and ask the link pilot what to do with the variable.
     async fn ask_for_action(
         &self,
@@ -76,15 +70,14 @@ pub trait Ship: Send + Sync + 'static {
         variable_name: &str,
     ) -> anyhow::Result<Action>;
 
-    async fn wait_for_action(&self, kind: crate::ShipKind) -> anyhow::Result<crate::Action> {
-        todo!()
-    }
+    async fn wait_for_action(&self, kind: crate::ShipKind) -> anyhow::Result<crate::Action>;
 
-    fn get_name(&self) -> ShipName;
+    // fn get_name(&self) -> ShipName;
 
-    fn get_cannon(&self) -> &Box<dyn Cannon>;
+    fn get_cannon(&self) -> &impl Cannon;
 }
 
+#[async_trait::async_trait]
 pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
@@ -126,6 +119,7 @@ pub enum WindData {
     Imu(ImuMsg),
 }
 
+#[async_trait::async_trait]
 pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_request_queue(
         &self,

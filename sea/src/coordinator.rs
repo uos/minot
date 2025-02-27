@@ -11,19 +11,20 @@ use crate::{
 pub struct CoordinatorImpl {
     pub sea: crate::net::Sea,
     pub senders:
-        std::sync::Arc<std::sync::RwLock<HashMap<ShipName, tokio::sync::mpsc::Sender<Packet>>>>,
+        std::sync::Arc<tokio::sync::RwLock<HashMap<ShipName, tokio::sync::mpsc::Sender<Packet>>>>,
     pub rat_qs: std::sync::Arc<
-        std::sync::RwLock<HashMap<ShipName, tokio::sync::broadcast::Sender<String>>>,
+        tokio::sync::RwLock<HashMap<ShipName, tokio::sync::broadcast::Sender<String>>>,
     >,
 }
 
+#[async_trait::async_trait]
 impl crate::Coordinator for CoordinatorImpl {
     /// Get a channel that only returns the variable from this rat
     async fn rat_action_request_queue(
         &self,
         ship: crate::ShipName,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>> {
-        if let Some(receiver) = self.rat_qs.read().unwrap().get(&ship) {
+        if let Some(receiver) = self.rat_qs.read().await.get(&ship) {
             return Ok(receiver.subscribe());
         }
 
@@ -32,7 +33,7 @@ impl crate::Coordinator for CoordinatorImpl {
     }
 
     async fn blow_wind(&self, ship: crate::ShipName, data: crate::WindData) -> anyhow::Result<()> {
-        if let Some(sender) = self.senders.read().unwrap().get(&ship) {
+        if let Some(sender) = self.senders.read().await.get(&ship) {
             let paket = Packet {
                 header: crate::net::Header::default(),
                 data: PacketKind::Wind(data),
@@ -52,7 +53,7 @@ impl crate::Coordinator for CoordinatorImpl {
         ship: crate::ShipName,
         action: crate::Action,
     ) -> anyhow::Result<()> {
-        if let Some(sender) = self.senders.read().unwrap().get(&ship) {
+        if let Some(sender) = self.senders.read().await.get(&ship) {
             let paket = Packet {
                 header: crate::net::Header::default(),
                 data: PacketKind::RatAction(action),
@@ -72,9 +73,9 @@ impl CoordinatorImpl {
     pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
         let sea = crate::net::Sea::init(external_ip).await;
 
-        let clients_senders = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let clients_senders = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let client_senders_out = clients_senders.clone();
-        let rat_queues = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let mut incoming_clients = sea.network_clients_chan.subscribe();
         let inner_client_rat_queues = rat_queues.clone();
         tokio::spawn(async move {
@@ -88,12 +89,12 @@ impl CoordinatorImpl {
                         let (rat_queue_tx, _rat_queue_rx) = tokio::sync::broadcast::channel(10);
                         inner_client_loop_rat_queues
                             .write()
-                            .unwrap()
+                            .await
                             .insert(client.ship, rat_queue_tx.clone());
 
                         clients_senders
                             .write()
-                            .unwrap()
+                            .await
                             .insert(client.ship, client.send);
 
                         let mut receiver = client.recv.subscribe();

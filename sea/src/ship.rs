@@ -1,16 +1,25 @@
+use std::sync::{Arc, Mutex, RwLock};
+
 use log::{error, info};
 
-use crate::cannon::CannonImpl;
+use crate::{net::Client, ShipKind};
 
 pub struct NetworkShipImpl {
-    cannon: Box<dyn crate::Cannon>,
+    client: Arc<tokio::sync::Mutex<Client>>,
 }
 
-impl crate::Ship for NetworkShipImpl {
-    async fn water(&mut self, kind: crate::ShipKind) -> anyhow::Result<crate::ShipName> {
+#[async_trait::async_trait]
+impl crate::Cannon for NetworkShipImpl {
+    async fn shoot(&self, targets: &Vec<crate::ShipName>, data: &[u8]) {
         todo!()
     }
 
+    async fn catch(&self, target: crate::ShipName) -> Vec<u8> {
+        todo!()
+    }
+}
+
+impl crate::Ship for NetworkShipImpl {
     async fn wait_for_action(&self, kind: crate::ShipKind) -> anyhow::Result<crate::Action> {
         todo!()
     }
@@ -23,54 +32,53 @@ impl crate::Ship for NetworkShipImpl {
         todo!()
     }
 
-    fn get_name(&self) -> crate::ShipName {
-        todo!()
-    }
-
-    fn get_cannon(&self) -> &Box<dyn crate::Cannon> {
-        &self.cannon
+    fn get_cannon(&self) -> &impl crate::Cannon {
+        self
     }
 }
 
 impl NetworkShipImpl {
     async fn spawn_recursive_rejoin_task(
         disconnect_handle: tokio::sync::oneshot::Receiver<()>,
-        mut client: crate::net::Client,
+        client: Arc<tokio::sync::Mutex<crate::net::Client>>,
     ) {
         match disconnect_handle.await {
             Err(e) => {
-                error!("Error receiving disconnect signla: {e}");
+                error!("Error receiving disconnect signal: {e}");
             }
-            Ok(_) => match client.register().await {
-                Err(e) => {
-                    error!("Could not register after dropped connection: {e}");
+            Ok(_) => {
+                let res = { client.lock().await.register().await };
+                match res {
+                    Err(e) => {
+                        error!("Could not register after dropped connection: {e}");
+                    }
+                    Ok(recv) => {
+                        info!("Reconnected");
+                        Box::pin(Self::spawn_recursive_rejoin_task(recv, client)).await;
+                    }
                 }
-                Ok(recv) => {
-                    let future = Box::pin(Self::spawn_recursive_rejoin_task(recv, client));
-                    future.await;
-                }
-            },
+            }
         }
     }
 
-    // TODO add external ip
-    pub async fn init(controller: bool) -> anyhow::Result<Self> {
-        let mut client = crate::net::Client::init(controller, None).await;
-        let my_tcp_port_for_1on1 = client.other_client_entrance;
+    pub async fn init(kind: ShipKind, external_ip: Option<[u8; 4]>) -> anyhow::Result<Self> {
+        let client = crate::net::Client::init(kind, external_ip).await;
 
-        info!("Registering for network...");
-        let disconnect_handle = client.register().await?;
-        info!("Registered :)");
-        // TODO should also have receving channel when server sends us something without us requesting it
+        let client = Arc::new(tokio::sync::Mutex::new(client));
+        let disconnect_handle = {
+            info!("Registering for network...");
+            let disconnect_handle = client.lock().await.register().await?;
+            info!("Registered :)");
+            disconnect_handle
+        };
 
         // handle reconnecting to the network
+        let recon_client = Arc::clone(&client);
         tokio::spawn(async move {
-            Self::spawn_recursive_rejoin_task(disconnect_handle, client).await;
+            Self::spawn_recursive_rejoin_task(disconnect_handle, recon_client).await;
         });
 
-        Ok(Self {
-            cannon: Box::new(CannonImpl::new()),
-        })
+        Ok(Self { client })
     }
 }
 

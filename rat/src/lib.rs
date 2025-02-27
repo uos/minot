@@ -2,23 +2,22 @@ use log::{error, info};
 use std::sync::{LazyLock, Mutex};
 
 use nalgebra::Scalar;
-use sea::*;
+use sea::{ship::NetworkShipImpl, *};
 
 pub struct Rat {
     name: String,
-    ship: Box<dyn Ship>,
+    ship: NetworkShipImpl,
 }
 
 static RAT: LazyLock<Mutex<Option<Rat>>> = LazyLock::new(|| Mutex::new(None));
 
 impl Rat {
     pub fn create(name: &str) -> anyhow::Result<Self> {
-        let mut ship = Box::new(sea::ship::NetworkShipImpl::new());
-        let ship_name = tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async { ship.water(ShipKind::Rat(name.to_string())).await })?;
+        let ship = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None).await
+        })?;
 
-        info!("Rat {} initialized with ship {}", name, ship_name);
+        info!("Rat {} initialized with ship", name);
 
         Ok(Self {
             name: name.to_string(),

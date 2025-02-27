@@ -1,12 +1,11 @@
 use log::info;
-use sea::{Ship, ShipKind};
+use sea::{Cannon, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>> {
-    let mut ship = sea::ship::NetworkShipImpl::new();
     let kind = ShipKind::Wind(name.to_string());
-    let ship_name = ship.water(kind.clone()).await?;
-    info!("Wind initialized with ship {}", ship_name);
+    let mut ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
+    info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -14,7 +13,8 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>
         loop {
             match ship.wait_for_action(kind.clone()).await {
                 Ok(sea::Action::Catch { source }) => {
-                    let data = ship.get_cannon().catch(source).await;
+                    let cannon = ship.get_cannon();
+                    let data = cannon.catch(source).await;
                     let data = bincode::deserialize::<sea::WindData>(&data).unwrap();
                     tx.send(data).unwrap();
                 }
