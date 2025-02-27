@@ -1,8 +1,12 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use log::{error, info};
+use nalgebra::SimdValue;
 
-use crate::{net::Client, ShipKind};
+use crate::{
+    net::{Client, SeaSendableBuffer},
+    ShipKind,
+};
 
 pub struct NetworkShipImpl {
     client: Arc<tokio::sync::Mutex<Client>>,
@@ -10,15 +14,44 @@ pub struct NetworkShipImpl {
 
 #[async_trait::async_trait]
 impl crate::Cannon for NetworkShipImpl {
-    async fn shoot(&self, targets: &Vec<crate::ShipName>, data: &[u8]) {
-        todo!()
+    async fn shoot(
+        &self,
+        targets: &Vec<crate::NetworkShipAddress>,
+        data: impl crate::net::SeaSendableBuffer,
+    ) {
+        let client = self.client.lock().await;
+        for target in targets.iter() {
+            let data = data.clone().to_packet();
+            let ip_addr = &IpAddr::from_str(&format!(
+                "{}.{}.{}.{}",
+                target.ip[0], target.ip[1], target.ip[2], target.ip[3]
+            ))
+            .unwrap();
+            let res = client
+                .send_raw_to_other_client(ip_addr, target.port, data)
+                .await;
+
+            //             // client
+            //     .send_raw_to_other_client(
+            //         &IpAddr::from_str(&format!(
+            //             "{}.{}.{}.{}",
+            //             target.ip[0], target.ip[1], target.ip[2], target.ip[3]
+            //         ))
+            //         .unwrap(),
+            //         target.port,
+            //         data,
+            //     )
+            //     .await;
+        }
     }
 
-    async fn catch(&self, target: crate::ShipName) -> Vec<u8> {
+    /// Catch the dumped data from the source.
+    async fn catch(&self, target: &crate::NetworkShipAddress) -> impl SeaSendableBuffer {
         todo!()
     }
 }
 
+#[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
     async fn wait_for_action(&self, kind: crate::ShipKind) -> anyhow::Result<crate::Action> {
         todo!()

@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::anyhow;
 use log::{error, info, warn};
+use nalgebra::DMatrix;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -36,15 +37,89 @@ pub enum PacketKind {
     RawDataf64(nalgebra::DMatrix<f64>), // TODO maybe we need to have a more generic type here but for now it is enough
     RawDataf32(nalgebra::DMatrix<f32>),
     RawDatai32(nalgebra::DMatrix<i32>),
+    RawDatau8(nalgebra::DMatrix<u8>),
     VariableTaskRequest(String),
     RatAction(Action),
     Wind(WindData),
 }
 
-pub trait SeaSendableScalar: nalgebra::Scalar {}
+pub trait SeaSendableScalar:
+    nalgebra::Scalar + serde::Serialize + for<'a> serde::Deserialize<'a>
+{
+}
 impl SeaSendableScalar for f64 {}
 impl SeaSendableScalar for f32 {}
+impl SeaSendableScalar for u8 {}
 impl SeaSendableScalar for i32 {}
+
+pub trait SeaSendableBuffer: Send + Clone {
+    fn to_packet(self) -> Vec<u8>;
+    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self>;
+}
+
+impl SeaSendableBuffer for () {
+    fn to_packet(self) -> Vec<u8> {
+        unimplemented!("Should only be a shadow for async_trait crate.")
+    }
+
+    fn set_from_packet(_: Vec<u8>) -> anyhow::Result<Self> {
+        unimplemented!("Should only be a shadow for async_trait crate.")
+    }
+}
+
+impl SeaSendableBuffer for DMatrix<u8> {
+    fn to_packet(self) -> Vec<u8> {
+        bincode::serialize(&PacketKind::RawDatau8(self)).expect("data not serializable")
+    }
+
+    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+        match data {
+            PacketKind::RawDatau8(data) => Ok(data),
+            _ => Err(anyhow!("Received wrong data type")),
+        }
+    }
+}
+
+impl SeaSendableBuffer for DMatrix<f64> {
+    fn to_packet(self) -> Vec<u8> {
+        bincode::serialize(&PacketKind::RawDataf64(self)).expect("data not serializable")
+    }
+
+    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+        match data {
+            PacketKind::RawDataf64(data) => Ok(data),
+            _ => Err(anyhow!("Received wrong data type")),
+        }
+    }
+}
+impl SeaSendableBuffer for DMatrix<f32> {
+    fn to_packet(self) -> Vec<u8> {
+        bincode::serialize(&PacketKind::RawDataf32(self)).expect("data not serializable")
+    }
+
+    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+        match data {
+            PacketKind::RawDataf32(data) => Ok(data),
+            _ => Err(anyhow!("Received wrong data type")),
+        }
+    }
+}
+impl SeaSendableBuffer for DMatrix<i32> {
+    fn to_packet(self) -> Vec<u8> {
+        bincode::serialize(&PacketKind::RawDatai32(self)).expect("data not serializable")
+    }
+
+    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+        match data {
+            PacketKind::RawDatai32(data) => Ok(data),
+            _ => Err(anyhow!("Received wrong data type")),
+        }
+    }
+}
 
 // With a join request, the client sends a joinrequest with udp to all
 // available broadcast addresses. The UDP port is not important here.
@@ -804,7 +879,7 @@ impl Client {
         Ok(disconnect_rx)
     }
 
-    async fn send_raw_to_other_client(
+    pub async fn send_raw_to_other_client(
         &self,
         address: &IpAddr,
         port: u16,
@@ -837,7 +912,7 @@ impl Client {
         Ok(())
     }
 
-    async fn recv_raw_from_other_client(&self) -> anyhow::Result<Vec<u8>> {
+    pub async fn recv_raw_from_other_client(&self) -> anyhow::Result<Vec<u8>> {
         let stream = tokio::time::timeout(
             CLIENT_TO_CLIENT_TIMEOUT,
             self.other_client_listener.accept(),
@@ -893,7 +968,6 @@ impl Client {
     }
 
     // TODO log to coordinator functions. They send them async in another thread to the coordinator so nothing is blocked on the client side.
-
     // --- send ---
     pub async fn send_to_other_client_f64(
         &self,
@@ -928,7 +1002,27 @@ impl Client {
         self.send_raw_to_other_client(address, port, raw_data).await
     }
 
+    pub async fn send_to_other_client_u8(
+        &self,
+        address: &IpAddr,
+        port: u16,
+        data: nalgebra::DMatrix<u8>,
+    ) -> anyhow::Result<()> {
+        let raw_data =
+            bincode::serialize(&PacketKind::RawDatau8(data)).expect("data not serializable");
+        self.send_raw_to_other_client(address, port, raw_data).await
+    }
+
     // --- recv ---
+    pub async fn recv_from_other_client_u8(&self) -> anyhow::Result<nalgebra::DMatrix<u8>> {
+        let raw_data = self.recv_raw_from_other_client().await?;
+        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+        match data {
+            PacketKind::RawDatau8(data) => Ok(data),
+            _ => Err(anyhow!("Received wrong data type")),
+        }
+    }
+
     pub async fn recv_from_other_client_f64(&self) -> anyhow::Result<nalgebra::DMatrix<f64>> {
         let raw_data = self.recv_raw_from_other_client().await?;
         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");

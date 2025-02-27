@@ -6,6 +6,7 @@ pub mod ship;
 use std::collections::HashMap;
 
 use nalgebra::{UnitQuaternion, Vector3};
+use net::SeaSendableBuffer;
 use ros_pointcloud2::PointCloud2Msg;
 use serde::{Deserialize, Serialize};
 
@@ -19,14 +20,21 @@ pub enum ShipKind {
 pub type ShipName = i128;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetworkShipAddress {
+    ip: [u8; 4],
+    port: u16,
+    ship: ShipName,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum Action {
     #[default]
     Sail,
     Shoot {
-        target: Vec<ShipName>,
+        target: Vec<NetworkShipAddress>,
     },
     Catch {
-        source: ShipName,
+        source: NetworkShipAddress,
     },
 }
 
@@ -62,6 +70,7 @@ pub fn get_strategy(
     }
 }
 
+#[async_trait::async_trait]
 pub trait Ship: Send + Sync + 'static {
     /// Indicate a trigger point and ask the link pilot what to do with the variable.
     async fn ask_for_action(
@@ -82,10 +91,14 @@ pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
-    async fn shoot(&self, targets: &Vec<crate::ShipName>, data: &[u8]);
+    async fn shoot(
+        &self,
+        targets: &Vec<crate::NetworkShipAddress>,
+        data: impl net::SeaSendableBuffer,
+    );
 
     /// Catch the dumped data from the source.
-    async fn catch(&self, target: crate::ShipName) -> Vec<u8>;
+    async fn catch(&self, target: &crate::NetworkShipAddress) -> impl SeaSendableBuffer;
 }
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]

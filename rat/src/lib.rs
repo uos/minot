@@ -64,9 +64,12 @@ pub fn deinit() -> anyhow::Result<()> {
 /// When the code reaches a variable that is watched, call this function to communitcate synchronously with the link.
 /// It syncs with the other rats and gets the action to be taken for the current var.
 /// It then applies the action to the variable and returns.
-pub fn bacon<T>(variable_name: &str, data: &mut nalgebra::DMatrix<T>) -> anyhow::Result<()>
+pub fn bacon<T>(
+    variable_name: &str,
+    data: &mut impl sea::net::SeaSendableBuffer,
+) -> anyhow::Result<()>
 where
-    T: Scalar + serde::Serialize + for<'a> serde::Deserialize<'a>,
+    T: sea::net::SeaSendableScalar + serde::Serialize + for<'a> serde::Deserialize<'a>,
 {
     let rat_arc = RAT
         .lock()
@@ -76,8 +79,8 @@ where
         .as_ref()
         .ok_or(anyhow::anyhow!("Rat not initialized"))?;
 
-    let bytes =
-        bincode::serialize(data).map_err(|e| anyhow::anyhow!("Failed to serialize data: {}", e))?;
+    // let bytes =
+    // bincode::serialize(data).map_err(|e| anyhow::anyhow!("Failed to serialize data: {}", e))?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -93,7 +96,7 @@ where
             }
             Ok(sea::Action::Shoot { target }) => {
                 info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
-                rat.ship.get_cannon().shoot(&target, &bytes).await;
+                rat.ship.get_cannon().shoot(&target, data).await;
 
                 info!(
                     "Rat {} finished shooting {} at {:?}",
@@ -105,16 +108,16 @@ where
             Ok(sea::Action::Catch { source }) => {
                 info!("Rat {} catches {} from {}", rat.name, variable_name, source);
 
-                let recv_data = rat.ship.get_cannon().catch(source).await;
+                let recv_data = rat.ship.get_cannon().catch::<T>(source).await;
 
                 info!(
                     "Rat {} finished catching {} from {}",
                     rat.name, variable_name, source
                 );
 
-                let deserialized: nalgebra::DMatrix<T> = bincode::deserialize(&recv_data)
-                    .map_err(|e| anyhow::anyhow!("Failed to deserialize data: {}", e))?;
-                *data = deserialized;
+                // let deserialized: nalgebra::DMatrix<T> = bincode::deserialize(&recv_data)
+                // .map_err(|e| anyhow::anyhow!("Failed to deserialize data: {}", e))?;
+                *data = recv_data;
                 Ok(())
             }
             Err(e) => {

@@ -4,7 +4,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>> {
     let kind = ShipKind::Wind(name.to_string());
-    let mut ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
+    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -14,8 +14,9 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>
             match ship.wait_for_action(kind.clone()).await {
                 Ok(sea::Action::Catch { source }) => {
                     let cannon = ship.get_cannon();
-                    let data = cannon.catch(source).await;
-                    let data = bincode::deserialize::<sea::WindData>(&data).unwrap();
+                    let data = cannon.catch(&source).await;
+                    let data =
+                        bincode::deserialize::<sea::WindData>(&data.data.as_slice()).unwrap();
                     tx.send(data).unwrap();
                 }
                 Err(e) => {

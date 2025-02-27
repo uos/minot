@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use log::error;
 use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
 use sea::{coordinator::CoordinatorImpl, ImuMsg, ShipName};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, oneshot};
 mod network;
 
 struct Network {
