@@ -1,5 +1,6 @@
-use log::info;
-use sea::{Cannon, Ship, ShipKind};
+use anyhow::Error;
+use log::{error, info};
+use sea::{net::SeaSendableBuffer, Cannon, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>> {
@@ -15,8 +16,15 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>
                 Ok(sea::Action::Catch { source }) => {
                     let cannon = ship.get_cannon();
                     let data = cannon.catch(&source).await;
-                    let data =
-                        bincode::deserialize::<sea::WindData>(&data.data.as_slice()).unwrap();
+                    if let Some(received_wind) =
+                        data.as_any().downcast_ref::<nalgebra::DMatrix<u8>>()
+                    {
+                        let data =
+                            bincode::deserialize::<sea::WindData>(&received_wind.data.as_slice())
+                                .unwrap();
+                    } else {
+                        error!("Could not downcast to u8 matrix");
+                    }
                     tx.send(data).unwrap();
                 }
                 Err(e) => {

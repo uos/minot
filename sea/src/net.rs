@@ -55,6 +55,7 @@ impl SeaSendableScalar for i32 {}
 pub trait SeaSendableBuffer: Send + Clone {
     fn to_packet(self) -> Vec<u8>;
     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self>;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 impl SeaSendableBuffer for () {
@@ -64,6 +65,10 @@ impl SeaSendableBuffer for () {
 
     fn set_from_packet(_: Vec<u8>) -> anyhow::Result<Self> {
         unimplemented!("Should only be a shadow for async_trait crate.")
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -79,6 +84,10 @@ impl SeaSendableBuffer for DMatrix<u8> {
             _ => Err(anyhow!("Received wrong data type")),
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl SeaSendableBuffer for DMatrix<f64> {
@@ -93,6 +102,10 @@ impl SeaSendableBuffer for DMatrix<f64> {
             _ => Err(anyhow!("Received wrong data type")),
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 impl SeaSendableBuffer for DMatrix<f32> {
     fn to_packet(self) -> Vec<u8> {
@@ -106,6 +119,10 @@ impl SeaSendableBuffer for DMatrix<f32> {
             _ => Err(anyhow!("Received wrong data type")),
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 impl SeaSendableBuffer for DMatrix<i32> {
     fn to_packet(self) -> Vec<u8> {
@@ -118,6 +135,10 @@ impl SeaSendableBuffer for DMatrix<i32> {
             PacketKind::RawDatai32(data) => Ok(data),
             _ => Err(anyhow!("Received wrong data type")),
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

@@ -1,4 +1,3 @@
-pub mod cannon;
 pub mod coordinator;
 pub mod net;
 pub mod ship;
@@ -95,10 +94,12 @@ pub trait Cannon: Send + Sync + 'static {
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
         data: impl net::SeaSendableBuffer,
-    );
+    ) -> anyhow::Result<()>;
 
     /// Catch the dumped data from the source.
-    async fn catch(&self, target: &crate::NetworkShipAddress) -> impl SeaSendableBuffer;
+    async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
+    where
+        T: SeaSendableBuffer;
 }
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]
