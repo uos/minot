@@ -1,4 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     let mut var = rat::rtrue();
 
     rat::init("testRat1", None)?;

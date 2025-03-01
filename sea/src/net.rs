@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use nalgebra::DMatrix;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -211,48 +211,48 @@ impl Sea {
 
         // task to handle join requests on udp socket
         tokio::spawn(async move {
-            let udp_listener = Client::get_udp_socket(external_ip).await;
+            let udp_listener = Client::get_udp_socket(external_ip, Some(CLIENT_LISTEN_PORT)).await;
             let rejoin_request = Packet {
                 header: Header {
                     source: ShipName::MAX,
                     target: CONTROLLER_CLIENT_ID,
                 },
                 // names are padded with maximal length 64 chars
-                data: PacketKind::JoinRequest(0, ShipKind::Rat("a".repeat(64))),
+                data: PacketKind::JoinRequest(
+                    0,
+                    Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
+                ),
             };
             let bytes_rejoin_request =
                 bincode::serialize(&rejoin_request).expect("could not serialize rejoin request");
-            let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len() + 1;
+            let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len();
             let mut new_clients_without_response = HashMap::<String, (usize, Vec<u8>)>::new();
 
+            info!("Listening {:?}", udp_listener.local_addr().unwrap());
+            debug!(
+                "Expecting {} bytes for JoinRequest including PROTO_IDENTIFIER",
+                expected_n_bytes_for_rejoin_request + 1
+            );
+
             loop {
-                let mut buf = [0; 1024];
+                let mut buf = [0; 256]; // JoinRequest normally 115 bytes
                 let (n, addr) = udp_listener.recv_from(&mut buf).await.unwrap();
                 let id = format!("{}:{}", addr.ip(), addr.port());
+                debug!("Receiving {} bytes from {} via UDP", n, id);
 
                 match new_clients_without_response.get_mut(&id) {
                     Some((kum, buffer)) => {
-                        if *kum == 0 {
-                            if buf[0] != PROTO_IDENTIFIER {
-                                new_clients_without_response.remove(&id); // TODO does this work? We are inside a get_mut but removing the id we are in
-                                continue;
-                            } else {
-                                let nbuf = [0; 1024];
-                                // clean the first byte from the buffer
-                                for i in 0..n {
-                                    buf[i] = nbuf[i + 1];
-                                }
-                                buf = nbuf;
-
-                                buffer.extend_from_slice(&buf[..n]);
-                            }
-                        }
                         *kum += n;
+                        buffer.extend_from_slice(&buf[..n]);
                     }
                     None => {
                         let mut buffer = Vec::with_capacity(1024);
-                        buffer.extend_from_slice(&buf[..n]);
-                        new_clients_without_response.insert(id, (n, buffer));
+                        if buf[0] != PROTO_IDENTIFIER {
+                            continue; // not meant for us
+                        } else {
+                            buffer.extend_from_slice(&buf[1..n]);
+                        }
+                        new_clients_without_response.insert(id, (buffer.len(), buffer));
                     }
                 }
 
@@ -275,6 +275,7 @@ impl Sea {
                             error!("Could not send rejoin request to internal channel: {e}");
                         }
                         Ok(_) => {
+                            debug!("Rejoin sent somewhere");
                             to_delete.push(id.clone());
                         }
                     };
@@ -290,7 +291,9 @@ impl Sea {
         let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
             loop {
+                debug!("waiting for rejoin packages");
                 let (addr, packet) = rejoin_req_rx.recv().await.unwrap();
+                debug!("got join packet {:?} from {:?}", packet, addr);
                 match packet.data {
                     PacketKind::JoinRequest(client_tcp_port, ship_kind) => {
                         let generated_id = rand::random::<ShipName>().abs();
@@ -467,7 +470,7 @@ impl Sea {
                                 disconnect: disconnect_tx,
                                 recv: tx_out,
                                 send: client_sender_tx,
-                                name: ship_kind,
+                                name: Self::unpad_ship_kind_name(&ship_kind),
                                 addr_from_coord: client_addr,
                             };
                             curr_client_create_sender.send(ship_handle).unwrap();
@@ -483,6 +486,35 @@ impl Sea {
         Self {
             network_clients_chan: clients_tx,
             dissolve_network: dissolve_network_tx,
+        }
+    }
+
+    pub fn pad_string(input: &str) -> String {
+        if input.len() >= 64 {
+            return input.to_string(); // Return the string if it's already 64 or longer
+        }
+        let padding_count = 64 - input.len();
+        let padding = "#".repeat(padding_count);
+        format!("{}{}", input, padding)
+    }
+
+    pub fn reverse_padding(input: &str) -> String {
+        let trimmed: &str = input.trim_end_matches('#');
+        trimmed.to_string()
+    }
+
+    fn pad_ship_kind_name(kind: &ShipKind) -> ShipKind {
+        match kind {
+            ShipKind::Rat(name) => ShipKind::Rat(Self::pad_string(name)),
+            ShipKind::Wind(name) => ShipKind::Wind(Self::pad_string(name)),
+            ShipKind::God => ShipKind::God,
+        }
+    }
+    fn unpad_ship_kind_name(kind: &ShipKind) -> ShipKind {
+        match kind {
+            ShipKind::Rat(name) => ShipKind::Rat(Self::reverse_padding(name)),
+            ShipKind::Wind(name) => ShipKind::Wind(Self::reverse_padding(name)),
+            ShipKind::God => ShipKind::God,
         }
     }
 
@@ -562,9 +594,16 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn get_udp_socket(external_ip: Option<[u8; 4]>) -> UdpSocket {
+    pub async fn get_udp_socket(external_ip: Option<[u8; 4]>, port: Option<u16>) -> UdpSocket {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let bind_address = format!("{}.{}.{}.{}:0", ip[0], ip[1], ip[2], ip[3]);
+        let bind_address = format!(
+            "{}.{}.{}.{}:{}",
+            ip[0],
+            ip[1],
+            ip[2],
+            ip[3],
+            port.unwrap_or(0)
+        );
         let socket = std::net::UdpSocket::bind(&bind_address).unwrap();
         socket.set_broadcast(true).expect("could not set broadcast");
         let udp_socket = UdpSocket::from_std(socket).expect("could not promote to tokio socket");
@@ -747,10 +786,10 @@ impl Client {
                 source: ShipName::MAX,
                 target: CONTROLLER_CLIENT_ID,
             },
-            data: PacketKind::JoinRequest(self.tcp_port, self.kind.clone()),
+            data: PacketKind::JoinRequest(self.tcp_port, Sea::pad_ship_kind_name(&self.kind)),
         };
 
-        let udp_socket = Self::get_udp_socket(Some(self.ip)).await;
+        let udp_socket = Self::get_udp_socket(Some(self.ip), None).await;
         let mut subscription = self.tcp_listener_chan.subscribe();
 
         let (partner, my_addr) = loop {
@@ -760,7 +799,7 @@ impl Client {
 
             match tim {
                 Err(_) => {
-                    info!("JoingRequest timed out");
+                    info!("JoinRequest timed out");
                     continue;
                 }
                 Ok(Err(e)) => {
@@ -1036,14 +1075,18 @@ impl Client {
         for interface in Self::get_active_interfaces().iter() {
             for ip_network in &interface.ips {
                 if let IpAddr::V4(ipv4_addr) = ip_network.ip() {
-                    let broadcast = Self::calculate_broadcast(ipv4_addr, ip_network.prefix());
+                    // let addr = if ipv4_addr.is_loopback() {
+                    // Self::calculate_broadcast(ipv4_addr, ip_network.prefix())
+                    // } else {
+                    let addr = Self::calculate_broadcast(ipv4_addr, ip_network.prefix());
+                    // };
 
                     let target_str = format!(
                         "{}.{}.{}.{}:{}",
-                        broadcast.octets()[0],
-                        broadcast.octets()[1],
-                        broadcast.octets()[2],
-                        broadcast.octets()[3],
+                        addr.octets()[0],
+                        addr.octets()[1],
+                        addr.octets()[2],
+                        addr.octets()[3],
                         CLIENT_LISTEN_PORT
                     );
 

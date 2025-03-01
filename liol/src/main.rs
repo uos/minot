@@ -199,7 +199,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lidar_data = sea::WindData::Pointcloud(rand_points);
     wind_tx.send(lidar_data).unwrap();
 
-    info!("Listening...");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("Ctrl-C received. Shutting down...");
