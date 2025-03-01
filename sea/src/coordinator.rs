@@ -5,16 +5,19 @@ use log::error;
 
 use crate::{
     net::{Packet, PacketKind},
-    ShipName,
+    NetworkShipAddress, ShipName,
 };
+
+pub struct ClientInfo {
+    id: ShipName,
+    network: NetworkShipAddress,
+    queue: tokio::sync::broadcast::Sender<String>,
+    sender: tokio::sync::mpsc::Sender<Packet>,
+}
 
 pub struct CoordinatorImpl {
     pub sea: crate::net::Sea,
-    pub senders:
-        std::sync::Arc<tokio::sync::RwLock<HashMap<ShipName, tokio::sync::mpsc::Sender<Packet>>>>,
-    pub rat_qs: std::sync::Arc<
-        tokio::sync::RwLock<HashMap<ShipName, tokio::sync::broadcast::Sender<String>>>,
-    >,
+    pub rat_qs: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
 }
 
 #[async_trait::async_trait]
@@ -22,23 +25,24 @@ impl crate::Coordinator for CoordinatorImpl {
     /// Get a channel that only returns the variable from this rat
     async fn rat_action_request_queue(
         &self,
-        ship: crate::ShipName,
+        ship: String,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>> {
-        if let Some(receiver) = self.rat_qs.read().await.get(&ship) {
-            return Ok(receiver.subscribe());
+        if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
+            return Ok(client_info.queue.subscribe());
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         return Box::pin(self.rat_action_request_queue(ship)).await;
     }
 
-    async fn blow_wind(&self, ship: crate::ShipName, data: crate::WindData) -> anyhow::Result<()> {
-        if let Some(sender) = self.senders.read().await.get(&ship) {
+    async fn blow_wind(&self, ship: String, data: crate::WindData) -> anyhow::Result<()> {
+        if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
             let paket = Packet {
                 header: crate::net::Header::default(),
                 data: PacketKind::Wind(data),
             };
-            return sender
+            return client_info
+                .sender
                 .send(paket)
                 .await
                 .map_err(|e| anyhow!("Error while sending rat action: {e}"));
@@ -48,17 +52,15 @@ impl crate::Coordinator for CoordinatorImpl {
         return Box::pin(self.blow_wind(ship, data)).await;
     }
 
-    async fn rat_action_send(
-        &self,
-        ship: crate::ShipName,
-        action: crate::Action,
-    ) -> anyhow::Result<()> {
-        if let Some(sender) = self.senders.read().await.get(&ship) {
+    async fn rat_action_send(&self, ship: String, action: crate::ActionPlan) -> anyhow::Result<()> {
+        if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
+            let action = self.convert_action(&action).await?;
             let paket = Packet {
                 header: crate::net::Header::default(),
                 data: PacketKind::RatAction(action),
             };
-            return sender
+            return client_info
+                .sender
                 .send(paket)
                 .await
                 .map_err(|e| anyhow!("Error while sending rat action: {e}"));
@@ -70,11 +72,38 @@ impl crate::Coordinator for CoordinatorImpl {
 }
 
 impl CoordinatorImpl {
+    async fn convert_action(
+        &self,
+        human_action: &crate::ActionPlan,
+    ) -> anyhow::Result<crate::Action> {
+        let action = match human_action {
+            crate::ActionPlan::Sail => crate::Action::Sail,
+            crate::ActionPlan::Shoot { target } => {
+                let mut targets = Vec::with_capacity(target.len());
+                for client_name in target.into_iter() {
+                    let rat = self.rat_qs.read().await;
+                    let client_info = rat
+                        .get(client_name)
+                        .ok_or_else(|| anyhow!("Unknown client."))?;
+                    targets.push(client_info.network.clone());
+                }
+
+                crate::Action::Shoot { target: targets }
+            }
+            crate::ActionPlan::Catch { source } => {
+                let rat = self.rat_qs.read().await;
+                let client_info = rat.get(source).ok_or_else(|| anyhow!("Unknown client."))?;
+                crate::Action::Catch {
+                    source: client_info.network.clone(),
+                }
+            }
+        };
+
+        Ok(action)
+    }
     pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
         let sea = crate::net::Sea::init(external_ip).await;
 
-        let clients_senders = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let client_senders_out = clients_senders.clone();
         let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let mut incoming_clients = sea.network_clients_chan.subscribe();
         let inner_client_rat_queues = rat_queues.clone();
@@ -87,15 +116,23 @@ impl CoordinatorImpl {
                     }
                     Ok(client) => {
                         let (rat_queue_tx, _rat_queue_rx) = tokio::sync::broadcast::channel(10);
+                        let client_info = ClientInfo {
+                            id: client.ship,
+                            queue: rat_queue_tx.clone(),
+                            sender: client.send,
+                            network: client.addr_from_coord,
+                        };
+                        let name = match client.name {
+                            crate::ShipKind::Rat(name) => name,
+                            crate::ShipKind::Wind(name) => name,
+                            crate::ShipKind::God => {
+                                unimplemented!("Coordinator can not connect to other coordinators.")
+                            }
+                        };
                         inner_client_loop_rat_queues
                             .write()
                             .await
-                            .insert(client.ship, rat_queue_tx.clone());
-
-                        clients_senders
-                            .write()
-                            .await
-                            .insert(client.ship, client.send);
+                            .insert(name, client_info);
 
                         let mut receiver = client.recv.subscribe();
                         tokio::spawn(async move {
@@ -113,7 +150,9 @@ impl CoordinatorImpl {
         Self {
             sea,
             rat_qs: rat_queues,
-            senders: client_senders_out,
         }
     }
+    // pub async fn cleanup(&mut self) {
+    // self.sea.cleanup().await;
+    // }
 }

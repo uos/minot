@@ -13,5 +13,7 @@ int rat_deinit();
 // The datatype is a dynamic 2D column-major array (like Eigen).
 int rat_bacon_f32(const char *variable_name, float *data, size_t rows, size_t cols);
 int rat_bacon_f64(const char *variable_name, double *data, size_t rows, size_t cols);
+int rat_bacon_i32(const char *variable_name, int *data, size_t rows, size_t cols);
+int rat_bacon_u8(const char *variable_name, uchar *data, size_t rows, size_t cols);
 
 #endif

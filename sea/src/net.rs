@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, TcpStream},
+    str::FromStr,
 };
 
 use anyhow::anyhow;
@@ -31,7 +32,7 @@ const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_
 pub enum PacketKind {
     Acknowledge,
     JoinRequest(u16, ShipKind),
-    Welcome(ShipName, u16), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
+    Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
     RawDataf64(nalgebra::DMatrix<f64>), // TODO maybe we need to have a more generic type here but for now it is enough
@@ -55,7 +56,6 @@ impl SeaSendableScalar for i32 {}
 pub trait SeaSendableBuffer: Send + Clone {
     fn to_packet(self) -> Vec<u8>;
     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self>;
-    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 impl SeaSendableBuffer for () {
@@ -65,10 +65,6 @@ impl SeaSendableBuffer for () {
 
     fn set_from_packet(_: Vec<u8>) -> anyhow::Result<Self> {
         unimplemented!("Should only be a shadow for async_trait crate.")
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -84,10 +80,6 @@ impl SeaSendableBuffer for DMatrix<u8> {
             _ => Err(anyhow!("Received wrong data type")),
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl SeaSendableBuffer for DMatrix<f64> {
@@ -102,10 +94,6 @@ impl SeaSendableBuffer for DMatrix<f64> {
             _ => Err(anyhow!("Received wrong data type")),
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 impl SeaSendableBuffer for DMatrix<f32> {
     fn to_packet(self) -> Vec<u8> {
@@ -119,10 +107,6 @@ impl SeaSendableBuffer for DMatrix<f32> {
             _ => Err(anyhow!("Received wrong data type")),
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 impl SeaSendableBuffer for DMatrix<i32> {
     fn to_packet(self) -> Vec<u8> {
@@ -135,10 +119,6 @@ impl SeaSendableBuffer for DMatrix<i32> {
             PacketKind::RawDatai32(data) => Ok(data),
             _ => Err(anyhow!("Received wrong data type")),
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -167,6 +147,8 @@ pub struct Packet {
 
 #[derive(Clone, Debug)]
 pub struct ShipHandle {
+    pub name: ShipKind,
+    pub addr_from_coord: crate::NetworkShipAddress,
     pub ship: ShipName,
     // Send here to disconnect the tcp listener
     pub disconnect: tokio::sync::broadcast::Sender<bool>,
@@ -178,7 +160,6 @@ pub struct ShipHandle {
 
 #[derive(Debug)]
 pub struct Sea {
-    // coordinator_client: Client,
     pub network_clients_chan: tokio::sync::broadcast::Sender<ShipHandle>,
     dissolve_network: tokio::sync::mpsc::Sender<tokio::sync::mpsc::Sender<()>>,
 }
@@ -311,7 +292,7 @@ impl Sea {
             loop {
                 let (addr, packet) = rejoin_req_rx.recv().await.unwrap();
                 match packet.data {
-                    PacketKind::JoinRequest(client_tcp_port, _ship_kind) => {
+                    PacketKind::JoinRequest(client_tcp_port, ship_kind) => {
                         let generated_id = rand::random::<ShipName>().abs();
                         let (disconnect_tx, _disconnect_rx) =
                             tokio::sync::broadcast::channel::<bool>(1);
@@ -340,16 +321,20 @@ impl Sea {
                             .await
                             .expect("could not connect to client");
 
-                            // send welcome with the generated client_id
+                            let ip_parsed = Ipv4Addr::from_str(ip).expect("Strange ip format");
+
+                            let client_addr = crate::NetworkShipAddress {
+                                ip: ip_parsed.octets(),
+                                port: server_tcp_client_listen_port,
+                                ship: generated_id,
+                            };
+
                             let welcome_packet = Packet {
                                 header: Header {
                                     source: CONTROLLER_CLIENT_ID,
                                     target: generated_id,
                                 },
-                                data: PacketKind::Welcome(
-                                    generated_id,
-                                    server_tcp_client_listen_port,
-                                ),
+                                data: PacketKind::Welcome(client_addr.clone()),
                             };
 
                             let welcome_packet_bytes = bincode::serialize(&welcome_packet)
@@ -482,6 +467,8 @@ impl Sea {
                                 disconnect: disconnect_tx,
                                 recv: tx_out,
                                 send: client_sender_tx,
+                                name: ship_kind,
+                                addr_from_coord: client_addr,
                             };
                             curr_client_create_sender.send(ship_handle).unwrap();
                         });
@@ -498,32 +485,67 @@ impl Sea {
             dissolve_network: dissolve_network_tx,
         }
     }
+
+    pub async fn cleanup(&mut self) {
+        let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
+        match self.dissolve_network.send(answer_tx).await {
+            Err(e) => {
+                error!("Error while droppping network: {e}");
+            }
+            Ok(_) => {}
+        }
+
+        let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());
+        // tokio::task::yield_now().await;
+        match answer_timeout.await {
+            Err(e) => {
+                error!("Dropping network timeout, discarding waiting for completion: {e}");
+            }
+            Ok(None) => {
+                warn!("Sender already closed in dissolving answer");
+            }
+            _ => {}
+        }
+    }
 }
 
+// TODO block_in_place blocks the current thread. So when the dissolve_network receivers are running on the same thread, is this a deadlock since we are blocking the thread?
 impl Drop for Sea {
     fn drop(&mut self) {
-        tokio::runtime::Handle::current().block_on(async move {
-            let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
-            match self.dissolve_network.send(answer_tx).await {
-                Err(e) => {
-                    error!("Error while droppping network: {e}");
-                }
-                Ok(_) => {}
-            }
-
-            let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());
-            match answer_timeout.await {
-                Err(e) => {
-                    error!("Dropping network timeout, discarding waiting for completion: {e}");
-                }
-                Ok(None) => {
-                    error!("Sender already closed in dissolving answer");
-                }
-                _ => {}
-            }
+        tokio::task::block_in_place(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(self.cleanup());
         });
     }
 }
+
+// impl std::future::AsyncDrop for Sea {
+//     type Dropper<'a> = impl std::future::Future<Output = ()>;
+
+//     fn async_drop(self: std::pin::Pin<&mut Self>) -> Self::Dropper<'_> {
+//         println!("calling async drop");
+//         async move {
+//             let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
+//             match self.dissolve_network.send(answer_tx).await {
+//                 Err(e) => {
+//                     error!("Error while droppping network: {e}");
+//                 }
+//                 Ok(_) => {}
+//             }
+
+//             let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());
+//             match answer_timeout.await {
+//                 Err(e) => {
+//                     error!("Dropping network timeout, discarding waiting for completion: {e}");
+//                 }
+//                 Ok(None) => {
+//                     error!("Sender already closed in dissolving answer");
+//                 }
+//                 _ => {}
+//             }
+//         }
+//     }
+// }
 
 #[derive(Debug)]
 pub struct Client {
@@ -544,10 +566,6 @@ impl Client {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
         let bind_address = format!("{}.{}.{}.{}:0", ip[0], ip[1], ip[2], ip[3]);
         let socket = std::net::UdpSocket::bind(&bind_address).unwrap();
-        /*let udp_port = socket
-        .local_addr()
-        .expect("could not get sock adress")
-        .port();*/
         socket.set_broadcast(true).expect("could not set broadcast");
         let udp_socket = UdpSocket::from_std(socket).expect("could not promote to tokio socket");
         udp_socket
@@ -735,7 +753,7 @@ impl Client {
         let udp_socket = Self::get_udp_socket(Some(self.ip)).await;
         let mut subscription = self.tcp_listener_chan.subscribe();
 
-        let (partner, my_id, coordinator_tcp_port) = loop {
+        let (partner, my_addr) = loop {
             Self::send_packet_broadcast(&network_register_packet, &udp_socket).await?;
 
             let tim = tokio::time::timeout(CLIENT_REGISTER_TIMEOUT, subscription.recv()).await;
@@ -749,8 +767,8 @@ impl Client {
                     return Err(anyhow!("TCP channel closed: {e}"));
                 }
                 Ok(Ok((packet, partner))) => {
-                    if let PacketKind::Welcome(my_id, coordinator_tcp_port) = packet.data {
-                        break (partner, my_id, coordinator_tcp_port);
+                    if let PacketKind::Welcome(addr) = packet.data {
+                        break (partner, addr);
                     }
                 }
             }
@@ -777,7 +795,7 @@ impl Client {
                     packet = coord_rx.recv() => {
                         if let Some(mut packet) = packet {
                             heartbeat_interval.reset();
-                            packet.header.source = my_id; // overwrite source with our id
+                            packet.header.source = my_addr.ship; // overwrite source with our id
                             packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
                             match coord_raw_tx.send(packet).await {
                                 Err(e) => {
@@ -791,7 +809,7 @@ impl Client {
                     _ = heartbeat_interval.tick() => {
                         let packet = Packet {
                             header: Header {
-                                source: my_id,
+                                source: my_addr.ship,
                                 target: CONTROLLER_CLIENT_ID,
                             },
                             data: PacketKind::Heartbeat,
@@ -807,11 +825,8 @@ impl Client {
             }
         });
 
-        let stream = std::net::TcpStream::connect(format!(
-            "{}:{}",
-            partner.ip().to_string(),
-            coordinator_tcp_port
-        ))?;
+        let stream =
+            std::net::TcpStream::connect(format!("{}:{}", partner.ip().to_string(), my_addr.port))?;
 
         info!("Connected to coordinator!");
 
@@ -933,143 +948,78 @@ impl Client {
         Ok(())
     }
 
-    pub async fn recv_raw_from_other_client(&self) -> anyhow::Result<Vec<u8>> {
-        let stream = tokio::time::timeout(
-            CLIENT_TO_CLIENT_TIMEOUT,
-            self.other_client_listener.accept(),
-        )
-        .await;
+    pub async fn recv_raw_from_other_client(
+        &self,
+        sender: Option<&crate::NetworkShipAddress>,
+    ) -> anyhow::Result<Vec<u8>> {
+        loop {
+            let stream = tokio::time::timeout(
+                CLIENT_TO_CLIENT_TIMEOUT,
+                self.other_client_listener.accept(),
+            )
+            .await;
 
-        match stream {
-            Err(_) => {
-                return Err(anyhow!(
-                    "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
-                ));
-            }
-            Ok(Err(e)) => {
-                return Err(anyhow!("Could not connect to other client: {e}"));
-            }
-            Ok(Ok((mut stream, _))) => {
-                stream.readable().await?;
-                let mut buffer = Vec::with_capacity(1024);
-                let mut first = true;
-
-                let mut is_for_us = true;
-                loop {
-                    let mut buf = [0; 1024];
-                    let n = match stream.read(&mut buf).await {
-                        Err(e) => {
-                            error!("Could not read from TCP stream: {e}");
-                            0
+            match stream {
+                Err(_) => {
+                    return Err(anyhow!(
+                        "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
+                    ));
+                }
+                Ok(Err(e)) => {
+                    return Err(anyhow!("Could not connect to other client: {e}"));
+                }
+                Ok(Ok((mut stream, socket_sender))) => {
+                    if let Some(expected_sender) = sender {
+                        let expected_ip = Ipv4Addr::new(
+                            expected_sender.ip[0],
+                            expected_sender.ip[1],
+                            expected_sender.ip[2],
+                            expected_sender.ip[3],
+                        );
+                        if expected_ip != socket_sender.ip().to_canonical() {
+                            continue;
                         }
-                        Ok(n) => n,
-                    };
+                    }
+                    stream.readable().await?;
+                    let mut buffer = Vec::with_capacity(1024);
+                    let mut first = true;
 
-                    if first {
-                        first = false;
-                        if buf[0] != PROTO_IDENTIFIER {
-                            is_for_us = false;
+                    let mut is_for_us = true;
+                    loop {
+                        let mut buf = [0; 1024];
+                        let n = match stream.read(&mut buf).await {
+                            Err(e) => {
+                                error!("Could not read from TCP stream: {e}");
+                                0
+                            }
+                            Ok(n) => n,
+                        };
+
+                        if first {
+                            first = false;
+                            if buf[0] != PROTO_IDENTIFIER {
+                                is_for_us = false;
+                                break;
+                            }
+                        }
+                        if n == 0 {
                             break;
                         }
-                    }
-                    if n == 0 {
-                        break;
+
+                        buffer.extend_from_slice(&buf[..n]);
                     }
 
-                    buffer.extend_from_slice(&buf[..n]);
-                }
-
-                if is_for_us {
-                    return Ok(buffer);
-                } else {
-                    return Err(anyhow!("Received data is not for us"));
+                    if is_for_us {
+                        return Ok(buffer);
+                    } else {
+                        return Err(anyhow!("Received data is not for us"));
+                    }
                 }
             }
         }
     }
 
     // TODO log to coordinator functions. They send them async in another thread to the coordinator so nothing is blocked on the client side.
-    // --- send ---
-    pub async fn send_to_other_client_f64(
-        &self,
-        address: &IpAddr,
-        port: u16,
-        data: nalgebra::DMatrix<f64>,
-    ) -> anyhow::Result<()> {
-        let raw_data =
-            bincode::serialize(&PacketKind::RawDataf64(data)).expect("data not serializable");
-        self.send_raw_to_other_client(address, port, raw_data).await
-    }
-
-    pub async fn send_to_other_client_f32(
-        &self,
-        address: &IpAddr,
-        port: u16,
-        data: nalgebra::DMatrix<f32>,
-    ) -> anyhow::Result<()> {
-        let raw_data =
-            bincode::serialize(&PacketKind::RawDataf32(data)).expect("data not serializable");
-        self.send_raw_to_other_client(address, port, raw_data).await
-    }
-
-    pub async fn send_to_other_client_i32(
-        &self,
-        address: &IpAddr,
-        port: u16,
-        data: nalgebra::DMatrix<i32>,
-    ) -> anyhow::Result<()> {
-        let raw_data =
-            bincode::serialize(&PacketKind::RawDatai32(data)).expect("data not serializable");
-        self.send_raw_to_other_client(address, port, raw_data).await
-    }
-
-    pub async fn send_to_other_client_u8(
-        &self,
-        address: &IpAddr,
-        port: u16,
-        data: nalgebra::DMatrix<u8>,
-    ) -> anyhow::Result<()> {
-        let raw_data =
-            bincode::serialize(&PacketKind::RawDatau8(data)).expect("data not serializable");
-        self.send_raw_to_other_client(address, port, raw_data).await
-    }
-
-    // --- recv ---
-    pub async fn recv_from_other_client_u8(&self) -> anyhow::Result<nalgebra::DMatrix<u8>> {
-        let raw_data = self.recv_raw_from_other_client().await?;
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDatau8(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-
-    pub async fn recv_from_other_client_f64(&self) -> anyhow::Result<nalgebra::DMatrix<f64>> {
-        let raw_data = self.recv_raw_from_other_client().await?;
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDataf64(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-
-    pub async fn recv_from_other_client_f32(&self) -> anyhow::Result<nalgebra::DMatrix<f32>> {
-        let raw_data = self.recv_raw_from_other_client().await?;
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDataf32(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-
-    pub async fn recv_from_other_client_i32(&self) -> anyhow::Result<nalgebra::DMatrix<i32>> {
-        let raw_data = self.recv_raw_from_other_client().await?;
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDatai32(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
 
     // --- end send/recv ---
 

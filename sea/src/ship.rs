@@ -37,10 +37,10 @@ impl crate::Cannon for NetworkShipImpl {
     /// Catch the dumped data from the source.
     async fn catch<T: SeaSendableBuffer>(
         &self,
-        _target: &crate::NetworkShipAddress, // TODO rm target, since port is fixed?
+        target: &crate::NetworkShipAddress, // TODO rm target, since port is fixed?
     ) -> anyhow::Result<T> {
         let client = self.client.lock().await;
-        let data = client.recv_raw_from_other_client().await?;
+        let data = client.recv_raw_from_other_client(Some(target)).await?;
         let mat = T::set_from_packet(data).expect("Could not decode data to Matrix");
         Ok(mat)
     }
@@ -48,7 +48,30 @@ impl crate::Cannon for NetworkShipImpl {
 
 #[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
-    async fn wait_for_action(&self, kind: crate::ShipKind) -> anyhow::Result<crate::Action> {
+    async fn ask_for_action(
+        &self,
+        kind: crate::ShipKind,
+        variable_name: &str,
+    ) -> anyhow::Result<crate::Action> {
+        let client = self.client.lock().await;
+        if let Some(sender) = client.coordinator_send.as_ref() {
+            let action_request = crate::net::Packet {
+                header: crate::net::Header::default(),
+                data: PacketKind::VariableTaskRequest(variable_name.to_string()),
+            };
+            sender.send(action_request).await?;
+            return self.wait_for_action().await;
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            return self.ask_for_action(kind, &variable_name).await;
+        }
+    }
+
+    fn get_cannon(&self) -> &impl crate::Cannon {
+        self
+    }
+
+    async fn wait_for_action(&self) -> anyhow::Result<crate::Action> {
         let client = self.client.lock().await;
         if let Some(receiver) = client.coordinator_receive.as_ref() {
             let mut sub = receiver.subscribe();
@@ -62,31 +85,26 @@ impl crate::Ship for NetworkShipImpl {
             ));
         } else {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            return self.wait_for_action(kind).await;
+            return self.wait_for_action().await;
         }
     }
 
-    async fn ask_for_action(
-        &self,
-        kind: crate::ShipKind,
-        variable_name: &str,
-    ) -> anyhow::Result<crate::Action> {
+    async fn wait_for_wind(&self) -> anyhow::Result<crate::WindData> {
         let client = self.client.lock().await;
-        if let Some(sender) = client.coordinator_send.as_ref() {
-            let action_request = crate::net::Packet {
-                header: crate::net::Header::default(),
-                data: PacketKind::VariableTaskRequest(variable_name.to_string()),
-            };
-            sender.send(action_request).await?;
-            return self.wait_for_action(kind).await;
+        if let Some(receiver) = client.coordinator_receive.as_ref() {
+            let mut sub = receiver.subscribe();
+            while let Ok(packet) = sub.recv().await {
+                if let PacketKind::Wind(data) = packet.data {
+                    return Ok(data);
+                }
+            }
+            return Err(anyhow!(
+                "Could not receive wind while Channel was subscribed."
+            ));
         } else {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            return self.ask_for_action(kind, &variable_name).await;
+            return self.wait_for_wind().await;
         }
-    }
-
-    fn get_cannon(&self) -> &impl crate::Cannon {
-        self
     }
 }
 

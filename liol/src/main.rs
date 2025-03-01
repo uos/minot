@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use log::error;
+use log::{error, info};
 use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
-use sea::{coordinator::CoordinatorImpl, ImuMsg, ShipName};
+use sea::{coordinator::CoordinatorImpl, ImuMsg};
 use tokio::sync::{broadcast, oneshot};
 mod network;
 
@@ -39,35 +39,39 @@ use sea::Coordinator;
 #[derive(Debug)]
 enum CoordinatorTask {
     GetVariableChannel {
-        ship: ShipName,
+        ship: String,
         answer: oneshot::Sender<broadcast::Receiver<String>>,
     },
     SendWind {
-        ship_name: ShipName,
+        ship_name: String,
         data: sea::WindData,
     },
     SendRatAction {
-        ship_name: ShipName,
-        data: sea::Action,
+        ship_name: String,
+        data: sea::ActionPlan,
     },
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     // TODO config logic
 
     let mut pairs = HashMap::new();
     pairs.insert(
         "var1".to_string(),
         (
-            sea::Variable {
-                ship: 2,
-                strategy: Some(sea::Action::Shoot { target: vec![1] }),
+            sea::VariableHuman {
+                ship: "testRat1".to_string(),
+                strategy: Some(sea::ActionPlan::Shoot {
+                    target: vec!["testRat2".to_string()],
+                }),
             },
-            sea::Variable {
-                // TODO this step should be implied by the one before
-                ship: 1,
-                strategy: Some(sea::Action::Catch { source: 2 }),
+            sea::VariableHuman {
+                ship: "testRat2".to_string(),
+                strategy: Some(sea::ActionPlan::Catch {
+                    source: "testRat1".to_string(),
+                }),
             },
         ),
     );
@@ -117,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     answer.send(queue).unwrap();
                 }
                 CoordinatorTask::SendWind { ship_name, data } => {
-                    match coordinator.blow_wind(ship_name, data).await {
+                    match coordinator.blow_wind(ship_name.clone(), data).await {
                         Err(e) => {
                             error!("Error while blowing wind to {}: {}", ship_name, e);
                             std::process::exit(1);
@@ -126,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 CoordinatorTask::SendRatAction { ship_name, data } => {
-                    match coordinator.rat_action_send(ship_name, data).await {
+                    match coordinator.rat_action_send(ship_name.clone(), data).await {
                         Err(e) => {
                             error!("Error while sending action to Rat {}: {}", ship_name, e);
                             std::process::exit(1);
@@ -143,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (answer_tx, answer_rx) = oneshot::channel();
         coord_tx
             .send(CoordinatorTask::GetVariableChannel {
-                ship: rat.network_id,
+                ship: rat.name.clone(),
                 answer: answer_tx,
             })
             .unwrap();
@@ -154,10 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn({
             async move {
                 while let Ok(variable) = queue.recv().await {
-                    let action = sea::get_strategy(&rat_pairs, rat.network_id, variable);
+                    let action = sea::get_strategy(&rat_pairs, &rat.name, variable);
                     rat_coord_tx
                         .send(CoordinatorTask::SendRatAction {
-                            ship_name: rat.network_id,
+                            ship_name: rat.name.clone(),
                             data: action,
                         })
                         .unwrap();
@@ -174,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for wind in network.winds.iter() {
                 wind_coord_tx
                     .send(CoordinatorTask::SendWind {
-                        ship_name: wind.network_id,
+                        ship_name: wind.name.clone(),
                         data: data.clone(),
                     })
                     .unwrap();
@@ -194,6 +198,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rand_points = PointCloud2Msg::try_from_vec(rand_points).unwrap();
     let lidar_data = sea::WindData::Pointcloud(rand_points);
     wind_tx.send(lidar_data).unwrap();
+
+    info!("Listening...");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Ctrl-C received. Shutting down...");
+        }
+    }
 
     Ok(())
 }

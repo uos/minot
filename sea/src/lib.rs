@@ -1,3 +1,5 @@
+// #![feature(async_drop)]
+// #![feature(impl_trait_in_assoc_type)]
 pub mod coordinator;
 pub mod net;
 pub mod ship;
@@ -37,6 +39,24 @@ pub enum Action {
     },
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum ActionPlan {
+    #[default]
+    Sail,
+    Shoot {
+        target: Vec<String>,
+    },
+    Catch {
+        source: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct VariableHuman {
+    pub ship: String,
+    pub strategy: Option<ActionPlan>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Variable {
     pub ship: ShipName,
@@ -44,27 +64,28 @@ pub struct Variable {
 }
 
 pub type VarPair = (Variable, Variable);
+pub type HumanVarPair = (VariableHuman, VariableHuman);
 
 pub fn get_strategy(
-    haystack: &HashMap<String, VarPair>,
-    rat_ship: crate::ShipName,
+    haystack: &HashMap<String, HumanVarPair>,
+    rat_ship: &str,
     variable: String,
-) -> Action {
+) -> ActionPlan {
     match haystack.get(&variable) {
-        None => Action::default(),
-        Some((left_var, right_var)) => match (left_var.ship, right_var.ship) {
+        None => ActionPlan::default(),
+        Some((left_var, right_var)) => match (left_var.ship.as_str(), right_var.ship.as_str()) {
             (ship_l, ship_r) if ship_l == rat_ship && ship_r == rat_ship => {
                 panic!("should have been checked before");
             }
             (ship, _) if ship == rat_ship => match left_var.strategy.as_ref() {
                 Some(action) => action.clone(),
-                None => Action::default(),
+                None => ActionPlan::default(),
             },
             (_, ship) if ship == rat_ship => match right_var.strategy.as_ref() {
                 Some(action) => action.clone(),
-                None => Action::default(),
+                None => ActionPlan::default(),
             },
-            _ => Action::default(),
+            _ => ActionPlan::default(),
         },
     }
 }
@@ -78,9 +99,9 @@ pub trait Ship: Send + Sync + 'static {
         variable_name: &str,
     ) -> anyhow::Result<Action>;
 
-    async fn wait_for_action(&self, kind: crate::ShipKind) -> anyhow::Result<crate::Action>;
+    async fn wait_for_action(&self) -> anyhow::Result<crate::Action>;
 
-    // fn get_name(&self) -> ShipName;
+    async fn wait_for_wind(&self) -> anyhow::Result<WindData>;
 
     fn get_cannon(&self) -> &impl Cannon;
 }
@@ -137,10 +158,10 @@ pub enum WindData {
 pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_request_queue(
         &self,
-        ship: ShipName,
+        ship: String,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>>;
 
-    async fn blow_wind(&self, ship: crate::ShipName, data: WindData) -> anyhow::Result<()>;
+    async fn blow_wind(&self, ship: String, data: WindData) -> anyhow::Result<()>;
 
-    async fn rat_action_send(&self, ship: ShipName, action: crate::Action) -> anyhow::Result<()>;
+    async fn rat_action_send(&self, ship: String, action: crate::ActionPlan) -> anyhow::Result<()>;
 }
