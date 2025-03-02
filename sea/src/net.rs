@@ -275,7 +275,6 @@ impl Sea {
                             error!("Could not send rejoin request to internal channel: {e}");
                         }
                         Ok(_) => {
-                            debug!("Rejoin sent somewhere");
                             to_delete.push(id.clone());
                         }
                     };
@@ -284,6 +283,8 @@ impl Sea {
                 for id in to_delete {
                     new_clients_without_response.remove(&id);
                 }
+
+                tokio::task::yield_now().await; // needed to yield to receiver, else the thread is sometimes blocking
             }
         });
 
@@ -291,194 +292,243 @@ impl Sea {
         let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
             loop {
-                debug!("waiting for rejoin packages");
-                let (addr, packet) = rejoin_req_rx.recv().await.unwrap();
-                debug!("got join packet {:?} from {:?}", packet, addr);
-                match packet.data {
-                    PacketKind::JoinRequest(client_tcp_port, ship_kind) => {
-                        let generated_id = rand::random::<ShipName>().abs();
-                        let (disconnect_tx, _disconnect_rx) =
-                            tokio::sync::broadcast::channel::<bool>(1);
+                let receive = rejoin_req_rx.recv().await;
+                if let Some((addr, packet)) = receive {
+                    match packet.data {
+                        PacketKind::JoinRequest(client_tcp_port, ship_kind) => {
+                            let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
+                            debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
+                            let generated_id = rand::random::<ShipName>().abs();
+                            let (disconnect_tx, _disconnect_rx) =
+                                tokio::sync::broadcast::channel::<bool>(1);
 
-                        // task to handle tcp connection to this client
-                        let curr_client_create_sender = clients_tx_inner.clone();
-                        let disc_broad = disconnect_tx.clone();
-                        tokio::spawn(async move {
-                            let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:0")
-                                .await
-                                .expect("could not bind tcp socket");
-
-                            let server_tcp_client_listen_port = tcp_listener
-                                .local_addr()
-                                .expect("could not get tcp listener adress")
-                                .port();
-                            let tcp_listener =
-                                tokio::net::TcpListener::from_std(tcp_listener.into_std().unwrap())
-                                    .unwrap();
-
-                            let ip = addr.split(':').next().unwrap();
-                            let mut gen_id_send_stream = tokio::net::TcpStream::connect(format!(
-                                "{}:{}",
-                                ip, client_tcp_port
-                            ))
-                            .await
-                            .expect("could not connect to client");
-
-                            let ip_parsed = Ipv4Addr::from_str(ip).expect("Strange ip format");
-
-                            let client_addr = crate::NetworkShipAddress {
-                                ip: ip_parsed.octets(),
-                                port: server_tcp_client_listen_port,
-                                ship: generated_id,
-                            };
-
-                            let welcome_packet = Packet {
-                                header: Header {
-                                    source: CONTROLLER_CLIENT_ID,
-                                    target: generated_id,
-                                },
-                                data: PacketKind::Welcome(client_addr.clone()),
-                            };
-
-                            let welcome_packet_bytes = bincode::serialize(&welcome_packet)
-                                .expect("could not serialize welcome packet");
-                            let mut welcome_packet = vec![PROTO_IDENTIFIER];
-                            welcome_packet.extend(welcome_packet_bytes);
-                            match gen_id_send_stream.write_all(&welcome_packet).await {
-                                Err(e) => {
-                                    error!("could not send welcome packet: {e}");
-                                    return;
-                                }
-                                Ok(_) => {}
-                            }
-
-                            let (tx, _) = tokio::sync::broadcast::channel::<Packet>(10);
-                            let tx_out = tx.clone();
-
-                            let (client_sender_tx, mut client_sender_rx) =
-                                tokio::sync::mpsc::channel::<Packet>(10);
-
-                            // task to handle all packet communication from and to each client
-                            let disc_broad_inner = disc_broad.clone();
+                            // task to handle tcp connection to this client
+                            let curr_client_create_sender = clients_tx_inner.clone();
+                            let disc_broad = disconnect_tx.clone();
                             tokio::spawn(async move {
-                                let accepted = tcp_listener.accept().await;
-                                match accepted {
-                                    Err(e) => {
-                                        error!("Could not accept Client connection: {e}");
-                                    }
-                                    Ok((stream, _info)) => {
-                                        let (mut rh, mut wh) = stream.into_split(); // TODO inefficient because into but don't know other way right now
+                                let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:0")
+                                    .await
+                                    .expect("could not bind tcp socket");
 
-                                        let write_disc = disc_broad_inner.clone();
-                                        // task for writing from coordinator to client
-                                        tokio::spawn(async move {
-                                            loop {
-                                                let mut disc_broad_inner_loop =
-                                                    write_disc.subscribe();
-                                                tokio::select! {
-                                                    _ = disc_broad_inner_loop.recv() => {
-                                                        return;
-                                                    }
-                                                    msg = client_sender_rx.recv() => {
-                                                        match msg {
-                                                            None => {
-                                                                return; // Channel closed
-                                                            }
-                                                            Some(msg) => {
-                                                                let packet = bincode::serialize(&msg).expect("could not serialize packet");
-                                                                 if let Err(e) = wh.write_all(&packet).await {
-                                                                     error!("could not respond tcp socket: {e}");
-                                                                 }
+                                let server_tcp_client_listen_port = tcp_listener
+                                    .local_addr()
+                                    .expect("could not get tcp listener adress")
+                                    .port();
+                                let tcp_listener = tokio::net::TcpListener::from_std(
+                                    tcp_listener.into_std().unwrap(),
+                                )
+                                .unwrap();
+
+                                let ip = addr.split(':').next().unwrap();
+                                let mut gen_id_send_stream = tokio::net::TcpStream::connect(
+                                    format!("{}:{}", ip, client_tcp_port),
+                                )
+                                .await
+                                .expect("could not connect to client");
+
+                                let ip_parsed = Ipv4Addr::from_str(ip).expect("Strange ip format");
+
+                                let client_addr = crate::NetworkShipAddress {
+                                    ip: ip_parsed.octets(),
+                                    port: server_tcp_client_listen_port,
+                                    ship: generated_id,
+                                };
+
+                                let welcome_packet = Packet {
+                                    header: Header {
+                                        source: CONTROLLER_CLIENT_ID,
+                                        target: generated_id,
+                                    },
+                                    data: PacketKind::Welcome(client_addr.clone()),
+                                };
+
+                                let welcome_packet_bytes = bincode::serialize(&welcome_packet)
+                                    .expect("could not serialize welcome packet");
+                                let packet_size = welcome_packet_bytes.len() as u32;
+                                let packet_size_buffer = packet_size.to_be_bytes();
+                                let mut buffer = vec![
+                                    PROTO_IDENTIFIER,
+                                    packet_size_buffer[0],
+                                    packet_size_buffer[1],
+                                    packet_size_buffer[2],
+                                    packet_size_buffer[3],
+                                ];
+                                buffer.extend_from_slice(&welcome_packet_bytes);
+                                match gen_id_send_stream.write_all(&buffer).await {
+                                    Err(e) => {
+                                        error!("could not send welcome packet: {e}");
+                                        return;
+                                    }
+                                    Ok(_) => {}
+                                }
+
+                                let (tx, _) = tokio::sync::broadcast::channel::<Packet>(10);
+                                let tx_out = tx.clone();
+
+                                let (client_sender_tx, mut client_sender_rx) =
+                                    tokio::sync::mpsc::channel::<Packet>(10);
+
+                                // task to handle all packet communication from and to each client
+                                let disc_broad_inner = disc_broad.clone();
+                                tokio::spawn(async move {
+                                    let accepted = tcp_listener.accept().await;
+                                    match accepted {
+                                        Err(e) => {
+                                            error!("Could not accept Client connection: {e}");
+                                        }
+                                        Ok((stream, _info)) => {
+                                            let (mut rh, mut wh) = stream.into_split(); // TODO inefficient because into but don't know other way right now
+
+                                            let write_disc = disc_broad_inner.clone();
+                                            // task for writing from coordinator to client
+                                            tokio::spawn(async move {
+                                                loop {
+                                                    let mut disc_broad_inner_loop =
+                                                        write_disc.subscribe();
+                                                    tokio::select! {
+                                                        _ = disc_broad_inner_loop.recv() => {
+                                                            return;
+                                                        }
+                                                        msg = client_sender_rx.recv() => {
+                                                            match msg {
+                                                                None => {
+                                                                    return; // Channel closed
+                                                                }
+                                                                Some(msg) => {
+                                                                    let packet = bincode::serialize(&msg).expect("could not serialize packet");
+                                                                    let packet_size = packet.len() as u32;
+                                                                    let packet_size_buffer = packet_size.to_be_bytes();
+                                                                    let mut buffer = vec![
+                                                                        PROTO_IDENTIFIER,
+                                                                        packet_size_buffer[0],
+                                                                        packet_size_buffer[1],
+                                                                        packet_size_buffer[2],
+                                                                        packet_size_buffer[3],
+                                                                    ];
+                                                                    buffer.extend_from_slice(&packet);
+                                                                     if let Err(e) = wh.write_all(&buffer).await {
+                                                                         error!("could not respond tcp socket: {e}");
+                                                                     }
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
-                                            }
-                                        });
+                                            });
 
-                                        // task for reading from open client socket
-                                        tokio::spawn(async move {
-                                            // This streams keeps open for the entirety of the client being connected to the coordinator
-                                            let mut buffer = Vec::with_capacity(1024);
-                                            let mut first = true;
+                                            // task for reading from open client socket
+                                            tokio::spawn(async move {
+                                                // This streams keeps open for the entirety of the client being connected to the coordinator
+                                                let mut buffer = Vec::with_capacity(1024);
+                                                let mut first = true;
 
-                                            let mut buf = [0; 1024];
-                                            let mut is_for_us = true;
-                                            let disc_broad_inner_loop = disc_broad_inner.clone();
-                                            loop {
+                                                let mut buf = [0; 1024];
+                                                let disc_broad_inner_loop =
+                                                    disc_broad_inner.clone();
                                                 let mut disc_broad_per_conn =
                                                     disc_broad_inner_loop.subscribe();
-                                                tokio::select! {
-                                                    _ = disc_broad_per_conn.recv() => {
-                                                        return;
+
+                                                // for each packet
+                                                loop {
+                                                    // collect a packet
+                                                    let mut msg_size = 0;
+                                                    loop {
+                                                        tokio::select! {
+                                                            _ = disc_broad_per_conn.recv() => {
+                                                                return;
+                                                            }
+                                                            read = rh.read(&mut buf) => {
+                                                                let n = match read {
+                                                                    Err(e) => {
+                                                                        error!(
+                                                                            "Could not read from TCP stream: {e}"
+                                                                        );
+                                                                        return;
+                                                                    }
+                                                                    Ok(n) => n,
+                                                                };
+
+                                                                if n == 0 {
+                                                                    return; // only happens when the tcp stream is closed
+                                                                    // buffer.clear();
+                                                                    // break;
+                                                                }
+
+                                                                if first {
+                                                                    if buf[0] != PROTO_IDENTIFIER {
+                                                                        continue;
+                                                                    } else {
+                                                                        // read 4 bytes into u32 for length of rest message
+                                                                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                                                                        msg_size = u32::from_be_bytes(msg_size_buf);
+                                                                        first = false;
+                                                                    }
+                                                                }
+
+
+                                                                buffer.extend_from_slice(&buf[..n]);
+
+                                                                if buffer.len() as u32 == msg_size + 5 {
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        // tokio::task::yield_now().await;
                                                     }
-                                                    read = rh.read(&mut buf) => {
-                                                        let n = match read {
+
+                                                    first = true;
+                                                    msg_size = 0;
+
+                                                    if buffer.is_empty() {
+                                                        buffer.clear();
+                                                        continue;
+                                                    }
+
+                                                    debug!("Received packet from client");
+                                                    let cleaned_buf = &buffer[5..];
+                                                    let packet: Packet =
+                                                        match bincode::deserialize(&cleaned_buf) {
                                                             Err(e) => {
                                                                 error!(
-                                                                    "Could not read from TCP stream: {e}"
-                                                                );
-                                                                0
+                                                                "Received package is broken: {e}"
+                                                            );
+                                                                continue;
                                                             }
-                                                            Ok(n) => n,
+                                                            Ok(packet) => packet,
                                                         };
-                                                        if first {
-                                                            first = false;
-                                                            if buf[0] != PROTO_IDENTIFIER {
-                                                                is_for_us = false;
-                                                                break;
-                                                            }
-                                                        }
-                                                        if n == 0 {
-                                                            break;
-                                                        }
 
-                                                        buffer.extend_from_slice(&buf[..n]);
+                                                    buffer.clear();
+
+                                                    match tx.send(packet) {
+                                                        Err(e) => {
+                                                            error!("could not send to internal channel: {e}");
+                                                        }
+                                                        _ => {}
                                                     }
                                                 }
-                                            }
-
-                                            if is_for_us {
-                                                return; // TODO is this just returning from the case in the select?
-                                            }
-                                            info!("Received stream");
-                                            let cleaned_buf = &buffer[1..];
-                                            let packet: Packet =
-                                                match bincode::deserialize(&cleaned_buf) {
-                                                    Err(e) => {
-                                                        error!("Received package is broken: {e}");
-                                                        return; // TODO Same as above
-                                                    }
-                                                    Ok(packet) => packet,
-                                                };
-
-                                            match tx.send(packet) {
-                                                Err(e) => {
-                                                    error!(
-                                                        "could not send to internal channel: {e}"
-                                                    );
-                                                }
-                                                _ => {}
-                                            }
-                                        });
+                                            });
+                                        }
                                     }
-                                }
-                            });
+                                });
 
-                            let ship_handle = ShipHandle {
-                                ship: generated_id,
-                                disconnect: disconnect_tx,
-                                recv: tx_out,
-                                send: client_sender_tx,
-                                name: Self::unpad_ship_kind_name(&ship_kind),
-                                addr_from_coord: client_addr,
-                            };
-                            curr_client_create_sender.send(ship_handle).unwrap();
-                        });
+                                let ship_handle = ShipHandle {
+                                    ship: generated_id,
+                                    disconnect: disconnect_tx,
+                                    recv: tx_out,
+                                    send: client_sender_tx,
+                                    name: ship_kind,
+                                    addr_from_coord: client_addr,
+                                };
+                                curr_client_create_sender.send(ship_handle).unwrap();
+                                debug!("ShipHandle created and sent");
+                            });
+                        }
+                        _ => {
+                            warn!("Received unexpected packet: {packet:?}");
+                        }
                     }
-                    _ => {
-                        warn!("Received unexpected packet: {packet:?}");
-                    }
+                } else {
+                    error!("Channel closed, could not receive rejoin requests in channel.");
                 }
             }
         });
@@ -542,14 +592,14 @@ impl Sea {
 }
 
 // TODO block_in_place blocks the current thread. So when the dissolve_network receivers are running on the same thread, is this a deadlock since we are blocking the thread?
-impl Drop for Sea {
-    fn drop(&mut self) {
-        tokio::task::block_in_place(move || {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(self.cleanup());
-        });
-    }
-}
+// impl Drop for Sea {
+//     fn drop(&mut self) {
+//         tokio::task::block_in_place(move || {
+//             let rt = tokio::runtime::Handle::current();
+//             rt.block_on(self.cleanup());
+//         });
+//     }
+// }
 
 // impl std::future::AsyncDrop for Sea {
 //     type Dropper<'a> = impl std::future::Future<Output = ()>;
@@ -642,24 +692,28 @@ impl Client {
         let (tx, _) = tokio::sync::broadcast::channel(100);
         let t = tx.clone();
         tokio::spawn(async move {
-            loop {
-                match tcp_listener.accept().await {
-                    Err(e) => {
-                        error!("failed to accept tcp connection: {e}");
-                    }
+            match tcp_listener.accept().await {
+                Err(e) => {
+                    error!("failed to accept tcp connection: {e}");
+                }
 
-                    Ok((mut stream, partner)) => {
-                        info!("Established connection with {}", partner);
-                        match stream.readable().await {
-                            Err(e) => {
-                                error!("TCP Listener stream not readable: {e}");
-                            }
-                            Ok(_) => {}
-                        };
+                Ok((mut stream, partner)) => {
+                    info!("Established connection with {}", partner);
+                    match stream.readable().await {
+                        Err(e) => {
+                            error!("TCP Listener stream not readable: {e}");
+                        }
+                        Ok(_) => {}
+                    };
 
+                    // receiving packets from coordinator
+                    loop {
+                        tokio::task::yield_now().await;
                         let mut buffer = Vec::with_capacity(1024);
                         let mut first = true;
+                        let mut msg_size = 0;
 
+                        // collect parts to complete a single packet
                         let mut is_for_us = true;
                         loop {
                             let mut buf = [0; 1024];
@@ -671,32 +725,30 @@ impl Client {
                                 Ok(n) => n,
                             };
 
-                            if first {
-                                first = false;
-                                if buf[0] != PROTO_IDENTIFIER {
-                                    is_for_us = false;
-                                    break;
-                                } else {
-                                    let nbuf = [0; 1024];
-                                    for i in 0..n {
-                                        buf[i] = nbuf[i + 1];
-                                    }
-                                    buf = nbuf;
-                                }
-                            }
                             if n == 0 {
                                 break;
                             }
 
-                            buffer.extend_from_slice(&buf[..n]);
+                            if first {
+                                if buf[0] != PROTO_IDENTIFIER {
+                                    is_for_us = false;
+                                    break;
+                                } else {
+                                    let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                                    msg_size = u32::from_be_bytes(msg_size_buf);
+                                    first = false;
+                                    buffer.extend_from_slice(&buf[5..n]);
+                                }
+                            } else {
+                                buffer.extend_from_slice(&buf[..n]);
+                            }
                         }
 
-                        if is_for_us {
+                        if !is_for_us || buffer.is_empty() || buffer.len() as u32 != msg_size {
                             continue;
                         }
-                        info!("Received stream");
-                        let cleaned_buf = &buffer[1..];
-                        let packet: Packet = match bincode::deserialize(&cleaned_buf) {
+
+                        let packet: Packet = match bincode::deserialize(&buffer) {
                             Err(e) => {
                                 error!("Received package is broken: {e}");
                                 continue;
@@ -710,6 +762,7 @@ impl Client {
                             }
                             _ => {}
                         };
+                        tokio::task::yield_now().await;
                     }
                 }
             }
@@ -760,6 +813,7 @@ impl Client {
                     match timeouted_disconnect_answer {
                         Ok(Ok(packet)) => {
                             if !matches!(packet.data, PacketKind::Acknowledge) {
+                                // TODO implement acking disconnect on sea side
                                 return Err(anyhow!("Received unexpected packet: {packet:?}"));
                             }
                         }
@@ -867,8 +921,6 @@ impl Client {
         let stream =
             std::net::TcpStream::connect(format!("{}:{}", partner.ip().to_string(), my_addr.port))?;
 
-        info!("Connected to coordinator!");
-
         let socket = socket2::Socket::from(stream);
         socket.set_keepalive(true)?;
 
@@ -881,59 +933,73 @@ impl Client {
         let stream: TcpStream = socket.into();
         let mut stream = tokio::net::TcpStream::from_std(stream).unwrap();
 
+        info!("Connected.");
+
         let coord_tcp_task = tokio::spawn(async move {
             let mut buffer = Vec::with_capacity(1024);
-            stream.readable().await.unwrap();
-            stream.writable().await.unwrap();
+            // stream.readable().await.unwrap();
+            // stream.writable().await.unwrap();
             let mut buf = [0; 1024];
+
+            let mut first = true;
+            let mut msg_size = 0;
 
             loop {
                 tokio::select! {
                     packet = coord_raw_rx.recv() => {
                         if let Some(packet) = packet {
                             let packet = bincode::serialize(&packet).expect("could not serialize packet");
-                            if let Err(e) = stream.write_all(&packet).await {
+                            let packet_size = packet.len() as u32;
+                            let packet_size_buffer = packet_size.to_be_bytes();
+                            let mut buffer = vec![PROTO_IDENTIFIER, packet_size_buffer[0], packet_size_buffer[1], packet_size_buffer[2], packet_size_buffer[3]];
+                            buffer.extend_from_slice(&packet);
+                            if let Err(e) = stream.write_all(&buffer).await {
                                 error!("could not send to tcp socket: {e}");
                             }
+                        } else {
+                            warn!("could not receive on coordinator send channel");
                         }
 
                     }
                     read = stream.read(&mut buf) => {
                         match read {
                             Ok(n) => {
-                                let mut first = true;
-                                let mut is_for_us = true;
+                                if n == 0 {
+                                    return; // TCP stream broken
+                                }
 
-                                loop {
-                                    if first {
+                                if first {
+                                    if buf[0] != PROTO_IDENTIFIER {
+                                        buf.fill(0);
+                                        buffer.clear();
+                                        continue;
+                                    } else {
+                                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                                        msg_size = u32::from_be_bytes(msg_size_buf);
                                         first = false;
-                                        if buf[0] != PROTO_IDENTIFIER {
-                                            is_for_us = false;
-                                            break;
-                                        }
+                                        buffer.extend_from_slice(&buf[5..n]);
                                     }
-                                    if n == 0 {
-                                        break;
-                                    }
-
+                                } else {
                                     buffer.extend_from_slice(&buf[..n]);
                                     buf.fill(0);
                                 }
 
-                                if !is_for_us {
+                                if buffer.is_empty() || buffer.len() as u32 != msg_size {
                                     continue;
                                 }
 
-                                info!("Received stream");
-                                let cleaned_buf = &buffer[1..];
-                                let packet: Packet = match bincode::deserialize(&cleaned_buf) {
+                                let packet: Packet = match bincode::deserialize(&buffer) {
                                     Err(e) => {
                                         error!("Received package is broken: {e}");
                                         continue;
                                     }
                                     Ok(packet) => packet,
                                 };
+                                buffer.clear();
+                                msg_size = 0;
+                                first = true;
                                 coord_packet_receiver_tx_in.send(packet).unwrap();
+                                // TODO this ^ line breaks when all rats are connected
                             }
                             Err(e) => {
                                 error!("could not read from tcp stream. Notifying channel. {e}");
@@ -945,6 +1011,21 @@ impl Client {
                 }
             }
         });
+
+        // Wait for coordinator to send us Ack to signal that every expected client is connected
+        let mut coord_sub = coord_packet_receiver_tx.subscribe();
+        loop {
+            match coord_sub.recv().await {
+                Err(e) => {
+                    error!("Could not receive updates from coordinator: {}", e);
+                }
+                Ok(packet) => {
+                    if matches!(packet.data, PacketKind::Acknowledge) {
+                        break;
+                    }
+                }
+            }
+        }
 
         self.coordinator_send = Some(coord_tx);
         self.coordinator_receive = Some(coord_packet_receiver_tx);
@@ -979,8 +1060,18 @@ impl Client {
             }
             Ok(Ok(stream)) => {
                 let mut stream = stream;
-                stream.writable().await?;
-                stream.write_all(&data).await?;
+                // stream.writable().await?;
+                let packet_size = data.len() as u32;
+                let packet_size_buffer = packet_size.to_be_bytes();
+                let mut buffer = vec![
+                    PROTO_IDENTIFIER,
+                    packet_size_buffer[0],
+                    packet_size_buffer[1],
+                    packet_size_buffer[2],
+                    packet_size_buffer[3],
+                ];
+                buffer.extend_from_slice(&data);
+                stream.write_all(&buffer).await?;
             }
         }
 
@@ -1019,40 +1110,50 @@ impl Client {
                             continue;
                         }
                     }
-                    stream.readable().await?;
+                    // stream.readable().await?;
                     let mut buffer = Vec::with_capacity(1024);
                     let mut first = true;
+                    let mut msg_size = 0;
 
-                    let mut is_for_us = true;
                     loop {
                         let mut buf = [0; 1024];
                         let n = match stream.read(&mut buf).await {
                             Err(e) => {
-                                error!("Could not read from TCP stream: {e}");
-                                0
+                                return Err(anyhow!("Could not read from TCP stream: {e}"));
                             }
                             Ok(n) => n,
                         };
 
-                        if first {
-                            first = false;
-                            if buf[0] != PROTO_IDENTIFIER {
-                                is_for_us = false;
-                                break;
-                            }
-                        }
                         if n == 0 {
-                            break;
+                            return Err(anyhow!(
+                                "Stream seems to be broken while expecting the data."
+                            ));
+                        }
+
+                        if first {
+                            if buf[0] != PROTO_IDENTIFIER {
+                                return Err(anyhow!("Other client sent unexpected start token."));
+                            } else {
+                                // read 4 bytes into u32 for length of rest message
+                                let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                                msg_size = u32::from_be_bytes(msg_size_buf);
+                                first = false;
+                            }
                         }
 
                         buffer.extend_from_slice(&buf[..n]);
+
+                        if buffer.len() as u32 == msg_size {
+                            break;
+                        }
                     }
 
-                    if is_for_us {
+                    if !buffer.is_empty() {
+                        buffer = buffer[5..buffer.len()].into(); // TODO for large data, maybe better to directly delete the indicators when checking them to avoid large copies
                         return Ok(buffer);
-                    } else {
-                        return Err(anyhow!("Received data is not for us"));
                     }
+
+                    return Err(anyhow!("Received data is not for us"));
                 }
             }
         }
@@ -1071,7 +1172,7 @@ impl Client {
     async fn send_packet_broadcast(packet: &Packet, udp_socket: &UdpSocket) -> anyhow::Result<()> {
         let raw = bincode::serialize(packet).expect("packet not serializable");
         let mut data = vec![PROTO_IDENTIFIER];
-        data.extend(raw);
+        data.extend_from_slice(&raw);
         for interface in Self::get_active_interfaces().iter() {
             for ip_network in &interface.ips {
                 if let IpAddr::V4(ipv4_addr) = ip_network.ip() {

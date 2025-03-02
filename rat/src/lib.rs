@@ -29,8 +29,6 @@ impl Rat {
             sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None).await
         })?;
 
-        info!("Rat {} initialized with ship", name);
-
         Ok(Self {
             name: name.to_string(),
             ship,

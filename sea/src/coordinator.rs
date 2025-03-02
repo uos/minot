@@ -1,18 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
-use log::error;
+use log::{debug, error};
 
 use crate::{
     net::{Packet, PacketKind},
-    NetworkShipAddress, ShipName,
+    NetworkShipAddress, ShipKind, ShipName,
 };
 
 pub struct ClientInfo {
-    id: ShipName,
-    network: NetworkShipAddress,
-    queue: tokio::sync::broadcast::Sender<String>,
-    sender: tokio::sync::mpsc::Sender<Packet>,
+    pub id: ShipName,
+    pub network: NetworkShipAddress,
+    pub queue: tokio::sync::broadcast::Sender<String>,
+    pub sender: tokio::sync::mpsc::Sender<Packet>,
 }
 
 pub struct CoordinatorImpl {
@@ -27,6 +27,7 @@ impl crate::Coordinator for CoordinatorImpl {
         &self,
         ship: String,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>> {
+        debug!("trying to get request queue");
         if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
             return Ok(client_info.queue.subscribe());
         }
@@ -72,6 +73,30 @@ impl crate::Coordinator for CoordinatorImpl {
 }
 
 impl CoordinatorImpl {
+    // wait until all given clients are connected
+    pub async fn ensure_clients_connected(
+        rats: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
+        clients: HashSet<String>,
+    ) {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(30)).await; // Do not spam, let the rats populate in peace... or maybe switch this to just "tokio::task::yield_current().await"
+            let mut all_there = true;
+            let rat = rats.read().await;
+            for client in clients.iter() {
+                if rat.get(client).is_none() {
+                    all_there = false;
+                    break;
+                }
+            }
+
+            if !all_there {
+                continue;
+            }
+
+            return;
+        }
+    }
+
     async fn convert_action(
         &self,
         human_action: &crate::ActionPlan,
@@ -84,7 +109,7 @@ impl CoordinatorImpl {
                     let rat = self.rat_qs.read().await;
                     let client_info = rat
                         .get(client_name)
-                        .ok_or_else(|| anyhow!("Unknown client."))?;
+                        .ok_or_else(|| anyhow!("Unknown client: {}", client_name))?;
                     targets.push(client_info.network.clone());
                 }
 
@@ -101,6 +126,7 @@ impl CoordinatorImpl {
 
         Ok(action)
     }
+
     pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
         let sea = crate::net::Sea::init(external_ip).await;
 
@@ -115,7 +141,7 @@ impl CoordinatorImpl {
                         error!("Coordinator missed clients: {e}");
                     }
                     Ok(client) => {
-                        let (rat_queue_tx, _rat_queue_rx) = tokio::sync::broadcast::channel(10);
+                        let (rat_queue_tx, _) = tokio::sync::broadcast::channel(10);
                         let client_info = ClientInfo {
                             id: client.ship,
                             queue: rat_queue_tx.clone(),
@@ -129,16 +155,30 @@ impl CoordinatorImpl {
                                 unimplemented!("Coordinator can not connect to other coordinators.")
                             }
                         };
-                        inner_client_loop_rat_queues
-                            .write()
-                            .await
-                            .insert(name, client_info);
+
+                        {
+                            inner_client_loop_rat_queues
+                                .write()
+                                .await
+                                .insert(name, client_info);
+                        }
 
                         let mut receiver = client.recv.subscribe();
                         tokio::spawn(async move {
                             while let Ok(msg) = receiver.recv().await {
-                                if let PacketKind::VariableTaskRequest(variable_name) = msg.data {
-                                    rat_queue_tx.send(variable_name).unwrap();
+                                match msg.data {
+                                    PacketKind::VariableTaskRequest(variable_name) => {
+                                        match rat_queue_tx.send(variable_name) {
+                                            Err(e) => {
+                                                error!("Could not send to rat queue: {}", e);
+                                            }
+                                            Ok(_) => {}
+                                        }
+                                    }
+                                    PacketKind::Heartbeat => {
+                                        // debug!("Got heartbeat.");
+                                    }
+                                    _ => {}
                                 }
                             }
                         });
