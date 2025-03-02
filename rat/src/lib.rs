@@ -153,25 +153,22 @@ where
 }
 
 // C FFI
+#[cfg(any(
+    not(target_arch = "x86"),
+    not(target_arch = "x86_64"),
+    target_vendor = "apple"
+))]
+type CFfiString = i8;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(any(
+    not(target_arch = "x86"),
+    not(target_arch = "x86_64"),
+    target_vendor = "apple"
+)))]
+type CFfiString = u8;
+
 #[no_mangle]
-pub extern "C" fn rat_init(node_name: *const i8) -> i32 {
-    let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
-    let node_name = node_name.to_str().unwrap();
-
-    match init(node_name, None) {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to init: {}", e);
-            -1
-        }
-    }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[no_mangle]
-pub extern "C" fn rat_init(node_name: *const u8) -> i32 {
+pub extern "C" fn rat_init(node_name: *const CFfiString) -> i32 {
     let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
     let node_name = node_name.to_str().unwrap();
 
@@ -195,11 +192,10 @@ pub extern "C" fn rat_deinit() -> i32 {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_f32(
-    variable_name: *const i8,
+    variable_name: *const CFfiString,
     data: *mut f32,
     rows: usize,
     cols: usize,
@@ -219,35 +215,10 @@ pub extern "C" fn rat_bacon_f32(
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-#[no_mangle]
-/// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_f32(
-    variable_name: *const u8,
-    data: *mut f32,
-    rows: usize,
-    cols: usize,
-) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
-
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
-
-    match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to bacon: {}", e);
-            -1
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_f64(
-    variable_name: *const i8,
+    variable_name: *const CFfiString,
     data: *mut f64,
     rows: usize,
     cols: usize,
@@ -267,35 +238,10 @@ pub extern "C" fn rat_bacon_f64(
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-#[no_mangle]
-/// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_f64(
-    variable_name: *const u8,
-    data: *mut f64,
-    rows: usize,
-    cols: usize,
-) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
-
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
-
-    match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to bacon: {}", e);
-            -1
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_i32(
-    variable_name: *const i8,
+    variable_name: *const CFfiString,
     data: *mut i32,
     rows: usize,
     cols: usize,
@@ -315,59 +261,10 @@ pub extern "C" fn rat_bacon_i32(
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-#[no_mangle]
-/// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_i32(
-    variable_name: *const u8,
-    data: *mut i32,
-    rows: usize,
-    cols: usize,
-) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
-
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
-
-    match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to bacon: {}", e);
-            -1
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_u8(
-    variable_name: *const i8,
-    data: *mut u8,
-    rows: usize,
-    cols: usize,
-) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
-
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
-
-    match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to bacon: {}", e);
-            -1
-        }
-    }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[no_mangle]
-/// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_u8(
-    variable_name: *const u8,
+    variable_name: *const CFfiString,
     data: *mut u8,
     rows: usize,
     cols: usize,
