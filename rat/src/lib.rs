@@ -175,7 +175,7 @@ pub extern "C" fn rat_init(node_name: *const u8) -> i32 {
     let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
     let node_name = node_name.to_str().unwrap();
 
-    match init(node_name) {
+    match init(node_name, None) {
         Ok(_) => 0,
         Err(e) => {
             error!("Failed to init: {}", e);
