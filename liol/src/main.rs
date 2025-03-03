@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use log::{debug, error, info};
 use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
-use sea::{coordinator::CoordinatorImpl, ImuMsg};
+use sea::{
+    coordinator::{self, CoordinatorImpl},
+    ImuMsg,
+};
 use tokio::sync::{broadcast, oneshot};
 mod network;
 
@@ -55,7 +58,6 @@ enum CoordinatorTask {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    // TODO config logic
 
     let mut pairs = HashMap::new();
     pairs.insert(
@@ -82,30 +84,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         clients.insert(p2.ship.clone());
     }
 
-    // let sea = sea::net::Sea::init(None).await;
-
-    // TODO collect all available rats from network.
-
-    // TODO collect all winds.
-
     // TODO parse config/ratlang and see if all mentioned rats are registered
     // err and exit if not.
     // On exit: disconnect all members of the network.
     // only use the rats that are mentioned. filter out the rest.
     // Winds are not mapped to rats, so they won't be filtered.
 
-    // TODO variables come dynamically from the network. We prepare them from the
-    // rat config and ignore the rest. The known ones are parsed to pairs.
-
-    // TODO a function must build this one and check that the names are the same
-    // if a variable is asking what to do but it is not part of the structure,
-    // answer with a "keep".
-
     let pairs = std::sync::Arc::new(pairs);
 
-    // TODO polulate Network by rats and winds
-
-    // TODO populate rats variables completely so we can listen on all separately
     let network = Network::new();
 
     let (wind_tx, mut wind_rx) = tokio::sync::mpsc::unbounded_channel::<sea::WindData>();
@@ -118,11 +104,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // unlock clients to send us stuff when all our expected clients are connected
         let total_clients_check_rats = std::sync::Arc::clone(&coordinator.rat_qs);
+        let (clients_collected_tx, mut clients_collected_rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
             debug!("waiting for all clients to be connected");
             CoordinatorImpl::ensure_clients_connected(total_clients_check_rats.clone(), clients)
                 .await;
             debug!("all clients connected, sending ack to clients.");
+            clients_collected_tx.send(()).await.unwrap();
             let clients = total_clients_check_rats.read().await;
             let ack = sea::net::Packet {
                 header: sea::net::Header::default(),
@@ -133,9 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(e) => {
                         error!("Could not send ack to unlock client: {e}");
                     }
-                    Ok(_) => {
-                        debug!("sent ack to unlock client");
-                    }
+                    Ok(_) => {}
                 }
             }
         });
@@ -172,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     }
-                    sea::ShipKind::Wind(name) => {
+                    sea::ShipKind::Wind(_name) => {
                         // TODO WIND... needs to send to every wind that is added here via name, so we need a channel that awaits all expected winds (or currently connected but then its race condition) and this needs to be managed here. in the main code the wind can only be blown after all are connected
                         while let Some(data) = wind_rx.recv().await {
                             for wind in network.winds.iter() {
@@ -195,18 +181,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
+        // wait here until all clients are connected. TODO to select that reacts on ctrl-c and exits
+        clients_collected_rx.recv().await;
+
+        // save the broadcast channels for all clients here so they are subscribed before reactions to variables come in
+        let clients = {
+            let clients = coordinator.rat_qs.read().await;
+            clients
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut queues = HashMap::new();
+
+        for client_name in clients.iter() {
+            let q = coordinator
+                .rat_action_request_queue(client_name.clone())
+                .await;
+            match q {
+                Err(e) => {
+                    error!("Could not get client queue: {e}");
+                }
+                Ok(queue_receiver) => {
+                    queues.insert(client_name.clone(), queue_receiver);
+                }
+            }
+        }
+
+        debug!("waiting for coordinate_receiver channel");
         while let Some(task) = coord_rx.recv().await {
+            debug!("received coordinator task {:?}", task);
             match task {
                 CoordinatorTask::GetVariableChannel { ship, answer } => {
-                    let queue = match coordinator.rat_action_request_queue(ship).await {
-                        Err(e) => {
-                            error!("Error getting rat queue: {}", e);
-                            std::process::exit(1);
-                        }
-                        Ok(queue) => queue,
-                    };
+                    let queue = queues
+                        .get(&ship)
+                        .expect("Unknown client, should be connected before sending here.");
 
-                    answer.send(queue).unwrap();
+                    answer.send(queue.resubscribe()).unwrap();
                 }
                 CoordinatorTask::SendWind { ship_name, data } => {
                     match coordinator.blow_wind(ship_name.clone(), data).await {
@@ -228,6 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        debug!("coord_rx closed");
     });
 
     // Wind Sender Task
@@ -248,8 +260,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("Ctrl-C received. Shutting down...");
+            std::process::exit(0); // all dangling tokio processes etc will be killed by the os
+            // TODO ignores dissolving network currently
         }
     }
 
-    Ok(())
+    // Ok(())
 }

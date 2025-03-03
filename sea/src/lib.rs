@@ -75,7 +75,7 @@ pub fn get_strategy(
         None => ActionPlan::default(),
         Some((left_var, right_var)) => match (left_var.ship.as_str(), right_var.ship.as_str()) {
             (ship_l, ship_r) if ship_l == rat_ship && ship_r == rat_ship => {
-                panic!("should have been checked before");
+                panic!("Rule with 2 of the same ships. Should have been checked before");
             }
             (ship, _) if ship == rat_ship => match left_var.strategy.as_ref() {
                 Some(action) => action.clone(),
@@ -93,11 +93,7 @@ pub fn get_strategy(
 #[async_trait::async_trait]
 pub trait Ship: Send + Sync + 'static {
     /// Indicate a trigger point and ask the link pilot what to do with the variable.
-    async fn ask_for_action(
-        &self,
-        kind: crate::ShipKind,
-        variable_name: &str,
-    ) -> anyhow::Result<Action>;
+    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<Action>;
 
     async fn wait_for_action(&self) -> anyhow::Result<crate::Action>;
 

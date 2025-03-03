@@ -292,6 +292,7 @@ impl Sea {
         let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
             let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+            // let rat_lock_unlock = Arc::clone(&rat_lock); // currently we only allow unique names, so no unlock needed.
             loop {
                 let receive = rejoin_req_rx.recv().await;
                 if let Some((addr, packet)) = receive {
@@ -302,7 +303,7 @@ impl Sea {
                             {
                                 let mut lock = rat_lock.lock().unwrap();
                                 if let Some(_) = lock.get(&ship_kind) {
-                                    debug!("ship kind is in progress of being added, skipping");
+                                    debug!("requested client already exists or is in the progress of joining the network");
                                     continue;
                                 }
                                 lock.insert(ship_kind.clone());
@@ -450,7 +451,7 @@ impl Sea {
                                                                 let n = match read {
                                                                     Err(e) => {
                                                                         error!(
-                                                                            "Could not read from TCP stream: {e}"
+                                                                            "Could not read from TCP stream with read half of coordinator: {e}"
                                                                         );
                                                                         return;
                                                                     }
@@ -493,7 +494,6 @@ impl Sea {
                                                         continue;
                                                     }
 
-                                                    debug!("Received packet from client");
                                                     let cleaned_buf = &buffer[5..];
                                                     let packet: Packet =
                                                         match bincode::deserialize(&cleaned_buf) {
@@ -601,14 +601,14 @@ impl Sea {
 }
 
 // TODO block_in_place blocks the current thread. So when the dissolve_network receivers are running on the same thread, is this a deadlock since we are blocking the thread?
-// impl Drop for Sea {
-//     fn drop(&mut self) {
-//         tokio::task::block_in_place(move || {
-//             let rt = tokio::runtime::Handle::current();
-//             rt.block_on(self.cleanup());
-//         });
-//     }
-// }
+impl Drop for Sea {
+    fn drop(&mut self) {
+        tokio::task::block_in_place(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(self.cleanup());
+        });
+    }
+}
 
 // impl std::future::AsyncDrop for Sea {
 //     type Dropper<'a> = impl std::future::Future<Output = ()>;
@@ -700,78 +700,97 @@ impl Client {
 
         let (tx, _) = tokio::sync::broadcast::channel(100);
         let t = tx.clone();
+        // Task for initial connections from the coordinator for the invitation via RejoinRequest
         tokio::spawn(async move {
-            match tcp_listener.accept().await {
-                Err(e) => {
-                    error!("failed to accept tcp connection: {e}");
-                }
+            loop {
+                // TODO this socket should just be used for registering stuff but heartbeat stops when this is reset by peer or now reset to wait for new con? also, I thought there is just one tcp socket for coordinator exchange, so how do we send to this socket? which socket does the client use for sending?
+                warn!("wait for new conn");
+                match tcp_listener.accept().await {
+                    Err(e) => {
+                        error!("failed to accept tcp connection: {e}");
+                    }
 
-                Ok((mut stream, partner)) => {
-                    info!("Established connection with {}", partner);
-                    match stream.readable().await {
-                        Err(e) => {
-                            error!("TCP Listener stream not readable: {e}");
-                        }
-                        Ok(_) => {}
-                    };
+                    Ok((mut stream, partner)) => {
+                        info!("Established connection with {}", partner);
+                        match stream.readable().await {
+                            Err(e) => {
+                                error!("TCP Listener stream not readable: {e}");
+                            }
+                            Ok(_) => {}
+                        };
 
-                    // receiving packets from coordinator
-                    loop {
-                        tokio::task::yield_now().await;
-                        let mut buffer = Vec::with_capacity(1024);
-                        let mut first = true;
-                        let mut msg_size = 0;
-
-                        // collect parts to complete a single packet
-                        let mut is_for_us = true;
+                        // receiving packets from coordinator
                         loop {
-                            let mut buf = [0; 1024];
-                            let n = match stream.read(&mut buf).await {
-                                Err(e) => {
-                                    error!("Could not read from TCP stream: {e}");
-                                    0
-                                }
-                                Ok(n) => n,
-                            };
+                            tokio::task::yield_now().await;
+                            let mut buffer = Vec::with_capacity(1024);
+                            let mut first = true;
+                            let mut msg_size = 0;
+                            let mut reset = false;
 
-                            if n == 0 {
+                            // collect parts to complete a single packet
+                            let mut is_for_us = true;
+                            loop {
+                                let mut buf = [0; 1024];
+                                let n = match stream.read(&mut buf).await {
+                                    Err(e) => {
+                                        match e.kind() {
+                                            std::io::ErrorKind::ConnectionReset => {
+                                                reset = true;
+                                                break;
+                                            }
+                                            _ => {
+                                                error!("Could not read from TCP stream in client connection to coordinator: {e}");
+                                            }
+                                        }
+                                        0
+                                    }
+                                    Ok(n) => n,
+                                };
+
+                                if n == 0 {
+                                    break;
+                                }
+
+                                if first {
+                                    if buf[0] != PROTO_IDENTIFIER {
+                                        is_for_us = false;
+                                        break;
+                                    } else {
+                                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                                        msg_size = u32::from_be_bytes(msg_size_buf);
+                                        first = false;
+                                        buffer.extend_from_slice(&buf[5..n]);
+                                    }
+                                } else {
+                                    buffer.extend_from_slice(&buf[..n]);
+                                }
+                            }
+
+                            if reset {
+                                warn!("resetting");
                                 break;
                             }
 
-                            if first {
-                                if buf[0] != PROTO_IDENTIFIER {
-                                    is_for_us = false;
-                                    break;
-                                } else {
-                                    let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                                    msg_size = u32::from_be_bytes(msg_size_buf);
-                                    first = false;
-                                    buffer.extend_from_slice(&buf[5..n]);
-                                }
-                            } else {
-                                buffer.extend_from_slice(&buf[..n]);
-                            }
-                        }
-
-                        if !is_for_us || buffer.is_empty() || buffer.len() as u32 != msg_size {
-                            continue;
-                        }
-
-                        let packet: Packet = match bincode::deserialize(&buffer) {
-                            Err(e) => {
-                                error!("Received package is broken: {e}");
+                            if !is_for_us || buffer.is_empty() || buffer.len() as u32 != msg_size {
                                 continue;
                             }
-                            Ok(packet) => packet,
-                        };
 
-                        match t.send((packet, partner)) {
-                            Err(e) => {
-                                error!("TCP Listener could not send to internal channel: {e}");
-                            }
-                            _ => {}
-                        };
-                        tokio::task::yield_now().await;
+                            let packet: Packet = match bincode::deserialize(&buffer) {
+                                Err(e) => {
+                                    error!("Received package is broken: {e}");
+                                    continue;
+                                }
+                                Ok(packet) => packet,
+                            };
+
+                            match t.send((packet, partner)) {
+                                Err(e) => {
+                                    error!("TCP Listener could not send to internal channel: {e}");
+                                }
+                                _ => {}
+                            };
+                            tokio::task::yield_now().await;
+                        }
                     }
                 }
             }
@@ -903,7 +922,9 @@ impl Client {
                                 Err(e) => {
                                     error!("could not forward coordinator packet: {e}");
                                 }
-                                Ok(_) => {}
+                                Ok(_) => {
+                                    debug!("send packet");
+                                }
                             }
                         }
                     }
@@ -957,6 +978,7 @@ impl Client {
                 tokio::select! {
                     packet = coord_raw_rx.recv() => {
                         if let Some(packet) = packet {
+                            let orig_packet = packet.clone(); // TODO rm after dbg
                             let packet = bincode::serialize(&packet).expect("could not serialize packet");
                             let packet_size = packet.len() as u32;
                             let packet_size_buffer = packet_size.to_be_bytes();
@@ -965,6 +987,8 @@ impl Client {
                             if let Err(e) = stream.write_all(&buffer).await {
                                 error!("could not send to tcp socket: {e}");
                             }
+                            // TODO when both rats send the variable request, only one seems to reach the coordinator. Why? maybe wrong socket when both come at same time?
+                            debug!("written packet to tcp stream {:?}", orig_packet);
                         } else {
                             warn!("could not receive on coordinator send channel");
                         }
@@ -1007,11 +1031,17 @@ impl Client {
                                 buffer.clear();
                                 msg_size = 0;
                                 first = true;
-                                coord_packet_receiver_tx_in.send(packet).unwrap();
-                                // TODO this ^ line breaks when all rats are connected
+                                dbg!("received packet: {:?}", &packet);
+                                match coord_packet_receiver_tx_in.send(packet) {
+                                    Err(e) => {
+                                        error!("Could not send to coordinator receiver: {e}");
+                                        continue;
+                                    }
+                                    Ok(_) => {}
+                                }
                             }
                             Err(e) => {
-                                error!("could not read from tcp stream. Notifying channel. {e}");
+                                error!("could not read from tcp stream. Triggering disconnect. Err: {e}");
                                 disconnect_tx.send(()).unwrap();
                                 return; // stopping task here
                             }
@@ -1050,41 +1080,53 @@ impl Client {
         port: u16,
         data: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let initial_connection_timeout = std::time::Duration::from_secs(1);
-        // try for max 1 second to connect to the other client
-        let stream = tokio::time::timeout(
-            initial_connection_timeout.clone(),
-            tokio::net::TcpStream::connect(format!("{}:{}", address.to_string(), port)),
-        )
-        .await;
+        loop {
+            let initial_connection_timeout = std::time::Duration::from_secs(1);
+            // try for max 1 second to connect to the other client
+            let addr = format!("{}:{}", address.to_string(), port);
+            let stream = tokio::time::timeout(
+                initial_connection_timeout.clone(),
+                tokio::net::TcpStream::connect(&addr),
+            )
+            .await;
 
-        match stream {
-            Err(_) => {
-                return Err(anyhow!(
-                    "Could not connect to other client within {initial_connection_timeout:?}"
-                ));
-            }
-            Ok(Err(e)) => {
-                return Err(anyhow!("Could not connect to other client: {e}"));
-            }
-            Ok(Ok(stream)) => {
-                let mut stream = stream;
-                // stream.writable().await?;
-                let packet_size = data.len() as u32;
-                let packet_size_buffer = packet_size.to_be_bytes();
-                let mut buffer = vec![
-                    PROTO_IDENTIFIER,
-                    packet_size_buffer[0],
-                    packet_size_buffer[1],
-                    packet_size_buffer[2],
-                    packet_size_buffer[3],
-                ];
-                buffer.extend_from_slice(&data);
-                stream.write_all(&buffer).await?;
+            // debug!("stream connection started to {}", addr);
+
+            match stream {
+                Err(_) => {
+                    return Err(anyhow!(
+                        "Could not connect to other client within {initial_connection_timeout:?}"
+                    ));
+                }
+                Ok(Err(e)) => match e.kind() {
+                    std::io::ErrorKind::ConnectionRefused => {
+                        // debug!("connection not yet ready, wait a bit");
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                    _ => {
+                        return Err(anyhow!("Could not connect to other client: {e}"));
+                    }
+                },
+                Ok(Ok(stream)) => {
+                    debug!("stream initialized");
+                    let mut stream = stream;
+                    stream.writable().await?;
+                    let packet_size = data.len() as u32;
+                    let packet_size_buffer = packet_size.to_be_bytes();
+                    let mut buffer = vec![
+                        PROTO_IDENTIFIER,
+                        packet_size_buffer[0],
+                        packet_size_buffer[1],
+                        packet_size_buffer[2],
+                        packet_size_buffer[3],
+                    ];
+                    buffer.extend_from_slice(&data);
+                    stream.write_all(&buffer).await?;
+                    return Ok(());
+                }
             }
         }
-
-        Ok(())
     }
 
     pub async fn recv_raw_from_other_client(
@@ -1092,6 +1134,7 @@ impl Client {
         sender: Option<&crate::NetworkShipAddress>,
     ) -> anyhow::Result<Vec<u8>> {
         loop {
+            debug!("started receiving from {:?}", sender);
             let stream = tokio::time::timeout(
                 CLIENT_TO_CLIENT_TIMEOUT,
                 self.other_client_listener.accept(),
@@ -1104,9 +1147,16 @@ impl Client {
                         "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
                     ));
                 }
-                Ok(Err(e)) => {
-                    return Err(anyhow!("Could not connect to other client: {e}"));
-                }
+                Ok(Err(e)) => match e.kind() {
+                    std::io::ErrorKind::ConnectionRefused => {
+                        debug!("connection not yet ready, wait a bit");
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                    _ => {
+                        return Err(anyhow!("Could not connect to other client: {e}"));
+                    }
+                },
                 Ok(Ok((mut stream, socket_sender))) => {
                     if let Some(expected_sender) = sender {
                         let expected_ip = Ipv4Addr::new(
@@ -1119,7 +1169,7 @@ impl Client {
                             continue;
                         }
                     }
-                    // stream.readable().await?;
+                    stream.readable().await?;
                     let mut buffer = Vec::with_capacity(1024);
                     let mut first = true;
                     let mut msg_size = 0;
@@ -1128,7 +1178,7 @@ impl Client {
                         let mut buf = [0; 1024];
                         let n = match stream.read(&mut buf).await {
                             Err(e) => {
-                                return Err(anyhow!("Could not read from TCP stream: {e}"));
+                                return Err(anyhow!("Could not read from TCP stream when receiving from other client: {e}"));
                             }
                             Ok(n) => n,
                         };

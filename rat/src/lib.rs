@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use log::{error, info};
+use log::{debug, error, info};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use sea::{ship::NetworkShipImpl, *};
@@ -36,9 +36,8 @@ impl Rat {
     }
 
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<Action> {
-        self.ship
-            .ask_for_action(ShipKind::Rat(self.name.clone()), variable_name)
-            .await
+        debug!("asking for action");
+        self.ship.ask_for_action(variable_name).await
     }
 }
 
@@ -92,6 +91,7 @@ pub fn bacon<T>(variable_name: &str, data: &mut T) -> anyhow::Result<()>
 where
     T: sea::net::SeaSendableBuffer,
 {
+    debug!("start bacon");
     let rat_arc = RAT
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
@@ -105,6 +105,7 @@ where
         "Async Runtime not initialized. Call init() before calling bacon()."
     ))?;
 
+    debug!("start on block_on");
     rt.block_on(async move {
         match rat.ask_for_action(variable_name).await {
             Ok(sea::Action::Sail) => {
@@ -151,19 +152,22 @@ where
 }
 
 // C FFI
-#[cfg(any(
-    not(target_arch = "x86"),
-    not(target_arch = "x86_64"),
-    target_vendor = "apple"
-))]
+#[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
 type CFfiString = i8;
 
-#[cfg(not(any(
+#[cfg(all(
     not(target_arch = "x86"),
     not(target_arch = "x86_64"),
-    target_vendor = "apple"
-)))]
+    not(target_vendor = "apple")
+))]
 type CFfiString = u8;
+
+#[cfg(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    all(target_vendor = "apple", not(target_arch = "aarch64"))
+))]
+type CFfiString = i8;
 
 #[no_mangle]
 pub extern "C" fn rat_init(node_name: *const CFfiString) -> i32 {

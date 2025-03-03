@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use anyhow::anyhow;
-use log::{error, info};
+use log::{debug, error, info};
 
 use crate::{
     net::{Client, PacketKind, SeaSendableBuffer},
@@ -48,23 +48,51 @@ impl crate::Cannon for NetworkShipImpl {
 
 #[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
-    async fn ask_for_action(
-        &self,
-        kind: crate::ShipKind,
-        variable_name: &str,
-    ) -> anyhow::Result<crate::Action> {
+    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<crate::Action> {
         let client = self.client.lock().await;
+        debug!("asking for action, locked client");
         if let Some(sender) = client.coordinator_send.as_ref() {
             let action_request = crate::net::Packet {
                 header: crate::net::Header::default(),
                 data: PacketKind::VariableTaskRequest(variable_name.to_string()),
             };
+
+            let mut sub = client
+                .coordinator_receive
+                .as_ref()
+                .map(|sub| sub.subscribe())
+                .ok_or(anyhow!(
+                    "Sender to Coordinator is available but Receiver is not."
+                ))?;
+
+            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            tokio::spawn(async move {
+                loop {
+                    match sub.recv().await {
+                        Ok(packet) => {
+                            if let PacketKind::RatAction(action) = packet.data {
+                                tx.send(Ok(action)).await.unwrap();
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            tx.send(Err(anyhow!(
+                            "Could not receive answer for variable question from coordinator: {e}"
+                        )))
+                            .await
+                            .unwrap();
+                        }
+                    }
+                }
+            });
+            debug!("sending request");
             sender.send(action_request).await?;
-            return self.wait_for_action().await;
+            debug!("awaiting answer");
+            return rx.recv().await.unwrap();
         } else {
+            drop(client);
             tokio::task::yield_now().await;
-            // tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            return self.ask_for_action(kind, &variable_name).await;
+            return self.ask_for_action(&variable_name).await;
         }
     }
 
