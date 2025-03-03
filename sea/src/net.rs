@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, TcpStream},
     str::FromStr,
 };
@@ -291,6 +291,7 @@ impl Sea {
         // task to wait for each new join request
         let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
+            let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
             loop {
                 let receive = rejoin_req_rx.recv().await;
                 if let Some((addr, packet)) = receive {
@@ -298,6 +299,14 @@ impl Sea {
                         PacketKind::JoinRequest(client_tcp_port, ship_kind) => {
                             let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
                             debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
+                            {
+                                let mut lock = rat_lock.lock().unwrap();
+                                if let Some(_) = lock.get(&ship_kind) {
+                                    debug!("ship kind is in progress of being added, skipping");
+                                    continue;
+                                }
+                                lock.insert(ship_kind.clone());
+                            }
                             let generated_id = rand::random::<ShipName>().abs();
                             let (disconnect_tx, _disconnect_rx) =
                                 tokio::sync::broadcast::channel::<bool>(1);

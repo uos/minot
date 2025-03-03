@@ -11,7 +11,7 @@ use net::SeaSendableBuffer;
 use ros_pointcloud2::PointCloud2Msg;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Hash, Eq, PartialOrd, Ord)]
 pub enum ShipKind {
     Rat(String),
     Wind(String),

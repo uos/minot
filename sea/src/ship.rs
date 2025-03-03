@@ -62,7 +62,8 @@ impl crate::Ship for NetworkShipImpl {
             sender.send(action_request).await?;
             return self.wait_for_action().await;
         } else {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
+            // tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             return self.ask_for_action(kind, &variable_name).await;
         }
     }
