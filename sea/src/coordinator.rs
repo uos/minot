@@ -165,7 +165,7 @@ impl CoordinatorImpl {
 
                         let mut receiver = client.recv.subscribe();
                         tokio::spawn(async move {
-                            while let Ok(msg) = receiver.recv().await {
+                            while let Ok((msg, _)) = receiver.recv().await {
                                 match msg.data {
                                     PacketKind::VariableTaskRequest(variable_name) => {
                                         match rat_queue_tx.send(variable_name) {
@@ -176,7 +176,7 @@ impl CoordinatorImpl {
                                         }
                                     }
                                     PacketKind::Heartbeat => {
-                                        // debug!("Got heartbeat.");
+                                        debug!("Got heartbeat.");
                                     }
                                     _ => {}
                                 }

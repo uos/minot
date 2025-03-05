@@ -4,7 +4,8 @@ use anyhow::anyhow;
 use log::{debug, error, info};
 
 use crate::{
-    net::{Client, PacketKind, SeaSendableBuffer},
+    client::Client,
+    net::{PacketKind, SeaSendableBuffer},
     ShipKind,
 };
 
@@ -51,7 +52,8 @@ impl crate::Ship for NetworkShipImpl {
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<crate::Action> {
         let client = self.client.lock().await;
         debug!("asking for action, locked client");
-        if let Some(sender) = client.coordinator_send.as_ref() {
+        let coord_send = client.coordinator_send.read().unwrap().clone();
+        if let Some(sender) = coord_send {
             let action_request = crate::net::Packet {
                 header: crate::net::Header::default(),
                 data: PacketKind::VariableTaskRequest(variable_name.to_string()),
@@ -59,7 +61,10 @@ impl crate::Ship for NetworkShipImpl {
 
             let mut sub = client
                 .coordinator_receive
+                .read()
+                .unwrap()
                 .as_ref()
+                .cloned()
                 .map(|sub| sub.subscribe())
                 .ok_or(anyhow!(
                     "Sender to Coordinator is available but Receiver is not."
@@ -69,7 +74,7 @@ impl crate::Ship for NetworkShipImpl {
             tokio::spawn(async move {
                 loop {
                     match sub.recv().await {
-                        Ok(packet) => {
+                        Ok((packet, _)) => {
                             if let PacketKind::RatAction(action) = packet.data {
                                 tx.send(Ok(action)).await.unwrap();
                                 return;
@@ -77,10 +82,10 @@ impl crate::Ship for NetworkShipImpl {
                         }
                         Err(e) => {
                             tx.send(Err(anyhow!(
-                            "Could not receive answer for variable question from coordinator: {e}"
-                        )))
-                            .await
-                            .unwrap();
+                                        "Could not receive answer for variable question from coordinator: {e}"
+                                    )))
+                                        .await
+                                        .unwrap();
                         }
                     }
                 }
@@ -102,9 +107,10 @@ impl crate::Ship for NetworkShipImpl {
 
     async fn wait_for_action(&self) -> anyhow::Result<crate::Action> {
         let client = self.client.lock().await;
-        if let Some(receiver) = client.coordinator_receive.as_ref() {
+        let coord_receive = client.coordinator_receive.read().unwrap().clone();
+        if let Some(receiver) = coord_receive {
             let mut sub = receiver.subscribe();
-            while let Ok(packet) = sub.recv().await {
+            while let Ok((packet, _)) = sub.recv().await {
                 if let PacketKind::RatAction(action) = packet.data {
                     return Ok(action);
                 }
@@ -120,9 +126,10 @@ impl crate::Ship for NetworkShipImpl {
 
     async fn wait_for_wind(&self) -> anyhow::Result<crate::WindData> {
         let client = self.client.lock().await;
-        if let Some(receiver) = client.coordinator_receive.as_ref() {
+        let coord_receive = client.coordinator_receive.read().unwrap().clone();
+        if let Some(receiver) = coord_receive {
             let mut sub = receiver.subscribe();
-            while let Ok(packet) = sub.recv().await {
+            while let Ok((packet, _)) = sub.recv().await {
                 if let PacketKind::Wind(data) = packet.data {
                     return Ok(data);
                 }
@@ -140,7 +147,7 @@ impl crate::Ship for NetworkShipImpl {
 impl NetworkShipImpl {
     async fn spawn_recursive_rejoin_task(
         disconnect_handle: tokio::sync::oneshot::Receiver<()>,
-        client: Arc<tokio::sync::Mutex<crate::net::Client>>,
+        client: Arc<tokio::sync::Mutex<Client>>,
     ) {
         match disconnect_handle.await {
             Err(e) => {
@@ -162,10 +169,10 @@ impl NetworkShipImpl {
     }
 
     pub async fn init(kind: ShipKind, external_ip: Option<[u8; 4]>) -> anyhow::Result<Self> {
-        let client = crate::net::Client::init(kind, external_ip).await;
+        let client = Client::init(kind, external_ip).await;
 
         let client = Arc::new(tokio::sync::Mutex::new(client));
-        let disconnect_handle = {
+        let _disconnect_handle = {
             info!("Registering for network...");
             let disconnect_handle = client.lock().await.register().await?;
             info!("Registered :)");
@@ -173,10 +180,11 @@ impl NetworkShipImpl {
         };
 
         // handle reconnecting to the network
-        let recon_client = Arc::clone(&client);
-        tokio::spawn(async move {
-            Self::spawn_recursive_rejoin_task(disconnect_handle, recon_client).await;
-        });
+        // TODO handle reconnect, can not rejoin task because
+        // let recon_client = Arc::clone(&client);
+        // tokio::spawn(async move {
+        // Self::spawn_recursive_rejoin_task(disconnect_handle, recon_client).await;
+        // });
 
         Ok(Self { client })
     }

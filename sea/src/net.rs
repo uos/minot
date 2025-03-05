@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    net::{IpAddr, Ipv4Addr, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     str::FromStr,
 };
 
@@ -16,17 +16,18 @@ use serde::{Deserialize, Serialize};
 
 use pnet::datalink::{self, NetworkInterface};
 
-use crate::{Action, ShipKind, ShipName, WindData};
+use crate::{client::Client, Action, ShipKind, ShipName, WindData};
 
-const PROTO_IDENTIFIER: u8 = 69;
-const CONTROLLER_CLIENT_ID: ShipName = 0;
-const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
-const CLIENT_LISTEN_PORT: u16 = 6969;
-const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
-const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
-const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
+pub const PROTO_IDENTIFIER: u8 = 69;
+pub const CONTROLLER_CLIENT_ID: ShipName = 0;
+pub const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
+pub const CLIENT_LISTEN_PORT: u16 = 6969;
+pub const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+pub const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(200);
+pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {
@@ -35,7 +36,7 @@ pub enum PacketKind {
     Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
-    RawDataf64(nalgebra::DMatrix<f64>), // TODO maybe we need to have a more generic type here but for now it is enough
+    RawDataf64(nalgebra::DMatrix<f64>),
     RawDataf32(nalgebra::DMatrix<f32>),
     RawDatai32(nalgebra::DMatrix<i32>),
     RawDatau8(nalgebra::DMatrix<u8>),
@@ -153,7 +154,7 @@ pub struct ShipHandle {
     // Send here to disconnect the tcp listener
     pub disconnect: tokio::sync::broadcast::Sender<bool>,
     // get requests from the client
-    pub recv: tokio::sync::broadcast::Sender<Packet>,
+    pub recv: tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>,
     // send to this client
     pub send: tokio::sync::mpsc::Sender<Packet>,
 }
@@ -270,6 +271,7 @@ impl Sea {
                         Ok(packet) => packet,
                     };
 
+                    dbg!(&packet);
                     match rejoin_req_tx.send((id.clone(), packet)).await {
                         Err(e) => {
                             error!("Could not send rejoin request to internal channel: {e}");
@@ -316,31 +318,59 @@ impl Sea {
                             let curr_client_create_sender = clients_tx_inner.clone();
                             let disc_broad = disconnect_tx.clone();
                             tokio::spawn(async move {
-                                let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:0")
-                                    .await
-                                    .expect("could not bind tcp socket");
-
-                                let server_tcp_client_listen_port = tcp_listener
-                                    .local_addr()
-                                    .expect("could not get tcp listener adress")
-                                    .port();
-                                let tcp_listener = tokio::net::TcpListener::from_std(
-                                    tcp_listener.into_std().unwrap(),
-                                )
-                                .unwrap();
-
                                 let ip = addr.split(':').next().unwrap();
-                                let mut gen_id_send_stream = tokio::net::TcpStream::connect(
-                                    format!("{}:{}", ip, client_tcp_port),
-                                )
+                                let client_stream = tokio::net::TcpStream::connect(format!(
+                                    "{}:{}",
+                                    ip, client_tcp_port
+                                ))
                                 .await
                                 .expect("could not connect to client");
+
+                                let socket =
+                                    socket2::Socket::from(client_stream.into_std().unwrap());
+                                socket.set_keepalive(true).unwrap();
+
+                                socket
+                                    .set_tcp_keepalive(
+                                        &socket2::TcpKeepalive::new()
+                                            .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
+                                            .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
+                                    )
+                                    .unwrap();
+
+                                let stream: TcpStream = socket.into();
+                                let client_stream =
+                                    tokio::net::TcpStream::from_std(stream).unwrap();
+
+                                let (rh, wh) = client_stream.into_split();
+
+                                let (tx, _) = tokio::sync::broadcast::channel::<(
+                                    Packet,
+                                    Option<SocketAddr>,
+                                )>(10);
+                                let tx_out = tx.clone();
+
+                                let (client_sender_tx, client_sender_rx) =
+                                    tokio::sync::mpsc::channel::<Packet>(10);
+
+                                // reading stream from client
+                                let current_ship = ship_kind.clone();
+                                tokio::spawn(async move {
+                                    Client::receive_from_socket(rh, tx, None).await;
+                                    warn!("Client {:?} disconnected.", current_ship);
+                                    // TODO when here, the client is disconnected, so stop all processing (block or send wait signal) until the clients are back
+                                });
+
+                                // writing stream to client
+                                tokio::spawn(async move {
+                                    Client::send_to_socket(client_sender_rx, wh).await;
+                                });
 
                                 let ip_parsed = Ipv4Addr::from_str(ip).expect("Strange ip format");
 
                                 let client_addr = crate::NetworkShipAddress {
                                     ip: ip_parsed.octets(),
-                                    port: server_tcp_client_listen_port,
+                                    port: client_tcp_port,
                                     ship: generated_id,
                                 };
 
@@ -352,173 +382,12 @@ impl Sea {
                                     data: PacketKind::Welcome(client_addr.clone()),
                                 };
 
-                                let welcome_packet_bytes = bincode::serialize(&welcome_packet)
-                                    .expect("could not serialize welcome packet");
-                                let packet_size = welcome_packet_bytes.len() as u32;
-                                let packet_size_buffer = packet_size.to_be_bytes();
-                                let mut buffer = vec![
-                                    PROTO_IDENTIFIER,
-                                    packet_size_buffer[0],
-                                    packet_size_buffer[1],
-                                    packet_size_buffer[2],
-                                    packet_size_buffer[3],
-                                ];
-                                buffer.extend_from_slice(&welcome_packet_bytes);
-                                match gen_id_send_stream.write_all(&buffer).await {
-                                    Err(e) => {
-                                        error!("could not send welcome packet: {e}");
-                                        return;
-                                    }
+                                match client_sender_tx.send(welcome_packet).await {
                                     Ok(_) => {}
-                                }
-
-                                let (tx, _) = tokio::sync::broadcast::channel::<Packet>(10);
-                                let tx_out = tx.clone();
-
-                                let (client_sender_tx, mut client_sender_rx) =
-                                    tokio::sync::mpsc::channel::<Packet>(10);
-
-                                // task to handle all packet communication from and to each client
-                                let disc_broad_inner = disc_broad.clone();
-                                tokio::spawn(async move {
-                                    let accepted = tcp_listener.accept().await;
-                                    match accepted {
-                                        Err(e) => {
-                                            error!("Could not accept Client connection: {e}");
-                                        }
-                                        Ok((stream, _info)) => {
-                                            let (mut rh, mut wh) = stream.into_split(); // TODO inefficient because into but don't know other way right now
-
-                                            let write_disc = disc_broad_inner.clone();
-                                            // task for writing from coordinator to client
-                                            tokio::spawn(async move {
-                                                loop {
-                                                    let mut disc_broad_inner_loop =
-                                                        write_disc.subscribe();
-                                                    tokio::select! {
-                                                        _ = disc_broad_inner_loop.recv() => {
-                                                            return;
-                                                        }
-                                                        msg = client_sender_rx.recv() => {
-                                                            match msg {
-                                                                None => {
-                                                                    return; // Channel closed
-                                                                }
-                                                                Some(msg) => {
-                                                                    let packet = bincode::serialize(&msg).expect("could not serialize packet");
-                                                                    let packet_size = packet.len() as u32;
-                                                                    let packet_size_buffer = packet_size.to_be_bytes();
-                                                                    let mut buffer = vec![
-                                                                        PROTO_IDENTIFIER,
-                                                                        packet_size_buffer[0],
-                                                                        packet_size_buffer[1],
-                                                                        packet_size_buffer[2],
-                                                                        packet_size_buffer[3],
-                                                                    ];
-                                                                    buffer.extend_from_slice(&packet);
-                                                                     if let Err(e) = wh.write_all(&buffer).await {
-                                                                         error!("could not respond tcp socket: {e}");
-                                                                     }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            });
-
-                                            // task for reading from open client socket
-                                            tokio::spawn(async move {
-                                                // This streams keeps open for the entirety of the client being connected to the coordinator
-                                                let mut buffer = Vec::with_capacity(1024);
-                                                let mut first = true;
-
-                                                let mut buf = [0; 1024];
-                                                let disc_broad_inner_loop =
-                                                    disc_broad_inner.clone();
-                                                let mut disc_broad_per_conn =
-                                                    disc_broad_inner_loop.subscribe();
-
-                                                // for each packet
-                                                loop {
-                                                    // collect a packet
-                                                    let mut msg_size = 0;
-                                                    loop {
-                                                        tokio::select! {
-                                                            _ = disc_broad_per_conn.recv() => {
-                                                                return;
-                                                            }
-                                                            read = rh.read(&mut buf) => {
-                                                                let n = match read {
-                                                                    Err(e) => {
-                                                                        error!(
-                                                                            "Could not read from TCP stream with read half of coordinator: {e}"
-                                                                        );
-                                                                        return;
-                                                                    }
-                                                                    Ok(n) => n,
-                                                                };
-
-                                                                if n == 0 {
-                                                                    return; // only happens when the tcp stream is closed
-                                                                    // buffer.clear();
-                                                                    // break;
-                                                                }
-
-                                                                if first {
-                                                                    if buf[0] != PROTO_IDENTIFIER {
-                                                                        continue;
-                                                                    } else {
-                                                                        // read 4 bytes into u32 for length of rest message
-                                                                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                                                                        msg_size = u32::from_be_bytes(msg_size_buf);
-                                                                        first = false;
-                                                                    }
-                                                                }
-
-
-                                                                buffer.extend_from_slice(&buf[..n]);
-
-                                                                if buffer.len() as u32 == msg_size + 5 {
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                        // tokio::task::yield_now().await;
-                                                    }
-
-                                                    first = true;
-                                                    msg_size = 0;
-
-                                                    if buffer.is_empty() {
-                                                        buffer.clear();
-                                                        continue;
-                                                    }
-
-                                                    let cleaned_buf = &buffer[5..];
-                                                    let packet: Packet =
-                                                        match bincode::deserialize(&cleaned_buf) {
-                                                            Err(e) => {
-                                                                error!(
-                                                                "Received package is broken: {e}"
-                                                            );
-                                                                continue;
-                                                            }
-                                                            Ok(packet) => packet,
-                                                        };
-
-                                                    buffer.clear();
-
-                                                    match tx.send(packet) {
-                                                        Err(e) => {
-                                                            error!("could not send to internal channel: {e}");
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
-                                            });
-                                        }
+                                    Err(e) => {
+                                        error!("Could not send welcome packet to channel: {e}");
                                     }
-                                });
+                                }
 
                                 let ship_handle = ShipHandle {
                                     ship: generated_id,
@@ -562,14 +431,15 @@ impl Sea {
         trimmed.to_string()
     }
 
-    fn pad_ship_kind_name(kind: &ShipKind) -> ShipKind {
+    pub fn pad_ship_kind_name(kind: &ShipKind) -> ShipKind {
         match kind {
             ShipKind::Rat(name) => ShipKind::Rat(Self::pad_string(name)),
             ShipKind::Wind(name) => ShipKind::Wind(Self::pad_string(name)),
             ShipKind::God => ShipKind::God,
         }
     }
-    fn unpad_ship_kind_name(kind: &ShipKind) -> ShipKind {
+
+    pub fn unpad_ship_kind_name(kind: &ShipKind) -> ShipKind {
         match kind {
             ShipKind::Rat(name) => ShipKind::Rat(Self::reverse_padding(name)),
             ShipKind::Wind(name) => ShipKind::Wind(Self::reverse_padding(name)),
@@ -637,627 +507,3 @@ impl Drop for Sea {
 //         }
 //     }
 // }
-
-#[derive(Debug)]
-pub struct Client {
-    heartbeat_task: Option<tokio::task::JoinHandle<()>>,
-    tcp_listener_chan: tokio::sync::broadcast::Sender<(Packet, std::net::SocketAddr)>,
-    tcp_port: u16,
-    pub coordinator_send: Option<tokio::sync::mpsc::Sender<Packet>>,
-    pub coordinator_receive: Option<tokio::sync::broadcast::Sender<Packet>>,
-    tcp_coordinator_task: Option<tokio::task::JoinHandle<()>>,
-    ip: [u8; 4],
-    other_client_listener: tokio::net::TcpListener,
-    pub other_client_entrance: u16, // tcp port for 1:1 connections
-    pub kind: ShipKind,
-}
-
-impl Client {
-    pub async fn get_udp_socket(external_ip: Option<[u8; 4]>, port: Option<u16>) -> UdpSocket {
-        let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let bind_address = format!(
-            "{}.{}.{}.{}:{}",
-            ip[0],
-            ip[1],
-            ip[2],
-            ip[3],
-            port.unwrap_or(0)
-        );
-        let socket = std::net::UdpSocket::bind(&bind_address).unwrap();
-        socket.set_broadcast(true).expect("could not set broadcast");
-        let udp_socket = UdpSocket::from_std(socket).expect("could not promote to tokio socket");
-        udp_socket
-            .writable()
-            .await
-            .expect("udp socket not writable");
-        udp_socket
-    }
-
-    pub async fn init(ship_kind: ShipKind, external_ip: Option<[u8; 4]>) -> Self {
-        let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let tcp_port = if matches!(ship_kind, ShipKind::God) {
-            CLIENT_LISTEN_PORT
-        } else {
-            0
-        };
-        let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], tcp_port);
-        let socket = std::net::TcpListener::bind(&bind_address).expect("could not bind tcp socket");
-        let tcp_port = socket
-            .local_addr()
-            .expect("could not get tcp listener adress")
-            .port();
-        let tcp_listener =
-            TcpListener::from_std(socket).expect("could not create tokio tcp listener");
-
-        let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0); // always find this dynamically
-        let client_listener = tokio::net::TcpListener::bind(&bind_address)
-            .await
-            .expect("could not bind tcp socket");
-        let client_listener_port = client_listener
-            .local_addr()
-            .expect("could not get client listener adress")
-            .port();
-
-        let (tx, _) = tokio::sync::broadcast::channel(100);
-        let t = tx.clone();
-        // Task for initial connections from the coordinator for the invitation via RejoinRequest
-        tokio::spawn(async move {
-            loop {
-                // TODO this socket should just be used for registering stuff but heartbeat stops when this is reset by peer or now reset to wait for new con? also, I thought there is just one tcp socket for coordinator exchange, so how do we send to this socket? which socket does the client use for sending?
-                warn!("wait for new conn");
-                match tcp_listener.accept().await {
-                    Err(e) => {
-                        error!("failed to accept tcp connection: {e}");
-                    }
-
-                    Ok((mut stream, partner)) => {
-                        info!("Established connection with {}", partner);
-                        match stream.readable().await {
-                            Err(e) => {
-                                error!("TCP Listener stream not readable: {e}");
-                            }
-                            Ok(_) => {}
-                        };
-
-                        // receiving packets from coordinator
-                        loop {
-                            tokio::task::yield_now().await;
-                            let mut buffer = Vec::with_capacity(1024);
-                            let mut first = true;
-                            let mut msg_size = 0;
-                            let mut reset = false;
-
-                            // collect parts to complete a single packet
-                            let mut is_for_us = true;
-                            loop {
-                                let mut buf = [0; 1024];
-                                let n = match stream.read(&mut buf).await {
-                                    Err(e) => {
-                                        match e.kind() {
-                                            std::io::ErrorKind::ConnectionReset => {
-                                                reset = true;
-                                                break;
-                                            }
-                                            _ => {
-                                                error!("Could not read from TCP stream in client connection to coordinator: {e}");
-                                            }
-                                        }
-                                        0
-                                    }
-                                    Ok(n) => n,
-                                };
-
-                                if n == 0 {
-                                    break;
-                                }
-
-                                if first {
-                                    if buf[0] != PROTO_IDENTIFIER {
-                                        is_for_us = false;
-                                        break;
-                                    } else {
-                                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                                        msg_size = u32::from_be_bytes(msg_size_buf);
-                                        first = false;
-                                        buffer.extend_from_slice(&buf[5..n]);
-                                    }
-                                } else {
-                                    buffer.extend_from_slice(&buf[..n]);
-                                }
-                            }
-
-                            if reset {
-                                warn!("resetting");
-                                break;
-                            }
-
-                            if !is_for_us || buffer.is_empty() || buffer.len() as u32 != msg_size {
-                                continue;
-                            }
-
-                            let packet: Packet = match bincode::deserialize(&buffer) {
-                                Err(e) => {
-                                    error!("Received package is broken: {e}");
-                                    continue;
-                                }
-                                Ok(packet) => packet,
-                            };
-
-                            match t.send((packet, partner)) {
-                                Err(e) => {
-                                    error!("TCP Listener could not send to internal channel: {e}");
-                                }
-                                _ => {}
-                            };
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                }
-            }
-        });
-
-        Self {
-            kind: ship_kind,
-            other_client_entrance: client_listener_port,
-            other_client_listener: client_listener,
-            coordinator_send: None,
-            coordinator_receive: None,
-            heartbeat_task: None,
-            tcp_listener_chan: tx,
-            tcp_port,
-            ip,
-            tcp_coordinator_task: None,
-        }
-    }
-
-    pub fn get_active_interfaces() -> Vec<NetworkInterface> {
-        datalink::interfaces()
-            .into_iter()
-            .filter(|i| i.is_running())
-            .collect::<Vec<_>>() // TODO maybe !i.is_loopback()?
-    }
-
-    /// Register the client to the network and return a oneshot receiver to wait for the disconnect.
-    /// The function will run until a network is established or an error occurs but the error won't be that no network could be found.
-    pub async fn register(&mut self) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-        if let Some(coord_tcp) = self.tcp_coordinator_task.as_ref() {
-            // the coordinator did not initiat the disconnect, so we need to do it
-            if !coord_tcp.is_finished() {
-                if let (Some(coord_send), Some(coord_recv)) = (
-                    self.coordinator_send.as_ref(),
-                    self.coordinator_receive.as_ref(),
-                ) {
-                    let packet = Packet {
-                        header: Header::default(),
-                        data: PacketKind::Disconnect,
-                    };
-                    let mut coord_receiver = coord_recv.subscribe();
-                    coord_send.send(packet).await?;
-                    let timeouted_disconnect_answer = tokio::time::timeout(
-                        std::time::Duration::from_secs(1),
-                        coord_receiver.recv(),
-                    )
-                    .await;
-                    match timeouted_disconnect_answer {
-                        Ok(Ok(packet)) => {
-                            if !matches!(packet.data, PacketKind::Acknowledge) {
-                                // TODO implement acking disconnect on sea side
-                                return Err(anyhow!("Received unexpected packet: {packet:?}"));
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            return Err(anyhow!("Could not receive disconnect acknowledge: {e}"));
-                        }
-                        Err(_) => {
-                            return Err(anyhow!("Disconnect acknowledge timed out"));
-                        }
-                    }
-                } else {
-                    return Err(anyhow!("coordinator sender and/or receiver does not exist"));
-                }
-            }
-
-            self.heartbeat_task.take().map(|t| t.abort());
-            self.tcp_coordinator_task.take().map(|t| t.abort());
-            self.coordinator_receive.take();
-            self.coordinator_send.take();
-        }
-
-        let network_register_packet = Packet {
-            header: Header {
-                source: ShipName::MAX,
-                target: CONTROLLER_CLIENT_ID,
-            },
-            data: PacketKind::JoinRequest(self.tcp_port, Sea::pad_ship_kind_name(&self.kind)),
-        };
-
-        let udp_socket = Self::get_udp_socket(Some(self.ip), None).await;
-        let mut subscription = self.tcp_listener_chan.subscribe();
-
-        let (partner, my_addr) = loop {
-            Self::send_packet_broadcast(&network_register_packet, &udp_socket).await?;
-
-            let tim = tokio::time::timeout(CLIENT_REGISTER_TIMEOUT, subscription.recv()).await;
-
-            match tim {
-                Err(_) => {
-                    info!("JoinRequest timed out");
-                    continue;
-                }
-                Ok(Err(e)) => {
-                    return Err(anyhow!("TCP channel closed: {e}"));
-                }
-                Ok(Ok((packet, partner))) => {
-                    if let PacketKind::Welcome(addr) = packet.data {
-                        break (partner, addr);
-                    }
-                }
-            }
-        };
-
-        // each tcp packet must to through the coord_tx, so we can have a heartbeat in between
-        let (coord_tx, mut coord_rx) = tokio::sync::mpsc::channel::<Packet>(10);
-
-        // receiver for packets over tcp from coordinator, subscribe if interested.
-        let (coord_packet_receiver_tx, _) = tokio::sync::broadcast::channel(10);
-
-        // clone for packet sender from tcp connection
-        let coord_packet_receiver_tx_in = coord_packet_receiver_tx.clone();
-
-        let (coord_raw_tx, mut coord_raw_rx) = tokio::sync::mpsc::channel(10);
-
-        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-
-        // Heartbeat interval if no message send to coordinator
-        let heartbeat_task = tokio::spawn(async move {
-            let mut heartbeat_interval = tokio::time::interval(CLIENT_REJOIN_POLL_INTERVAL);
-            loop {
-                tokio::select! {
-                    packet = coord_rx.recv() => {
-                        if let Some(mut packet) = packet {
-                            heartbeat_interval.reset();
-                            packet.header.source = my_addr.ship; // overwrite source with our id
-                            packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
-                            match coord_raw_tx.send(packet).await {
-                                Err(e) => {
-                                    error!("could not forward coordinator packet: {e}");
-                                }
-                                Ok(_) => {
-                                    debug!("send packet");
-                                }
-                            }
-                        }
-                    }
-
-                    _ = heartbeat_interval.tick() => {
-                        let packet = Packet {
-                            header: Header {
-                                source: my_addr.ship,
-                                target: CONTROLLER_CLIENT_ID,
-                            },
-                            data: PacketKind::Heartbeat,
-                        };
-                        match coord_raw_tx.send(packet).await {
-                            Err(e) => {
-                                error!("could not send heartbeat to coordinator: {e}");
-                            }
-                            Ok(_) => {}
-                        };
-                   }
-                }
-            }
-        });
-
-        let stream =
-            std::net::TcpStream::connect(format!("{}:{}", partner.ip().to_string(), my_addr.port))?;
-
-        let socket = socket2::Socket::from(stream);
-        socket.set_keepalive(true)?;
-
-        socket.set_tcp_keepalive(
-            &socket2::TcpKeepalive::new()
-                .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
-                .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
-        )?;
-
-        let stream: TcpStream = socket.into();
-        let mut stream = tokio::net::TcpStream::from_std(stream).unwrap();
-
-        info!("Connected.");
-
-        let coord_tcp_task = tokio::spawn(async move {
-            let mut buffer = Vec::with_capacity(1024);
-            // stream.readable().await.unwrap();
-            // stream.writable().await.unwrap();
-            let mut buf = [0; 1024];
-
-            let mut first = true;
-            let mut msg_size = 0;
-
-            loop {
-                tokio::select! {
-                    packet = coord_raw_rx.recv() => {
-                        if let Some(packet) = packet {
-                            let orig_packet = packet.clone(); // TODO rm after dbg
-                            let packet = bincode::serialize(&packet).expect("could not serialize packet");
-                            let packet_size = packet.len() as u32;
-                            let packet_size_buffer = packet_size.to_be_bytes();
-                            let mut buffer = vec![PROTO_IDENTIFIER, packet_size_buffer[0], packet_size_buffer[1], packet_size_buffer[2], packet_size_buffer[3]];
-                            buffer.extend_from_slice(&packet);
-                            if let Err(e) = stream.write_all(&buffer).await {
-                                error!("could not send to tcp socket: {e}");
-                            }
-                            // TODO when both rats send the variable request, only one seems to reach the coordinator. Why? maybe wrong socket when both come at same time?
-                            debug!("written packet to tcp stream {:?}", orig_packet);
-                        } else {
-                            warn!("could not receive on coordinator send channel");
-                        }
-
-                    }
-                    read = stream.read(&mut buf) => {
-                        match read {
-                            Ok(n) => {
-                                if n == 0 {
-                                    return; // TCP stream broken
-                                }
-
-                                if first {
-                                    if buf[0] != PROTO_IDENTIFIER {
-                                        buf.fill(0);
-                                        buffer.clear();
-                                        continue;
-                                    } else {
-                                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                                        msg_size = u32::from_be_bytes(msg_size_buf);
-                                        first = false;
-                                        buffer.extend_from_slice(&buf[5..n]);
-                                    }
-                                } else {
-                                    buffer.extend_from_slice(&buf[..n]);
-                                    buf.fill(0);
-                                }
-
-                                if buffer.is_empty() || buffer.len() as u32 != msg_size {
-                                    continue;
-                                }
-
-                                let packet: Packet = match bincode::deserialize(&buffer) {
-                                    Err(e) => {
-                                        error!("Received package is broken: {e}");
-                                        continue;
-                                    }
-                                    Ok(packet) => packet,
-                                };
-                                buffer.clear();
-                                msg_size = 0;
-                                first = true;
-                                dbg!("received packet: {:?}", &packet);
-                                match coord_packet_receiver_tx_in.send(packet) {
-                                    Err(e) => {
-                                        error!("Could not send to coordinator receiver: {e}");
-                                        continue;
-                                    }
-                                    Ok(_) => {}
-                                }
-                            }
-                            Err(e) => {
-                                error!("could not read from tcp stream. Triggering disconnect. Err: {e}");
-                                disconnect_tx.send(()).unwrap();
-                                return; // stopping task here
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // Wait for coordinator to send us Ack to signal that every expected client is connected
-        let mut coord_sub = coord_packet_receiver_tx.subscribe();
-        loop {
-            match coord_sub.recv().await {
-                Err(e) => {
-                    error!("Could not receive updates from coordinator: {}", e);
-                }
-                Ok(packet) => {
-                    if matches!(packet.data, PacketKind::Acknowledge) {
-                        break;
-                    }
-                }
-            }
-        }
-
-        self.coordinator_send = Some(coord_tx);
-        self.coordinator_receive = Some(coord_packet_receiver_tx);
-        self.heartbeat_task = Some(heartbeat_task);
-        self.tcp_coordinator_task = Some(coord_tcp_task);
-
-        Ok(disconnect_rx)
-    }
-
-    pub async fn send_raw_to_other_client(
-        &self,
-        address: &IpAddr,
-        port: u16,
-        data: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        loop {
-            let initial_connection_timeout = std::time::Duration::from_secs(1);
-            // try for max 1 second to connect to the other client
-            let addr = format!("{}:{}", address.to_string(), port);
-            let stream = tokio::time::timeout(
-                initial_connection_timeout.clone(),
-                tokio::net::TcpStream::connect(&addr),
-            )
-            .await;
-
-            // debug!("stream connection started to {}", addr);
-
-            match stream {
-                Err(_) => {
-                    return Err(anyhow!(
-                        "Could not connect to other client within {initial_connection_timeout:?}"
-                    ));
-                }
-                Ok(Err(e)) => match e.kind() {
-                    std::io::ErrorKind::ConnectionRefused => {
-                        // debug!("connection not yet ready, wait a bit");
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-                    _ => {
-                        return Err(anyhow!("Could not connect to other client: {e}"));
-                    }
-                },
-                Ok(Ok(stream)) => {
-                    debug!("stream initialized");
-                    let mut stream = stream;
-                    stream.writable().await?;
-                    let packet_size = data.len() as u32;
-                    let packet_size_buffer = packet_size.to_be_bytes();
-                    let mut buffer = vec![
-                        PROTO_IDENTIFIER,
-                        packet_size_buffer[0],
-                        packet_size_buffer[1],
-                        packet_size_buffer[2],
-                        packet_size_buffer[3],
-                    ];
-                    buffer.extend_from_slice(&data);
-                    stream.write_all(&buffer).await?;
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    pub async fn recv_raw_from_other_client(
-        &self,
-        sender: Option<&crate::NetworkShipAddress>,
-    ) -> anyhow::Result<Vec<u8>> {
-        loop {
-            debug!("started receiving from {:?}", sender);
-            let stream = tokio::time::timeout(
-                CLIENT_TO_CLIENT_TIMEOUT,
-                self.other_client_listener.accept(),
-            )
-            .await;
-
-            match stream {
-                Err(_) => {
-                    return Err(anyhow!(
-                        "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
-                    ));
-                }
-                Ok(Err(e)) => match e.kind() {
-                    std::io::ErrorKind::ConnectionRefused => {
-                        debug!("connection not yet ready, wait a bit");
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-                    _ => {
-                        return Err(anyhow!("Could not connect to other client: {e}"));
-                    }
-                },
-                Ok(Ok((mut stream, socket_sender))) => {
-                    if let Some(expected_sender) = sender {
-                        let expected_ip = Ipv4Addr::new(
-                            expected_sender.ip[0],
-                            expected_sender.ip[1],
-                            expected_sender.ip[2],
-                            expected_sender.ip[3],
-                        );
-                        if expected_ip != socket_sender.ip().to_canonical() {
-                            continue;
-                        }
-                    }
-                    stream.readable().await?;
-                    let mut buffer = Vec::with_capacity(1024);
-                    let mut first = true;
-                    let mut msg_size = 0;
-
-                    loop {
-                        let mut buf = [0; 1024];
-                        let n = match stream.read(&mut buf).await {
-                            Err(e) => {
-                                return Err(anyhow!("Could not read from TCP stream when receiving from other client: {e}"));
-                            }
-                            Ok(n) => n,
-                        };
-
-                        if n == 0 {
-                            return Err(anyhow!(
-                                "Stream seems to be broken while expecting the data."
-                            ));
-                        }
-
-                        if first {
-                            if buf[0] != PROTO_IDENTIFIER {
-                                return Err(anyhow!("Other client sent unexpected start token."));
-                            } else {
-                                // read 4 bytes into u32 for length of rest message
-                                let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                                msg_size = u32::from_be_bytes(msg_size_buf);
-                                first = false;
-                            }
-                        }
-
-                        buffer.extend_from_slice(&buf[..n]);
-
-                        if buffer.len() as u32 == msg_size {
-                            break;
-                        }
-                    }
-
-                    if !buffer.is_empty() {
-                        buffer = buffer[5..buffer.len()].into(); // TODO for large data, maybe better to directly delete the indicators when checking them to avoid large copies
-                        return Ok(buffer);
-                    }
-
-                    return Err(anyhow!("Received data is not for us"));
-                }
-            }
-        }
-    }
-
-    // TODO log to coordinator functions. They send them async in another thread to the coordinator so nothing is blocked on the client side.
-
-    // --- end send/recv ---
-
-    fn calculate_broadcast(ipv4_addr: std::net::Ipv4Addr, prefix_len: u8) -> std::net::Ipv4Addr {
-        let mask = !0u32 >> prefix_len;
-        let bcast_addr = u32::from(ipv4_addr) | mask;
-        std::net::Ipv4Addr::from(bcast_addr)
-    }
-
-    async fn send_packet_broadcast(packet: &Packet, udp_socket: &UdpSocket) -> anyhow::Result<()> {
-        let raw = bincode::serialize(packet).expect("packet not serializable");
-        let mut data = vec![PROTO_IDENTIFIER];
-        data.extend_from_slice(&raw);
-        for interface in Self::get_active_interfaces().iter() {
-            for ip_network in &interface.ips {
-                if let IpAddr::V4(ipv4_addr) = ip_network.ip() {
-                    // let addr = if ipv4_addr.is_loopback() {
-                    // Self::calculate_broadcast(ipv4_addr, ip_network.prefix())
-                    // } else {
-                    let addr = Self::calculate_broadcast(ipv4_addr, ip_network.prefix());
-                    // };
-
-                    let target_str = format!(
-                        "{}.{}.{}.{}:{}",
-                        addr.octets()[0],
-                        addr.octets()[1],
-                        addr.octets()[2],
-                        addr.octets()[3],
-                        CLIENT_LISTEN_PORT
-                    );
-
-                    let sent = udp_socket.send_to(&data, &target_str).await?;
-                    if sent != data.len() {
-                        return Err(anyhow!("data len mismatch with actual send bytes"));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
