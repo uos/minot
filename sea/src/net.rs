@@ -1,20 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    net::{Ipv4Addr, SocketAddr, TcpStream},
     str::FromStr,
 };
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use nalgebra::DMatrix;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, UdpSocket},
-};
 
 use serde::{Deserialize, Serialize};
-
-use pnet::datalink::{self, NetworkInterface};
 
 use crate::{client::Client, Action, ShipKind, ShipName, WindData};
 
@@ -32,7 +26,7 @@ pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::f
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
-    JoinRequest(u16, ShipKind),
+    JoinRequest(u16, u16, ShipKind),
     Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
@@ -157,6 +151,7 @@ pub struct ShipHandle {
     pub recv: tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>,
     // send to this client
     pub send: tokio::sync::mpsc::Sender<Packet>,
+    pub other_client_port: u16,
 }
 
 #[derive(Debug)]
@@ -220,6 +215,7 @@ impl Sea {
                 },
                 // names are padded with maximal length 64 chars
                 data: PacketKind::JoinRequest(
+                    0,
                     0,
                     Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
                 ),
@@ -299,7 +295,7 @@ impl Sea {
                 let receive = rejoin_req_rx.recv().await;
                 if let Some((addr, packet)) = receive {
                     match packet.data {
-                        PacketKind::JoinRequest(client_tcp_port, ship_kind) => {
+                        PacketKind::JoinRequest(client_tcp_port, other_client_port, ship_kind) => {
                             let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
                             debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
                             {
@@ -316,7 +312,6 @@ impl Sea {
 
                             // task to handle tcp connection to this client
                             let curr_client_create_sender = clients_tx_inner.clone();
-                            let disc_broad = disconnect_tx.clone();
                             tokio::spawn(async move {
                                 let ip = addr.split(':').next().unwrap();
                                 let client_stream = tokio::net::TcpStream::connect(format!(
@@ -396,6 +391,7 @@ impl Sea {
                                     send: client_sender_tx,
                                     name: ship_kind,
                                     addr_from_coord: client_addr,
+                                    other_client_port,
                                 };
                                 curr_client_create_sender.send(ship_handle).unwrap();
                                 debug!("ShipHandle created and sent");

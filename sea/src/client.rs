@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 
 use anyhow::anyhow;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use pnet::datalink::{self, NetworkInterface};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -192,8 +192,7 @@ impl Client {
                                                 }
                                             }
                                         }
-                                        Err(e) => {
-                                            debug!("ticking heart {e}");
+                                        Err(_e) => {
                                             let packet = Packet {
                                                 header: crate::net::Header {
                                                     source: my_addr.ship,
@@ -203,11 +202,11 @@ impl Client {
                                             };
                                             match coord_raw_sender.send(packet).await {
                                                 Err(e) => {
-                                                    warn!("could not send heartbeat to coordinator: {e}");
+                                                    error!("could not send heartbeat to coordinator: {e}");
                                                     return; // channel closed
                                                 }
                                                 Ok(_) => {
-                                                    debug!("sending heartbeat");
+                                                    // debug!("sending heartbeat");
                                                 }
                                             };
                                         }
@@ -238,7 +237,7 @@ impl Client {
         mut wh: OwnedWriteHalf,
     ) {
         while let Some(packet) = channel.recv().await {
-            let orig_packet = packet.clone(); // TODO rm after dbg
+            // let orig_packet = packet.clone(); // TODO rm after dbg
             let packet = bincode::serialize(&packet).expect("could not serialize packet");
             let packet_size = packet.len() as u32;
             let packet_size_buffer = packet_size.to_be_bytes();
@@ -252,8 +251,10 @@ impl Client {
             buffer.extend_from_slice(&packet);
             if let Err(e) = wh.write_all(&buffer).await {
                 error!("could not send to tcp socket: {e}");
+                channel.close();
+                return;
             }
-            debug!("written packet to tcp stream {:?}", orig_packet);
+            // debug!("written packet to tcp stream {:?}", orig_packet);
         }
     }
 
@@ -345,8 +346,17 @@ impl Client {
                 source: ShipName::MAX,
                 target: CONTROLLER_CLIENT_ID,
             },
-            data: PacketKind::JoinRequest(self.tcp_port, Sea::pad_ship_kind_name(&self.kind)),
+            data: PacketKind::JoinRequest(
+                self.tcp_port,
+                self.other_client_entrance,
+                Sea::pad_ship_kind_name(&self.kind),
+            ),
         };
+
+        debug!(
+            "register with client_entrance port: {}",
+            self.other_client_entrance
+        );
 
         let udp_socket = Self::get_udp_socket(Some(self.ip), None).await;
 
@@ -405,21 +415,17 @@ impl Client {
         data: Vec<u8>,
     ) -> anyhow::Result<()> {
         loop {
-            let initial_connection_timeout = std::time::Duration::from_secs(1);
-            // try for max 1 second to connect to the other client
             let addr = format!("{}:{}", address.to_string(), port);
             let stream = tokio::time::timeout(
-                initial_connection_timeout.clone(),
+                CLIENT_TO_CLIENT_TIMEOUT,
                 tokio::net::TcpStream::connect(&addr),
             )
             .await;
 
-            // debug!("stream connection started to {}", addr);
-
             match stream {
                 Err(_) => {
                     return Err(anyhow!(
-                        "Could not connect to other client within {initial_connection_timeout:?}"
+                        "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
                     ));
                 }
                 Ok(Err(e)) => match e.kind() {
@@ -432,9 +438,8 @@ impl Client {
                         return Err(anyhow!("Could not connect to other client: {e}"));
                     }
                 },
-                Ok(Ok(stream)) => {
-                    debug!("stream initialized");
-                    let mut stream = stream;
+                Ok(Ok(mut stream)) => {
+                    debug!("connected to {}", addr);
                     stream.writable().await?;
                     let packet_size = data.len() as u32;
                     let packet_size_buffer = packet_size.to_be_bytes();
@@ -447,6 +452,7 @@ impl Client {
                     ];
                     buffer.extend_from_slice(&data);
                     stream.write_all(&buffer).await?;
+                    debug!("written all");
                     return Ok(());
                 }
             }
@@ -458,7 +464,6 @@ impl Client {
         sender: Option<&crate::NetworkShipAddress>,
     ) -> anyhow::Result<Vec<u8>> {
         loop {
-            debug!("started receiving from {:?}", sender);
             let stream = tokio::time::timeout(
                 CLIENT_TO_CLIENT_TIMEOUT,
                 self.other_client_listener.accept(),
@@ -482,6 +487,7 @@ impl Client {
                     }
                 },
                 Ok(Ok((mut stream, socket_sender))) => {
+                    debug!("started receiving from {:?}", sender);
                     if let Some(expected_sender) = sender {
                         let expected_ip = Ipv4Addr::new(
                             expected_sender.ip[0],
@@ -526,7 +532,7 @@ impl Client {
 
                         buffer.extend_from_slice(&buf[..n]);
 
-                        if buffer.len() as u32 == msg_size {
+                        if buffer.len() as u32 == msg_size + 5 {
                             break;
                         }
                     }

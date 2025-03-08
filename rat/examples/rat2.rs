@@ -9,5 +9,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rat::deinit()?;
 
     assert!(var == rat::rtrue());
+    println!("Success");
     Ok(())
 }

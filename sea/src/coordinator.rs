@@ -5,13 +5,14 @@ use log::{debug, error};
 
 use crate::{
     net::{Packet, PacketKind},
-    NetworkShipAddress, ShipKind, ShipName,
+    NetworkShipAddress, ShipName,
 };
 
 pub struct ClientInfo {
     pub id: ShipName,
     pub network: NetworkShipAddress,
     pub queue: tokio::sync::broadcast::Sender<String>,
+    pub client_port: u16,
     pub sender: tokio::sync::mpsc::Sender<Packet>,
 }
 
@@ -110,7 +111,9 @@ impl CoordinatorImpl {
                     let client_info = rat
                         .get(client_name)
                         .ok_or_else(|| anyhow!("Unknown client: {}", client_name))?;
-                    targets.push(client_info.network.clone());
+                    let mut client_network = client_info.network.clone();
+                    client_network.port = client_info.client_port; // use client port for client to client communication
+                    targets.push(client_network);
                 }
 
                 crate::Action::Shoot { target: targets }
@@ -147,6 +150,7 @@ impl CoordinatorImpl {
                             queue: rat_queue_tx.clone(),
                             sender: client.send,
                             network: client.addr_from_coord,
+                            client_port: client.other_client_port,
                         };
                         let name = match client.name {
                             crate::ShipKind::Rat(name) => name,
@@ -156,6 +160,7 @@ impl CoordinatorImpl {
                             }
                         };
 
+                        let namea = name.clone();
                         {
                             inner_client_loop_rat_queues
                                 .write()
@@ -168,11 +173,13 @@ impl CoordinatorImpl {
                             while let Ok((msg, _)) = receiver.recv().await {
                                 match msg.data {
                                     PacketKind::VariableTaskRequest(variable_name) => {
-                                        match rat_queue_tx.send(variable_name) {
+                                        match rat_queue_tx.send(variable_name.clone()) {
                                             Err(e) => {
                                                 error!("Could not send to rat queue: {}", e);
                                             }
-                                            Ok(_) => {}
+                                            Ok(_) => {
+                                                debug!("sent {}, {:?}", namea, variable_name);
+                                            }
                                         }
                                     }
                                     PacketKind::Heartbeat => {

@@ -90,9 +90,7 @@ impl crate::Ship for NetworkShipImpl {
                     }
                 }
             });
-            debug!("sending request");
             sender.send(action_request).await?;
-            debug!("awaiting answer");
             return rx.recv().await.unwrap();
         } else {
             drop(client);
@@ -145,6 +143,7 @@ impl crate::Ship for NetworkShipImpl {
 }
 
 impl NetworkShipImpl {
+    #[allow(dead_code)]
     async fn spawn_recursive_rejoin_task(
         disconnect_handle: tokio::sync::oneshot::Receiver<()>,
         client: Arc<tokio::sync::Mutex<Client>>,
