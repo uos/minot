@@ -209,7 +209,14 @@ pub extern "C" fn rat_bacon_f32(
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
     match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
+        Ok(_) => {
+            for c in 0..cols {
+                for r in 0..rows {
+                    data[c * rows + r] = matrix[(r, c)];
+                }
+            }
+            0
+        }
         Err(e) => {
             error!("Failed to bacon: {}", e);
             -1
@@ -232,7 +239,14 @@ pub extern "C" fn rat_bacon_f64(
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
     match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
+        Ok(_) => {
+            for c in 0..cols {
+                for r in 0..rows {
+                    data[c * rows + r] = matrix[(r, c)];
+                }
+            }
+            0
+        }
         Err(e) => {
             error!("Failed to bacon: {}", e);
             -1
@@ -255,7 +269,14 @@ pub extern "C" fn rat_bacon_i32(
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
     match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
+        Ok(_) => {
+            for c in 0..cols {
+                for r in 0..rows {
+                    data[c * rows + r] = matrix[(r, c)];
+                }
+            }
+            0
+        }
         Err(e) => {
             error!("Failed to bacon: {}", e);
             -1
@@ -278,7 +299,14 @@ pub extern "C" fn rat_bacon_u8(
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
     match bacon(variable_name, &mut matrix) {
-        Ok(_) => 0,
+        Ok(_) => {
+            for c in 0..cols {
+                for r in 0..rows {
+                    data[c * rows + r] = matrix[(r, c)];
+                }
+            }
+            0
+        }
         Err(e) => {
             error!("Failed to bacon: {}", e);
             -1

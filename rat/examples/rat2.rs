@@ -1,14 +1,20 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let mut var = rat::rfalse();
+    let mut var3 = rat::rfalse();
 
     rat::init("testRat2", None)?;
 
     rat::bacon("var1", &mut var)?;
+    assert!(var == rat::rtrue());
+
+    rat::bacon("var3", &mut var3)?;
+    assert!(var3 == rat::rfalse());
 
     rat::deinit()?;
 
-    assert!(var == rat::rtrue());
-    println!("Success");
+    let green = "\x1b[32m";
+    let reset = "\x1b[0m";
+    println!("\n{green}Success!{reset}");
     Ok(())
 }

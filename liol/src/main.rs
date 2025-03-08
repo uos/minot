@@ -78,6 +78,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
+    pairs.insert(
+        "var3".to_string(),
+        (
+            sea::VariableHuman {
+                ship: "testRat2".to_string(),
+                strategy: Some(sea::ActionPlan::Shoot {
+                    target: vec!["testRat1".to_string()],
+                }),
+            },
+            sea::VariableHuman {
+                ship: "testRat1".to_string(),
+                strategy: Some(sea::ActionPlan::Catch {
+                    source: "testRat2".to_string(),
+                }),
+            },
+        ),
+    );
+
     let mut clients = HashSet::new();
     for (_, (p1, p2)) in pairs.iter() {
         clients.insert(p1.ship.clone());
