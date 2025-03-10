@@ -5,10 +5,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     rat::init("testRat2", None)?;
 
-    rat::bacon("var1", &mut var)?;
+    rat::bacon("var1", &mut var, sea::VariableType::U8)?;
     assert!(var == rat::rtrue());
 
-    rat::bacon("var3", &mut var3)?;
+    rat::bacon("var3", &mut var3, sea::VariableType::U8)?;
     assert!(var3 == rat::rfalse());
 
     rat::deinit()?;

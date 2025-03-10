@@ -87,11 +87,14 @@ pub fn deinit() -> anyhow::Result<()> {
 /// When the code reaches a variable that is watched, call this function to communitcate synchronously with the link.
 /// It syncs with the other rats and gets the action to be taken for the current var.
 /// It then applies the action to the variable and returns.
-pub fn bacon<T>(variable_name: &str, data: &mut T) -> anyhow::Result<()>
+pub fn bacon<T>(
+    variable_name: &str,
+    data: &mut T,
+    variable_type: VariableType,
+) -> anyhow::Result<()>
 where
     T: sea::net::SeaSendableBuffer,
 {
-    debug!("start bacon");
     let rat_arc = RAT
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
@@ -105,7 +108,6 @@ where
         "Async Runtime not initialized. Call init() before calling bacon()."
     ))?;
 
-    debug!("start on block_on");
     rt.block_on(async move {
         match rat.ask_for_action(variable_name).await {
             Ok(sea::Action::Sail) => {
@@ -115,7 +117,10 @@ where
             }
             Ok(sea::Action::Shoot { target }) => {
                 info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
-                rat.ship.get_cannon().shoot(&target, data.clone()).await?;
+                rat.ship
+                    .get_cannon()
+                    .shoot(&target, data.clone(), variable_type)
+                    .await?;
 
                 info!(
                     "Rat {} finished shooting {} at {:?}",
@@ -208,7 +213,7 @@ pub extern "C" fn rat_bacon_f32(
     let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix) {
+    match bacon(variable_name, &mut matrix, VariableType::F32) {
         Ok(_) => {
             for c in 0..cols {
                 for r in 0..rows {
@@ -238,7 +243,7 @@ pub extern "C" fn rat_bacon_f64(
     let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix) {
+    match bacon(variable_name, &mut matrix, VariableType::F64) {
         Ok(_) => {
             for c in 0..cols {
                 for r in 0..rows {
@@ -268,7 +273,7 @@ pub extern "C" fn rat_bacon_i32(
     let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix) {
+    match bacon(variable_name, &mut matrix, VariableType::I32) {
         Ok(_) => {
             for c in 0..cols {
                 for r in 0..rows {
@@ -298,7 +303,7 @@ pub extern "C" fn rat_bacon_u8(
     let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
     let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix) {
+    match bacon(variable_name, &mut matrix, VariableType::U8) {
         Ok(_) => {
             for c in 0..cols {
                 for r in 0..rows {

@@ -155,9 +155,6 @@ impl CoordinatorImpl {
                         let name = match client.name {
                             crate::ShipKind::Rat(name) => name,
                             crate::ShipKind::Wind(name) => name,
-                            crate::ShipKind::God => {
-                                unimplemented!("Coordinator can not connect to other coordinators.")
-                            }
                         };
 
                         let namea = name.clone();

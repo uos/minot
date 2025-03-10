@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 pub enum ShipKind {
     Rat(String),
     Wind(String),
-    God, // TODO there are better names out there
 }
 
 pub type ShipName = i128;
@@ -103,6 +102,40 @@ pub trait Ship: Send + Sync + 'static {
     fn get_cannon(&self) -> &impl Cannon;
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
+pub enum VariableType {
+    #[default]
+    StaticOnly, // statically supported but no dynamic conversion implemented
+    U8,
+    I32,
+    F32,
+    F64,
+}
+
+impl From<u8> for VariableType {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => Self::U8,
+            2 => Self::I32,
+            3 => Self::F32,
+            4 => Self::F64,
+            _ => Self::default(),
+        }
+    }
+}
+
+impl From<VariableType> for u8 {
+    fn from(value: VariableType) -> Self {
+        match value {
+            VariableType::StaticOnly => 0,
+            VariableType::U8 => 1,
+            VariableType::I32 => 2,
+            VariableType::F32 => 3,
+            VariableType::F64 => 4,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
@@ -112,12 +145,18 @@ pub trait Cannon: Send + Sync + 'static {
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
         data: impl net::SeaSendableBuffer,
+        variable_type: VariableType,
     ) -> anyhow::Result<()>;
 
     /// Catch the dumped data from the source.
     async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
     where
         T: SeaSendableBuffer;
+
+    async fn catch_dyn(
+        &self,
+        target: &crate::NetworkShipAddress,
+    ) -> anyhow::Result<(String, VariableType)>;
 }
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]

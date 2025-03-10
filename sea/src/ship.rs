@@ -2,11 +2,12 @@ use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use anyhow::anyhow;
 use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     client::Client,
     net::{PacketKind, SeaSendableBuffer},
-    ShipKind,
+    ShipKind, VariableType,
 };
 
 pub struct NetworkShipImpl {
@@ -19,6 +20,7 @@ impl crate::Cannon for NetworkShipImpl {
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
         data: impl crate::net::SeaSendableBuffer,
+        variable_type: VariableType,
     ) -> anyhow::Result<()> {
         let client = self.client.lock().await;
         for target in targets.iter() {
@@ -29,7 +31,7 @@ impl crate::Cannon for NetworkShipImpl {
             ))
             .unwrap();
             client
-                .send_raw_to_other_client(ip_addr, target.port, data)
+                .send_raw_to_other_client(ip_addr, target.port, data, variable_type)
                 .await?;
         }
         Ok(())
@@ -42,8 +44,40 @@ impl crate::Cannon for NetworkShipImpl {
     ) -> anyhow::Result<T> {
         let client = self.client.lock().await;
         let data = client.recv_raw_from_other_client(Some(target)).await?;
-        let mat = T::set_from_packet(data).expect("Could not decode data to Matrix");
+        let mat = T::set_from_packet(data.0).expect("Could not decode data to Matrix");
         Ok(mat)
+    }
+    async fn catch_dyn(
+        &self,
+        target: &crate::NetworkShipAddress,
+    ) -> anyhow::Result<(String, VariableType)> {
+        let client = self.client.lock().await;
+        let (raw_data, var_type) = client.recv_raw_from_other_client(Some(target)).await?;
+        let strrep = match var_type {
+            VariableType::StaticOnly => {
+                return Err(anyhow!(
+                    "Received Variable without dynamic type info, could not decode."
+                ));
+            }
+            VariableType::U8 => {
+                let mat = nalgebra::DMatrix::<u8>::set_from_packet(raw_data)?;
+                format!("{:?}", mat)
+            }
+            VariableType::I32 => {
+                let mat = nalgebra::DMatrix::<i32>::set_from_packet(raw_data)?;
+                format!("{:?}", mat)
+            }
+            VariableType::F32 => {
+                let mat = nalgebra::DMatrix::<f32>::set_from_packet(raw_data)?;
+                format!("{:?}", mat)
+            }
+            VariableType::F64 => {
+                let mat = nalgebra::DMatrix::<f64>::set_from_packet(raw_data)?;
+                format!("{:?}", mat)
+            }
+        };
+
+        Ok((strrep, var_type))
     }
 }
 

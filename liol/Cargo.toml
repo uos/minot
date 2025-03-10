@@ -25,3 +25,16 @@ strip = "debuginfo" # Significantly reduce binary size
 
 [profile.dev.package.backtrace]
 opt-level = 3
+
+[[bin]]
+name = "coordinator"
+path = "src/coord.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "compare"
+path = "src/cmp.rs"
+test = false
+bench = false
+

@@ -199,10 +199,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        sea::ShipKind::God => {
-                            error!("Other coordinator connected to this coordinator.");
-                            return;
-                        }
                     },
                     Err(e) => {
                         error!("Could not receive new client: {}", e);

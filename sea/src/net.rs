@@ -431,7 +431,6 @@ impl Sea {
         match kind {
             ShipKind::Rat(name) => ShipKind::Rat(Self::pad_string(name)),
             ShipKind::Wind(name) => ShipKind::Wind(Self::pad_string(name)),
-            ShipKind::God => ShipKind::God,
         }
     }
 
@@ -439,7 +438,6 @@ impl Sea {
         match kind {
             ShipKind::Rat(name) => ShipKind::Rat(Self::reverse_padding(name)),
             ShipKind::Wind(name) => ShipKind::Wind(Self::reverse_padding(name)),
-            ShipKind::God => ShipKind::God,
         }
     }
 

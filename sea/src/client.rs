@@ -17,7 +17,7 @@ use crate::{
         CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
         CLIENT_TO_CLIENT_TIMEOUT, CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER,
     },
-    ShipKind, ShipName,
+    ShipKind, ShipName, VariableType,
 };
 
 #[derive(Debug)]
@@ -60,12 +60,7 @@ impl Client {
 
     pub async fn init(ship_kind: ShipKind, external_ip: Option<[u8; 4]>) -> Self {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let tcp_port = if matches!(ship_kind, ShipKind::God) {
-            CLIENT_LISTEN_PORT
-        } else {
-            0
-        };
-        let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], tcp_port);
+        let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0);
         // TCP socket for Coordinator communication
         let socket = std::net::TcpListener::bind(&bind_address).expect("could not bind tcp socket");
 
@@ -413,6 +408,7 @@ impl Client {
         address: &IpAddr,
         port: u16,
         data: Vec<u8>,
+        variable_type: VariableType,
     ) -> anyhow::Result<()> {
         loop {
             let addr = format!("{}:{}", address.to_string(), port);
@@ -449,6 +445,7 @@ impl Client {
                         packet_size_buffer[1],
                         packet_size_buffer[2],
                         packet_size_buffer[3],
+                        variable_type.into(),
                     ];
                     buffer.extend_from_slice(&data);
                     stream.write_all(&buffer).await?;
@@ -462,7 +459,7 @@ impl Client {
     pub async fn recv_raw_from_other_client(
         &self,
         sender: Option<&crate::NetworkShipAddress>,
-    ) -> anyhow::Result<Vec<u8>> {
+    ) -> anyhow::Result<(Vec<u8>, VariableType)> {
         loop {
             let stream = tokio::time::timeout(
                 CLIENT_TO_CLIENT_TIMEOUT,
@@ -470,6 +467,7 @@ impl Client {
             )
             .await;
 
+            let mut variable_type = VariableType::default();
             match stream {
                 Err(_) => {
                     return Err(anyhow!(
@@ -525,6 +523,7 @@ impl Client {
                             } else {
                                 // read 4 bytes into u32 for length of rest message
                                 let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                                variable_type = VariableType::from(buf[5]);
                                 msg_size = u32::from_be_bytes(msg_size_buf);
                                 first = false;
                             }
@@ -532,14 +531,14 @@ impl Client {
 
                         buffer.extend_from_slice(&buf[..n]);
 
-                        if buffer.len() as u32 == msg_size + 5 {
+                        if buffer.len() as u32 == msg_size + 6 {
                             break;
                         }
                     }
 
                     if !buffer.is_empty() {
-                        buffer = buffer[5..buffer.len()].into(); // TODO for large data, maybe better to directly delete the indicators when checking them to avoid large copies
-                        return Ok(buffer);
+                        buffer = buffer[6..buffer.len()].into(); // TODO for large data, maybe better to directly delete the indicators when checking them to avoid large copies
+                        return Ok((buffer, variable_type));
                     }
 
                     return Err(anyhow!("Received data is not for us"));

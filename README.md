@@ -1,7 +1,6 @@
 # liolink
 
 ## TODOs
-- when rat2.c is initialized first, it never finds the coordinator
 - c version copies matrix because mapping to nalgebra did not work, maybe try mapping again
 
 ## Rats
