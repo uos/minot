@@ -98,7 +98,6 @@ impl crate::Ship for NetworkShipImpl {
                 .read()
                 .unwrap()
                 .as_ref()
-                .cloned()
                 .map(|sub| sub.subscribe())
                 .ok_or(anyhow!(
                     "Sender to Coordinator is available but Receiver is not."
@@ -137,24 +136,27 @@ impl crate::Ship for NetworkShipImpl {
         self
     }
 
-    async fn wait_for_action(&self) -> anyhow::Result<crate::Action> {
-        let client = self.client.lock().await;
-        let coord_receive = client.coordinator_receive.read().unwrap().clone();
-        if let Some(receiver) = coord_receive {
-            let mut sub = receiver.subscribe();
-            while let Ok((packet, _)) = sub.recv().await {
-                if let PacketKind::RatAction(action) = packet.data {
-                    return Ok(action);
-                }
-            }
-            return Err(anyhow!(
-                "Could not receive action while Channel was subscribed."
-            ));
-        } else {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            return self.wait_for_action().await;
-        }
-    }
+    // async fn wait_for_action(&self) -> anyhow::Result<crate::Action> {
+    //     let client = self.client.lock().await;
+    //     let coord_receive = client.coordinator_receive.read().unwrap().clone();
+    //     if let Some(receiver) = coord_receive {
+    //         let mut sub = receiver.subscribe();
+    //         debug!("subbed");
+    //         while let Ok((packet, _)) = sub.recv().await {
+    //             debug!("received");
+    //             if let PacketKind::RatAction(action) = packet.data {
+    //                 return Ok(action);
+    //             }
+    //         }
+    //         return Err(anyhow!(
+    //             "Could not receive action while Channel was subscribed."
+    //         ));
+    //     } else {
+    //         debug!("waiting to be available..");
+    //         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    //         return self.wait_for_action().await;
+    //     }
+    // }
 
     async fn wait_for_wind(&self) -> anyhow::Result<crate::WindData> {
         let client = self.client.lock().await;
@@ -220,5 +222,32 @@ impl NetworkShipImpl {
         // });
 
         Ok(Self { client })
+    }
+
+    pub async fn next_catch(&self) -> anyhow::Result<crate::NetworkShipAddress> {
+        let mut sub = {
+            let client = self.client.lock().await;
+            let sub = client
+                .coordinator_receive
+                .read()
+                .unwrap()
+                .as_ref()
+                .map(|sub| sub.subscribe())
+                .ok_or(anyhow!(
+                    "Sender to Coordinator is available but Receiver is not."
+                ))?;
+            sub
+        };
+
+        debug!("locked");
+        loop {
+            let (packet, _) = sub.recv().await.map_err(|e| {
+                anyhow!("Could not receive answer for variable question from coordinator: {e}")
+            })?;
+            debug!("received something");
+            if let PacketKind::RatAction(crate::Action::Catch { source }) = packet.data {
+                return Ok(source);
+            }
+        }
     }
 }

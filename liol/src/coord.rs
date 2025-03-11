@@ -36,7 +36,7 @@ impl Network {
 // hashmap[string] => ID
 // ID => VariableRule
 
-use sea::Coordinator;
+use sea::{ActionPlan, Coordinator};
 
 #[derive(Debug)]
 enum CoordinatorTask {
@@ -55,51 +55,58 @@ enum CoordinatorTask {
     },
 }
 
+pub const COMPARE_NODE_NAME: &'static str = "#compare";
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let mut pairs = HashMap::new();
-    pairs.insert(
+    // -- CONFIG BEGIN --
+    let mut rules = HashMap::new();
+    rules.insert(
         "var1".to_string(),
-        (
-            sea::VariableHuman {
-                ship: "testRat1".to_string(),
-                strategy: Some(sea::ActionPlan::Shoot {
-                    target: vec!["testRat2".to_string()],
-                }),
-            },
-            sea::VariableHuman {
-                ship: "testRat2".to_string(),
-                strategy: Some(sea::ActionPlan::Catch {
-                    source: "testRat1".to_string(),
-                }),
-            },
-        ),
+        vec![sea::VariableHuman {
+            ship: "testRat1".to_string(),
+            strategy: Some(sea::ActionPlan::Shoot {
+                target: vec!["testRat2".to_string()],
+            }),
+        }],
     );
 
-    pairs.insert(
+    rules.insert(
         "var3".to_string(),
-        (
+        vec![sea::VariableHuman {
+            ship: "testRat2".to_string(),
+            strategy: Some(sea::ActionPlan::Shoot {
+                target: vec!["testRat1".to_string(), COMPARE_NODE_NAME.to_string()],
+            }),
+        }],
+    );
+
+    rules.insert(
+        "var4".to_string(),
+        vec![
             sea::VariableHuman {
                 ship: "testRat2".to_string(),
                 strategy: Some(sea::ActionPlan::Shoot {
-                    target: vec!["testRat1".to_string()],
+                    target: vec![COMPARE_NODE_NAME.to_string()],
                 }),
             },
             sea::VariableHuman {
                 ship: "testRat1".to_string(),
-                strategy: Some(sea::ActionPlan::Catch {
-                    source: "testRat2".to_string(),
+                strategy: Some(sea::ActionPlan::Shoot {
+                    target: vec![COMPARE_NODE_NAME.to_string()],
                 }),
             },
-        ),
+        ],
     );
+    // -- CONFIG END --
 
     let mut clients = HashSet::new();
-    for (_, (p1, p2)) in pairs.iter() {
-        clients.insert(p1.ship.clone());
-        clients.insert(p2.ship.clone());
+    for (_, inner_clients) in rules.iter() {
+        inner_clients.iter().for_each(|client| {
+            clients.insert(client.ship.clone());
+        });
     }
 
     // TODO parse config/ratlang and see if all mentioned rats are registered
@@ -108,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // only use the rats that are mentioned. filter out the rest.
     // Winds are not mapped to rats, so they won't be filtered.
 
-    let pairs = std::sync::Arc::new(pairs);
+    let rules = std::sync::Arc::new(rules);
 
     let network = Network::new();
 
@@ -151,55 +158,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             loop {
                 match new_clients_chan.recv().await {
-                    Ok(client) => match client.name {
-                        sea::ShipKind::Rat(name) => {
-                            let mut client_news = client.recv.subscribe();
-                            let inner_name = name.clone();
-                            let rat_pairs = pairs.clone();
-                            let rat_coord_tx = coord_tx_new_client.clone();
-                            // spawn task to handle variable requests for this rat
-                            tokio::spawn(async move {
-                                loop {
-                                    match client_news.recv().await {
-                                        Ok((packet, _)) => {
-                                            if let PacketKind::VariableTaskRequest(variable) =
-                                                packet.data
-                                            {
-                                                let action = sea::get_strategy(
-                                                    &rat_pairs,
-                                                    &inner_name,
-                                                    variable,
-                                                );
-                                                rat_coord_tx
-                                                    .send(CoordinatorTask::SendRatAction {
-                                                        ship_name: inner_name.clone(),
-                                                        data: action,
-                                                    })
-                                                    .unwrap();
+                    Ok(client) => {
+                        match client.name {
+                            sea::ShipKind::Rat(name) => {
+                                let mut client_news = client.recv.subscribe();
+                                let inner_name = name.clone();
+                                let rat_rules = rules.clone();
+                                let rat_coord_tx = coord_tx_new_client.clone();
+                                // spawn task to handle variable requests for this rat
+                                tokio::spawn(async move {
+                                    let comparer_name = COMPARE_NODE_NAME.to_string();
+                                    loop {
+                                        match client_news.recv().await {
+                                            Ok((packet, _)) => {
+                                                if let PacketKind::VariableTaskRequest(variable) =
+                                                    packet.data
+                                                {
+                                                    let comparer_actions = sea::get_strategies(
+                                                        &rat_rules,
+                                                        &comparer_name,
+                                                        variable.clone(),
+                                                    );
+
+                                                    dbg!(&comparer_actions, &variable);
+
+                                                    for action in comparer_actions {
+                                                        if !matches!(action, ActionPlan::Sail) {
+                                                            rat_coord_tx
+                                                            .send(CoordinatorTask::SendRatAction {
+                                                                ship_name: comparer_name.clone(),
+                                                                data: action,
+                                                            })
+                                                            .unwrap();
+                                                        }
+                                                    }
+
+                                                    let mut my_actions = sea::get_strategies(
+                                                        &rat_rules,
+                                                        &inner_name,
+                                                        variable.clone(),
+                                                    );
+
+                                                    if my_actions.is_empty() {
+                                                        my_actions.push(ActionPlan::Sail);
+                                                    }
+
+                                                    // answer the client that asked
+                                                    for action in my_actions {
+                                                        rat_coord_tx
+                                                            .send(CoordinatorTask::SendRatAction {
+                                                                ship_name: inner_name.clone(),
+                                                                data: action,
+                                                            })
+                                                            .unwrap();
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("Could not receive packet from client {inner_name}: {e}");
+                                                return;
                                             }
                                         }
-                                        Err(e) => {
-                                            warn!("Could not receive packet from client {inner_name}: {e}");
-                                            return;
-                                        }
                                     }
-                                }
-                            });
-                        }
-                        sea::ShipKind::Wind(_name) => {
-                            // TODO WIND... needs to send to every wind that is added here via name, so we need a channel that awaits all expected winds (or currently connected but then its race condition) and this needs to be managed here. in the main code the wind can only be blown after all are connected
-                            while let Some(data) = wind_rx.recv().await {
-                                for wind in network.winds.iter() {
-                                    coord_tx_new_client
-                                        .send(CoordinatorTask::SendWind {
-                                            ship_name: wind.name.clone(),
-                                            data: data.clone(),
-                                        })
-                                        .unwrap();
+                                });
+                            }
+                            sea::ShipKind::Wind(_name) => {
+                                // TODO WIND... needs to send to every wind that is added here via name, so we need a channel that awaits all expected winds (or currently connected but then its race condition) and this needs to be managed here. in the main code the wind can only be blown after all are connected
+                                while let Some(data) = wind_rx.recv().await {
+                                    for wind in network.winds.iter() {
+                                        coord_tx_new_client
+                                            .send(CoordinatorTask::SendWind {
+                                                ship_name: wind.name.clone(),
+                                                data: data.clone(),
+                                            })
+                                            .unwrap();
+                                    }
                                 }
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Could not receive new client: {}", e);
                     }

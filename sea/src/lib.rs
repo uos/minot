@@ -20,11 +20,12 @@ pub enum ShipKind {
 
 pub type ShipName = i128;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkShipAddress {
     ip: [u8; 4],
     port: u16,
     ship: ShipName,
+    kind: ShipKind,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -63,30 +64,47 @@ pub struct Variable {
     pub strategy: Option<Action>,
 }
 
-pub type VarPair = (Variable, Variable);
-pub type HumanVarPair = (VariableHuman, VariableHuman);
-
-pub fn get_strategy(
-    haystack: &HashMap<String, HumanVarPair>,
+pub fn get_strategies(
+    haystack: &HashMap<String, Vec<VariableHuman>>,
     rat_ship: &str,
     variable: String,
-) -> ActionPlan {
+) -> Vec<ActionPlan> {
     match haystack.get(&variable) {
-        None => ActionPlan::default(),
-        Some((left_var, right_var)) => match (left_var.ship.as_str(), right_var.ship.as_str()) {
-            (ship_l, ship_r) if ship_l == rat_ship && ship_r == rat_ship => {
-                panic!("Rule with 2 of the same ships. Should have been checked before");
-            }
-            (ship, _) if ship == rat_ship => match left_var.strategy.as_ref() {
-                Some(action) => action.clone(),
-                None => ActionPlan::default(),
-            },
-            (_, ship) if ship == rat_ship => match right_var.strategy.as_ref() {
-                Some(action) => action.clone(),
-                None => ActionPlan::default(),
-            },
-            _ => ActionPlan::default(),
-        },
+        None => vec![ActionPlan::default()],
+        Some(plans) => {
+            // directly because rule was set
+            let directly = plans
+                .iter()
+                .filter(|plan| plan.ship == rat_ship)
+                .filter_map(|el| el.strategy.clone())
+                .collect::<Vec<_>>();
+
+            // as other part of a rule
+            let mut indirect = plans
+                .iter()
+                .filter_map(|plan| match plan.strategy.as_ref()? {
+                    ActionPlan::Sail => None,
+                    ActionPlan::Shoot { target } => target
+                        .iter()
+                        .find(|shoot_target| *shoot_target == rat_ship)
+                        .map(|_| ActionPlan::Catch {
+                            source: plan.ship.clone(),
+                        }),
+                    ActionPlan::Catch { source } => {
+                        if source == rat_ship {
+                            Some(ActionPlan::Shoot {
+                                target: vec![source.clone()],
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            indirect.extend(directly);
+            indirect
+        }
     }
 }
 
@@ -95,7 +113,7 @@ pub trait Ship: Send + Sync + 'static {
     /// Indicate a trigger point and ask the link pilot what to do with the variable.
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<Action>;
 
-    async fn wait_for_action(&self) -> anyhow::Result<crate::Action>;
+    // async fn wait_for_action(&self) -> anyhow::Result<crate::Action>;
 
     async fn wait_for_wind(&self) -> anyhow::Result<WindData>;
 

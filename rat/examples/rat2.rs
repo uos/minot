@@ -2,6 +2,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let mut var = rat::rfalse();
     let mut var3 = rat::rfalse();
+    let mut var4 = rat::rfalse();
 
     rat::init("testRat2", None)?;
 
@@ -10,6 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     rat::bacon("var3", &mut var3, sea::VariableType::U8)?;
     assert!(var3 == rat::rfalse());
+
+    rat::bacon("var4", &mut var4, sea::VariableType::U8)?;
+    assert!(var4 == rat::rfalse());
 
     rat::deinit()?;
 

@@ -3,6 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut var1 = rat::rtrue();
     let mut var2 = rat::rfalse();
     let mut var3 = rat::rtrue();
+    let mut var4 = rat::rtrue();
 
     rat::init("testRat1", None)?;
 
@@ -16,6 +17,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     rat::bacon("var3", &mut var3, sea::VariableType::U8)?;
     assert!(var3 == rat::rfalse());
+
+    rat::bacon("var4", &mut var4, sea::VariableType::U8)?;
+    assert!(var4 == rat::rtrue());
 
     rat::deinit()?;
 

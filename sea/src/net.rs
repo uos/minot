@@ -367,6 +367,7 @@ impl Sea {
                                     ip: ip_parsed.octets(),
                                     port: client_tcp_port,
                                     ship: generated_id,
+                                    kind: ship_kind.clone(),
                                 };
 
                                 let welcome_packet = Packet {

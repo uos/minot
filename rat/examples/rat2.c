@@ -13,11 +13,14 @@ int main() {
 
   unsigned char* var = NULL;
   unsigned char* var3 = NULL;
+  unsigned char* var4 = NULL;
   var = malloc(sizeof(*var));
   var3 = malloc(sizeof(*var3));
+  var4 = malloc(sizeof(*var4));
 
   *var = false;
   *var3 = false;
+  *var4 = false;
 
   ret = rat_bacon_u8("var1", var, 1, 1);
   if (ret != 0) {
@@ -35,6 +38,14 @@ int main() {
   }
   assert(*var3 == false);
   free(var3);
+
+  ret = rat_bacon_u8("var4", var4, 1, 1);
+  if (ret != 0) {
+    printf("Error while bacon var3");
+    return ret;
+  }
+  assert(*var4 == false);
+  free(var4);
 
   ret = rat_deinit();
   if (ret != 0) {

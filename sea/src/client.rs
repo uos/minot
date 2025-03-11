@@ -467,6 +467,7 @@ impl Client {
             )
             .await;
 
+            debug!("recv from other");
             let mut variable_type = VariableType::default();
             match stream {
                 Err(_) => {
