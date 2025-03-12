@@ -37,7 +37,7 @@ bench = false
 
 [[bin]]
 name = "liol"
-path = "src/cmp.rs"
+path = "src/lighthouse.rs"
 test = false
 bench = false
 
