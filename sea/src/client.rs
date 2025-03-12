@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 
 use anyhow::anyhow;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pnet::datalink::{self, NetworkInterface};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -13,9 +13,10 @@ use tokio::{
 
 use crate::{
     net::{
-        Packet, PacketKind, Sea, CLIENT_HEARTBEAT_TCP_INTERVAL, CLIENT_HEARTBEAT_TCP_TIMEOUT,
-        CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
-        CLIENT_TO_CLIENT_TIMEOUT, CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER,
+        Header, Packet, PacketKind, Sea, CLIENT_HEARTBEAT_TCP_INTERVAL,
+        CLIENT_HEARTBEAT_TCP_TIMEOUT, CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT,
+        CLIENT_REJOIN_POLL_INTERVAL, CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT, CLIENT_TO_CLIENT_TIMEOUT,
+        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER,
     },
     ShipKind, ShipName, VariableType,
 };
@@ -244,6 +245,7 @@ impl Client {
                 packet_size_buffer[3],
             ];
             buffer.extend_from_slice(&packet);
+            // debug!("writing buffer: {}, {}", buffer.len(), packet.len());
             if let Err(e) = wh.write_all(&buffer).await {
                 error!("could not send to tcp socket: {e}");
                 channel.close();
@@ -258,6 +260,7 @@ impl Client {
         channel: tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>,
         partner: Option<SocketAddr>,
     ) {
+        const COMM_HEADER_BYTES_N: usize = 5;
         loop {
             tokio::task::yield_now().await;
             let mut buffer = Vec::with_capacity(1024);
@@ -267,6 +270,7 @@ impl Client {
             // collect parts to complete a single packet
             let mut is_for_us = true;
             loop {
+                debug!("reading");
                 let mut buf = [0; 1024];
                 let n = match rh.read(&mut buf).await {
                     Err(e) => {
@@ -280,46 +284,71 @@ impl Client {
                     return;
                 }
 
-                if first {
-                    if buf[0] != PROTO_IDENTIFIER {
-                        is_for_us = false;
+                debug!("reading from buffer {n}");
+                // TODO test very large packets that do not fit into the 1024 buffer
+
+                // handles multiple packets in single buffer
+                let mut cursor = 0;
+                loop {
+                    dbg!(cursor, buf.len(), n);
+                    if cursor >= buf.len() || cursor >= n {
                         break;
-                    } else {
-                        is_for_us = true;
-                        let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                        msg_size = u32::from_be_bytes(msg_size_buf);
-                        first = false;
-                        buffer.extend_from_slice(&buf[5..n]);
                     }
-                } else {
-                    buffer.extend_from_slice(&buf[..n]);
+                    let max_buf;
+                    if first {
+                        if buf[cursor] != PROTO_IDENTIFIER {
+                            debug!("detected not for us at cursor {}", cursor);
+                            is_for_us = false;
+                            break;
+                        } else {
+                            is_for_us = true;
+                            cursor += COMM_HEADER_BYTES_N;
+                            let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                            msg_size = u32::from_be_bytes(msg_size_buf) as usize;
+                            max_buf = std::cmp::min(msg_size + cursor, n);
+                            dbg!(max_buf);
+                            first = false;
+                            buffer.extend_from_slice(&buf[cursor..max_buf]);
+                        }
+                    } else {
+                        max_buf = std::cmp::min(msg_size + cursor, n);
+                        buffer.extend_from_slice(&buf[cursor..max_buf]);
+                    }
+                    cursor = max_buf;
+                    dbg!(msg_size, buffer.len());
+                    if msg_size == buffer.len() {
+                        debug!("got one msg in buffer, cntd");
+                        let packet: Packet = match bincode::deserialize(&buffer) {
+                            Err(e) => {
+                                error!("Received package is broken: {e}");
+                                continue;
+                            }
+                            Ok(packet) => packet,
+                        };
+
+                        dbg!(&packet);
+
+                        match channel.send((packet, partner.clone())) {
+                            Err(e) => {
+                                error!("TCP Listener could not send to internal channel: {e}");
+                            }
+                            _ => {}
+                        };
+                        buffer.clear();
+                        is_for_us = false;
+                        first = true;
+                        msg_size = 0;
+                    }
                 }
 
-                if msg_size == buffer.len() as u32 {
+                // the entire buf was read into correctly sized chunks for packets
+                if !is_for_us || buffer.is_empty() {
+                    debug!("not for us or buffer empty");
                     break;
                 }
+
+                // last packet was not read completely into the buf size so rerun the read command
             }
-
-            if !is_for_us || buffer.is_empty() || buffer.len() as u32 != msg_size {
-                continue;
-            }
-
-            let packet: Packet = match bincode::deserialize(&buffer) {
-                Err(e) => {
-                    error!("Received package is broken: {e}");
-                    continue;
-                }
-                Ok(packet) => packet,
-            };
-
-            dbg!(&packet);
-
-            match channel.send((packet, partner.clone())) {
-                Err(e) => {
-                    error!("TCP Listener could not send to internal channel: {e}");
-                }
-                _ => {}
-            };
         }
     }
 
@@ -435,8 +464,53 @@ impl Client {
                     }
                 },
                 Ok(Ok(mut stream)) => {
+                    // ask if ready to receive by sending ack and wait for ack answer
+                    let ack_data = crate::net::Packet {
+                        header: Header::default(),
+                        data: PacketKind::Acknowledge,
+                    };
+                    let ack_data = bincode::serialize(&ack_data).expect("non serializable ack");
                     debug!("connected to {}", addr);
                     stream.writable().await?;
+
+                    // ask for other client to get ready
+                    {
+                        let mut buf = vec![0; ack_data.len()];
+                        loop {
+                            stream.write_all(&ack_data).await?;
+                            debug!("written ack_data, wait for response");
+
+                            let timeout = tokio::time::timeout(
+                                CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT,
+                                stream.read_exact(&mut buf),
+                            )
+                            .await;
+
+                            match timeout {
+                                Ok(Ok(_)) => {
+                                    let received_packet =
+                                        bincode::deserialize::<crate::net::Packet>(&buf)?;
+                                    if matches!(
+                                        received_packet.data,
+                                        crate::net::PacketKind::Acknowledge
+                                    ) {
+                                        break;
+                                    }
+                                    warn!("Did not receive ack packet");
+                                }
+                                Err(_) => {
+                                    debug!(
+                                        "Timeout receiving ack to start sending from other client."
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    error!("Could not read from socket: {e}");
+                                }
+                            }
+                        }
+                    }
+
+                    debug!("received ack from other client, sending now");
                     let packet_size = data.len() as u32;
                     let packet_size_buffer = packet_size.to_be_bytes();
                     let mut buffer = vec![
@@ -499,11 +573,33 @@ impl Client {
                         }
                     }
                     stream.readable().await?;
+
+                    // Ask for other client if it is ready. Normally you would assume TCP handles handshakes etc but it seems to write
+                    // to the socket into the void without the receiver being ready to receive anything. Tokio then merges the buffers when calling recv()?
+                    // Another option would be to init the socket on each receive but then the socket could be set in the meantime by the operating system.
+                    let ack_data = crate::net::Packet {
+                        header: Header::default(),
+                        data: PacketKind::Acknowledge,
+                    };
+                    let ack_data = bincode::serialize(&ack_data).expect("non serializable ack");
+                    let mut buf = vec![0; ack_data.len()];
+                    stream.read_exact(&mut buf).await.map_err(|e| {
+                        anyhow!("Could not read exact in receiver for other client comm: {e}")
+                    })?;
+                    let received_packet = bincode::deserialize::<crate::net::Packet>(&buf)?;
+                    if !matches!(received_packet.data, crate::net::PacketKind::Acknowledge) {
+                        return Err(anyhow!("Received packet for 1-1 handshake is not Ack"));
+                    }
+
+                    stream.write_all(&ack_data).await?;
+                    debug!("handshake sucess");
+
                     let mut buffer = Vec::with_capacity(1024);
                     let mut first = true;
                     let mut msg_size = 0;
 
                     loop {
+                        // Hint: This process only works as long as no other client is writing to our current stream. With the coordinator socket we sometimes get 2 messages into the same stream but they are from different clients talking to the same socket.
                         let mut buf = [0; 1024];
                         let n = match stream.read(&mut buf).await {
                             Err(e) => {

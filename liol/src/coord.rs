@@ -178,6 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         &rat_rules,
                                                         &comparer_name,
                                                         variable.clone(),
+                                                        Some(&inner_name),
                                                     );
 
                                                     dbg!(&comparer_actions, &variable);
@@ -197,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         &rat_rules,
                                                         &inner_name,
                                                         variable.clone(),
+                                                        None,
                                                     );
 
                                                     if my_actions.is_empty() {

@@ -68,6 +68,7 @@ pub fn get_strategies(
     haystack: &HashMap<String, Vec<VariableHuman>>,
     rat_ship: &str,
     variable: String,
+    indirect_parent_rat: Option<&str>,
 ) -> Vec<ActionPlan> {
     match haystack.get(&variable) {
         None => vec![ActionPlan::default()],
@@ -82,6 +83,17 @@ pub fn get_strategies(
             // as other part of a rule
             let mut indirect = plans
                 .iter()
+                .filter_map(|plan| {
+                    if let Some(partner) = indirect_parent_rat {
+                        if plan.ship == partner {
+                            Some(plan)
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(plan)
+                    }
+                })
                 .filter_map(|plan| match plan.strategy.as_ref()? {
                     ActionPlan::Sail => None,
                     ActionPlan::Shoot { target } => target

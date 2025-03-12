@@ -2,7 +2,6 @@ use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use anyhow::anyhow;
 use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     client::Client,
@@ -11,7 +10,7 @@ use crate::{
 };
 
 pub struct NetworkShipImpl {
-    client: Arc<tokio::sync::Mutex<Client>>,
+    pub client: Arc<tokio::sync::Mutex<Client>>,
 }
 
 #[async_trait::async_trait]
@@ -85,7 +84,6 @@ impl crate::Cannon for NetworkShipImpl {
 impl crate::Ship for NetworkShipImpl {
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<crate::Action> {
         let client = self.client.lock().await;
-        debug!("asking for action, locked client");
         let coord_send = client.coordinator_send.read().unwrap().clone();
         if let Some(sender) = coord_send {
             let action_request = crate::net::Packet {
@@ -239,13 +237,14 @@ impl NetworkShipImpl {
             sub
         };
 
-        debug!("locked");
+        debug!("waiting");
         loop {
             let (packet, _) = sub.recv().await.map_err(|e| {
                 anyhow!("Could not receive answer for variable question from coordinator: {e}")
             })?;
             debug!("received something");
             if let PacketKind::RatAction(crate::Action::Catch { source }) = packet.data {
+                debug!("received rat action");
                 return Ok(source);
             }
         }
