@@ -1,12 +1,12 @@
 use anyhow::anyhow;
-use log::{debug, error, info};
+use log::{error, info};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use sea::{ship::NetworkShipImpl, *};
 
 pub struct Rat {
     name: String,
-    ship: NetworkShipImpl,
+    ship: Option<NetworkShipImpl>,
 }
 
 pub fn rfalse() -> nalgebra::DMatrix<u8> {
@@ -24,9 +24,28 @@ static RT: LazyLock<Mutex<Option<Arc<tokio::runtime::Runtime>>>> =
 static RAT: LazyLock<Mutex<Option<Rat>>> = LazyLock::new(|| Mutex::new(None));
 
 impl Rat {
-    fn create(name: &str, rt: Arc<tokio::runtime::Runtime>) -> anyhow::Result<Self> {
+    fn create(
+        name: &str,
+        timeout: Option<std::time::Duration>,
+        rt: Arc<tokio::runtime::Runtime>,
+    ) -> anyhow::Result<Self> {
         let ship = rt.block_on(async {
-            sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None).await
+            let init_future =
+                sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None);
+
+            match timeout {
+                None => {
+                    return Ok(Some(init_future.await?));
+                }
+                Some(t) => match tokio::time::timeout(t, init_future).await {
+                    Err(_) => {
+                        return Ok::<Option<NetworkShipImpl>, anyhow::Error>(None);
+                    }
+                    Ok(t) => {
+                        return Ok(Some(t?));
+                    }
+                },
+            }
         })?;
 
         Ok(Self {
@@ -34,14 +53,13 @@ impl Rat {
             ship,
         })
     }
-
-    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<Action> {
-        debug!("asking for action");
-        self.ship.ask_for_action(variable_name).await
-    }
 }
 
-pub fn init(node_name: &str, runtime: Option<Arc<tokio::runtime::Runtime>>) -> anyhow::Result<()> {
+pub fn init(
+    node_name: &str,
+    timeout: Option<std::time::Duration>,
+    runtime: Option<Arc<tokio::runtime::Runtime>>,
+) -> anyhow::Result<()> {
     let mut rat_arc = RAT
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
@@ -65,7 +83,7 @@ pub fn init(node_name: &str, runtime: Option<Arc<tokio::runtime::Runtime>>) -> a
     }
 
     let rt = srt.as_ref().expect("just set").clone();
-    let new_rat = Rat::create(node_name, rt)?;
+    let new_rat = Rat::create(node_name, timeout, rt)?;
     rat_arc.replace(new_rat);
 
     Ok(())
@@ -108,52 +126,56 @@ where
         "Async Runtime not initialized. Call init() before calling bacon()."
     ))?;
 
-    rt.block_on(async move {
-        match rat.ask_for_action(variable_name).await {
-            Ok(sea::Action::Sail) => {
-                info!("Rat {} sails for variable {}", rat.name, variable_name);
+    if let Some(rat_ship) = rat.ship.as_ref() {
+        rt.block_on(async move {
+            match rat_ship.ask_for_action(variable_name).await {
+                Ok(sea::Action::Sail) => {
+                    info!("Rat {} sails for variable {}", rat.name, variable_name);
 
-                Ok(())
+                    Ok(())
+                }
+                Ok(sea::Action::Shoot { target }) => {
+                    info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
+                    rat_ship
+                        .get_cannon()
+                        .shoot(&target, data.clone(), variable_type)
+                        .await?;
+
+                    info!(
+                        "Rat {} finished shooting {} at {:?}",
+                        rat.name, variable_name, target
+                    );
+
+                    Ok(())
+                }
+                Ok(sea::Action::Catch { source }) => {
+                    info!(
+                        "Rat {} catches {} from {:?}",
+                        rat.name, variable_name, source
+                    );
+
+                    let recv_data = rat_ship.get_cannon().catch::<T>(&source).await?;
+
+                    info!(
+                        "Rat {} finished catching {} from {:?}",
+                        rat.name, variable_name, source
+                    );
+
+                    // let deserialized: nalgebra::DMatrix<T> = bincode::deserialize(&recv_data)
+                    // .map_err(|e| anyhow::anyhow!("Failed to deserialize data: {}", e))?;
+                    *data = recv_data;
+
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("Failed to get action: {}", e);
+                    Err(e)
+                }
             }
-            Ok(sea::Action::Shoot { target }) => {
-                info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
-                rat.ship
-                    .get_cannon()
-                    .shoot(&target, data.clone(), variable_type)
-                    .await?;
-
-                info!(
-                    "Rat {} finished shooting {} at {:?}",
-                    rat.name, variable_name, target
-                );
-
-                Ok(())
-            }
-            Ok(sea::Action::Catch { source }) => {
-                info!(
-                    "Rat {} catches {} from {:?}",
-                    rat.name, variable_name, source
-                );
-
-                let recv_data = rat.ship.get_cannon().catch::<T>(&source).await?;
-
-                info!(
-                    "Rat {} finished catching {} from {:?}",
-                    rat.name, variable_name, source
-                );
-
-                // let deserialized: nalgebra::DMatrix<T> = bincode::deserialize(&recv_data)
-                // .map_err(|e| anyhow::anyhow!("Failed to deserialize data: {}", e))?;
-                *data = recv_data;
-
-                Ok(())
-            }
-            Err(e) => {
-                error!("Failed to get action: {}", e);
-                Err(e)
-            }
-        }
-    })
+        })
+    } else {
+        Ok(())
+    }
 }
 
 // C FFI
@@ -175,11 +197,17 @@ type CFfiString = u8;
 type CFfiString = i8;
 
 #[no_mangle]
-pub extern "C" fn rat_init(node_name: *const CFfiString) -> i32 {
+pub extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i32 {
     let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
     let node_name = node_name.to_str().unwrap();
 
-    match init(node_name, None) {
+    let timeout = if timeout_secs <= 0 {
+        None
+    } else {
+        Some(std::time::Duration::from_secs(timeout_secs as u64))
+    };
+
+    match init(node_name, timeout, None) {
         Ok(_) => 0,
         Err(e) => {
             error!("Failed to init: {}", e);

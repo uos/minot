@@ -304,6 +304,7 @@ impl Client {
                             is_for_us = true;
                             cursor += COMM_HEADER_BYTES_N;
                             let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                            // TODO usize vs u32 sizes?
                             msg_size = u32::from_be_bytes(msg_size_buf) as usize;
                             max_buf = std::cmp::min(msg_size + cursor, n);
                             dbg!(max_buf);

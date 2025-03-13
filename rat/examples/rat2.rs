@@ -4,7 +4,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut var3 = rat::rfalse();
     let mut var4 = rat::rfalse();
 
-    rat::init("testRat2", None)?;
+    rat::init("testRat2", None, None)?;
 
     rat::bacon("var1", &mut var, sea::VariableType::U8)?;
     assert!(var == rat::rtrue());

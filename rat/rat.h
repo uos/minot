@@ -4,7 +4,8 @@
 #include <stddef.h>
 
 // Call once at the beginning of the program to connect with the network.
-int rat_init(const char *node_name);
+// negative or zero mute_timeout will disable all communications of the rat.
+int rat_init(const char *node_name, int mute_timeout);
 
 // Call once at the end of the program to disconnect from the network.
 int rat_deinit();

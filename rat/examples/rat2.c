@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 int main() {
-  int ret = rat_init("testRat2");
+  int ret = rat_init("testRat2", -1);
   if (ret != 0) {
     printf("Error initializing rat");
     return ret;

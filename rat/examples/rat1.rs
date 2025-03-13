@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut var3 = rat::rtrue();
     let mut var4 = rat::rtrue();
 
-    rat::init("testRat1", None)?;
+    rat::init("testRat1", None, None)?;
 
     // exists on rat2
     rat::bacon("var1", &mut var1, sea::VariableType::U8)?;
