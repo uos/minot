@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use log::{debug, error, info};
-use sea::{Action, Cannon, Ship, ShipKind};
+use sea::{coordinator::COMPARE_NODE_NAME, Action, Cannon, Ship, ShipKind};
 
 use anyhow::anyhow;
 use std::io;
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let var_data: Arc<RwLock<Vec<(String, String)>>> = Arc::new(RwLock::new(Vec::new()));
 
     let comparer =
-        sea::ship::NetworkShipImpl::init(ShipKind::Rat(coord::COMPARE_NODE_NAME.to_string()), None)
+        sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)
             .await?;
 
     // let (ndata_tx, mut ndata_rx) = tokio::sync::mpsc::channel(10);

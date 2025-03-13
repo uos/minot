@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use log::{debug, error, info, warn};
+use sea::coordinator::COMPARE_NODE_NAME;
 // use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
 use sea::{
     coordinator::CoordinatorImpl,
@@ -55,8 +56,6 @@ enum LighthouseTask {
     },
 }
 
-pub const COMPARE_NODE_NAME: &'static str = "#compare";
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -109,9 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // TODO parse config/ratlang and see if all mentioned rats are registered
-    // err and exit if not.
-    // On exit: disconnect all members of the network.
+    // TODO On exit: disconnect all members of the network.
     // only use the rats that are mentioned. filter out the rest.
     // Winds are not mapped to rats, so they won't be filtered.
 
@@ -142,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 data: sea::net::PacketKind::Acknowledge,
             };
             for (_client_name, client) in clients.iter() {
+                // TODO check here
                 match client.sender.send(ack.clone()).await {
                     Err(e) => {
                         error!("Could not send ack to unlock client: {e}");
@@ -152,15 +150,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let mut new_clients_chan = coordinator.sea.network_clients_chan.subscribe();
-        // let coord_tx_new_client = coord_tx.clone();
         // Spawn a task for each rat or wind to listen when variables come in
         // TODO maybe also await until clients are collected so we can remove this task since all tasks that are needed for long term have been spawned
+        let lighthouse_client_connected = std::sync::Arc::new(std::sync::RwLock::new(false));
+        let tasks_lh_connect = std::sync::Arc::clone(&lighthouse_client_connected);
         tokio::spawn(async move {
             loop {
                 match new_clients_chan.recv().await {
                     Ok(client) => {
                         match client.name {
                             sea::ShipKind::Rat(name) => {
+                                if name == COMPARE_NODE_NAME {
+                                    let mut lock = tasks_lh_connect.write().unwrap();
+                                    *lock = true;
+                                    // TODO handle set false when disconnected
+                                }
                                 let mut client_news = client.recv.subscribe();
                                 let inner_name = name.clone();
                                 let rat_rules = rules.clone();
@@ -296,7 +300,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => (),
                     }
                 }
-                LighthouseTask::SendRatAction { ship_name, data } => {
+                LighthouseTask::SendRatAction {
+                    ship_name,
+                    mut data,
+                } => {
+                    {
+                        let lh_connected = lighthouse_client_connected.read().unwrap();
+                        if !*lh_connected {
+                            if ship_name == COMPARE_NODE_NAME {
+                                continue;
+                            }
+                            data = match &data {
+                                ActionPlan::Sail => data.clone(),
+                                ActionPlan::Shoot { target } => {
+                                    let ntargets = target
+                                        .into_iter()
+                                        .cloned()
+                                        .filter(|t| t != COMPARE_NODE_NAME)
+                                        .collect::<Vec<_>>();
+                                    if ntargets.is_empty() {
+                                        ActionPlan::Sail
+                                    } else {
+                                        ActionPlan::Shoot { target: ntargets }
+                                    }
+                                }
+                                ActionPlan::Catch { source } => {
+                                    if source == COMPARE_NODE_NAME {
+                                        ActionPlan::Sail
+                                    } else {
+                                        data.clone()
+                                    }
+                                }
+                            };
+                            dbg!(&data);
+                        }
+                    }
+
                     match coordinator.rat_action_send(ship_name.clone(), data).await {
                         Err(e) => {
                             error!("Error while sending action to Rat {}: {}", ship_name, e);
