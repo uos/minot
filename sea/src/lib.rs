@@ -52,7 +52,7 @@ pub enum ActionPlan {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct VariableHuman {
     pub ship: String,
     pub strategy: Option<ActionPlan>,
@@ -123,7 +123,7 @@ pub fn get_strategies(
 #[async_trait::async_trait]
 pub trait Ship: Send + Sync + 'static {
     /// Indicate a trigger point and ask the link pilot what to do with the variable.
-    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<Action>;
+    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<(Action, bool)>;
 
     // async fn wait_for_action(&self) -> anyhow::Result<crate::Action>;
 
@@ -229,5 +229,10 @@ pub trait Coordinator: Send + Sync + 'static {
 
     async fn blow_wind(&self, ship: String, data: WindData) -> anyhow::Result<()>;
 
-    async fn rat_action_send(&self, ship: String, action: crate::ActionPlan) -> anyhow::Result<()>;
+    async fn rat_action_send(
+        &self,
+        ship: String,
+        action: crate::ActionPlan,
+        lock_until_ack: bool,
+    ) -> anyhow::Result<()>;
 }

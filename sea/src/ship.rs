@@ -82,7 +82,7 @@ impl crate::Cannon for NetworkShipImpl {
 
 #[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
-    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<crate::Action> {
+    async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<(crate::Action, bool)> {
         let client = self.client.lock().await;
         let coord_send = client.coordinator_send.read().unwrap().clone();
         if let Some(sender) = coord_send {
@@ -106,8 +106,12 @@ impl crate::Ship for NetworkShipImpl {
                 loop {
                     match sub.recv().await {
                         Ok((packet, _)) => {
-                            if let PacketKind::RatAction(action) = packet.data {
-                                tx.send(Ok(action)).await.unwrap();
+                            if let PacketKind::RatAction {
+                                action,
+                                lock_until_ack,
+                            } = packet.data
+                            {
+                                tx.send(Ok((action, lock_until_ack))).await.unwrap();
                                 return;
                             }
                         }
@@ -243,9 +247,17 @@ impl NetworkShipImpl {
                 anyhow!("Could not receive answer for variable question from coordinator: {e}")
             })?;
             debug!("received something");
-            if let PacketKind::RatAction(crate::Action::Catch { source }) = packet.data {
-                debug!("received rat action");
-                return Ok(source);
+            match packet.data {
+                PacketKind::RatAction {
+                    action,
+                    lock_until_ack: _,
+                } => {
+                    if let crate::Action::Catch { source } = action {
+                        debug!("received rat action");
+                        return Ok(source);
+                    }
+                }
+                _ => (),
             }
         }
     }

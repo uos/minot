@@ -12,6 +12,7 @@ use tokio::{
 };
 
 use crate::{
+    coordinator::COMPARE_NODE_NAME,
     net::{
         Header, Packet, PacketKind, Sea, CLIENT_HEARTBEAT_TCP_INTERVAL,
         CLIENT_HEARTBEAT_TCP_TIMEOUT, CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT,
@@ -174,7 +175,6 @@ impl Client {
                                     .await;
                                     match timeout {
                                         Ok(Some(mut packet)) => {
-                                            dbg!(&packet);
                                             packet.header.source = my_addr.ship; // overwrite source with our id
                                             packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
                                             match coord_raw_sender.send(packet).await {
@@ -290,7 +290,6 @@ impl Client {
                 // handles multiple packets in single buffer
                 let mut cursor = 0;
                 loop {
-                    dbg!(cursor, buf.len(), n);
                     if cursor >= buf.len() || cursor >= n {
                         break;
                     }
@@ -307,7 +306,6 @@ impl Client {
                             // TODO usize vs u32 sizes?
                             msg_size = u32::from_be_bytes(msg_size_buf) as usize;
                             max_buf = std::cmp::min(msg_size + cursor, n);
-                            dbg!(max_buf);
                             first = false;
                             buffer.extend_from_slice(&buf[cursor..max_buf]);
                         }
@@ -316,7 +314,6 @@ impl Client {
                         buffer.extend_from_slice(&buf[cursor..max_buf]);
                     }
                     cursor = max_buf;
-                    dbg!(msg_size, buffer.len());
                     if msg_size == buffer.len() {
                         debug!("got one msg in buffer, cntd");
                         let packet: Packet = match bincode::deserialize(&buffer) {
@@ -326,8 +323,6 @@ impl Client {
                             }
                             Ok(packet) => packet,
                         };
-
-                        dbg!(&packet);
 
                         match channel.send((packet, partner.clone())) {
                             Err(e) => {
@@ -404,27 +399,34 @@ impl Client {
             }
         }
 
-        info!("registered");
-        // TODO disconnect not implemented yet, must send to disconnect_tx
         let (_disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
-        // Wait for coordinator to send us Ack to signal that every expected client is connected
-        let mut coord_sub = self
-            .coordinator_receive
-            .read()
-            .unwrap()
-            .as_ref()
-            .expect("TCP Socket does not exist")
-            .subscribe();
-        loop {
-            match coord_sub.recv().await {
-                Err(e) => {
-                    error!("Could not receive updates from coordinator: {}", e);
-                }
-                Ok((packet, _)) => {
-                    if matches!(packet.data, PacketKind::Acknowledge) {
-                        debug!("received ack, so all are connected!");
-                        break;
+        // only make non lh nodes wait for the coordinate since they ask for variables
+        if match &self.kind {
+            ShipKind::Rat(name) => name != COMPARE_NODE_NAME,
+            _ => true,
+        } {
+            // TODO disconnect not implemented yet, must send to disconnect_tx
+
+            info!("waiting for coord ready signal.");
+            // Wait for coordinator to send us Ack to signal that every expected client is connected
+            let mut coord_sub = self
+                .coordinator_receive
+                .read()
+                .unwrap()
+                .as_ref()
+                .expect("TCP Socket does not exist")
+                .subscribe();
+            loop {
+                match coord_sub.recv().await {
+                    Err(e) => {
+                        error!("Could not receive updates from coordinator: {}", e);
+                    }
+                    Ok((packet, _)) => {
+                        if matches!(packet.data, PacketKind::Acknowledge) {
+                            debug!("received ack, so all are connected!");
+                            break;
+                        }
                     }
                 }
             }

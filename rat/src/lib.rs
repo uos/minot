@@ -129,17 +129,38 @@ where
     if let Some(rat_ship) = rat.ship.as_ref() {
         rt.block_on(async move {
             match rat_ship.ask_for_action(variable_name).await {
-                Ok(sea::Action::Sail) => {
+                Ok((sea::Action::Sail, _)) => {
                     info!("Rat {} sails for variable {}", rat.name, variable_name);
 
                     Ok(())
                 }
-                Ok(sea::Action::Shoot { target }) => {
+                Ok((sea::Action::Shoot { target }, lock_until_ack)) => {
                     info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
+
+                    let receiver = lock_until_ack.then_some({
+                        let client = rat_ship.client.lock().await;
+                        let sender = client.coordinator_receive.read().unwrap();
+                        sender
+                            .as_ref()
+                            .expect("How are we receiving anything in the client? :)")
+                            .subscribe()
+                    });
+
                     rat_ship
                         .get_cannon()
                         .shoot(&target, data.clone(), variable_type)
                         .await?;
+
+                    if let Some(mut receiver) = receiver {
+                        info!("Locked...");
+                        loop {
+                            let (packet, _) = receiver.recv().await?;
+                            if matches!(packet.data, net::PacketKind::Acknowledge) {
+                                break;
+                            }
+                        }
+                        info!("Unlocked");
+                    }
 
                     info!(
                         "Rat {} finished shooting {} at {:?}",
@@ -148,11 +169,20 @@ where
 
                     Ok(())
                 }
-                Ok(sea::Action::Catch { source }) => {
+                Ok((sea::Action::Catch { source }, lock_until_ack)) => {
                     info!(
                         "Rat {} catches {} from {:?}",
                         rat.name, variable_name, source
                     );
+
+                    let receiver = lock_until_ack.then_some({
+                        let client = rat_ship.client.lock().await;
+                        let sender = client.coordinator_receive.read().unwrap();
+                        sender
+                            .as_ref()
+                            .expect("How are we receiving anything in the client? :)")
+                            .subscribe()
+                    });
 
                     let recv_data = rat_ship.get_cannon().catch::<T>(&source).await?;
 
@@ -164,6 +194,17 @@ where
                     // let deserialized: nalgebra::DMatrix<T> = bincode::deserialize(&recv_data)
                     // .map_err(|e| anyhow::anyhow!("Failed to deserialize data: {}", e))?;
                     *data = recv_data;
+
+                    if let Some(mut receiver) = receiver {
+                        info!("Locked...");
+                        loop {
+                            let (packet, _) = receiver.recv().await?;
+                            if matches!(packet.data, net::PacketKind::Acknowledge) {
+                                break;
+                            }
+                        }
+                        info!("Unlocked");
+                    }
 
                     Ok(())
                 }

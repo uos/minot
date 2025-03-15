@@ -10,7 +10,7 @@ use nalgebra::DMatrix;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{client::Client, Action, ShipKind, ShipName, WindData};
+use crate::{client::Client, Action, ShipKind, ShipName, VariableHuman, WindData};
 
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
@@ -32,12 +32,21 @@ pub enum PacketKind {
     Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
+    RuleAppend {
+        variable: String,
+        commands: Vec<VariableHuman>,
+    },
+    RulesClear,
+    LockNext, // lock next variable so after a client does catch/shoot, it blocks until receiving an ack. The initial ack is sent from lh to the coordinator, that then sends ack to all connected clients
     RawDataf64(nalgebra::DMatrix<f64>),
     RawDataf32(nalgebra::DMatrix<f32>),
     RawDatai32(nalgebra::DMatrix<i32>),
     RawDatau8(nalgebra::DMatrix<u8>),
     VariableTaskRequest(String),
-    RatAction(Action),
+    RatAction {
+        action: Action,
+        lock_until_ack: bool,
+    },
     Wind(WindData),
 }
 
@@ -269,7 +278,6 @@ impl Sea {
                         Ok(packet) => packet,
                     };
 
-                    dbg!(&packet);
                     match rejoin_req_tx.send((id.clone(), packet)).await {
                         Err(e) => {
                             error!("Could not send rejoin request to internal channel: {e}");

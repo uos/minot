@@ -56,12 +56,20 @@ impl crate::Coordinator for CoordinatorImpl {
         return Box::pin(self.blow_wind(ship, data)).await;
     }
 
-    async fn rat_action_send(&self, ship: String, action: crate::ActionPlan) -> anyhow::Result<()> {
+    async fn rat_action_send(
+        &self,
+        ship: String,
+        action: crate::ActionPlan,
+        lock_until_ack: bool,
+    ) -> anyhow::Result<()> {
         if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
             let action = self.convert_action(&action).await?;
             let paket = Packet {
                 header: crate::net::Header::default(),
-                data: PacketKind::RatAction(action),
+                data: PacketKind::RatAction {
+                    action,
+                    lock_until_ack,
+                },
             };
             return client_info
                 .sender
@@ -71,11 +79,28 @@ impl crate::Coordinator for CoordinatorImpl {
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        return Box::pin(self.rat_action_send(ship, action)).await;
+        return Box::pin(self.rat_action_send(ship, action, lock_until_ack)).await;
     }
 }
 
 impl CoordinatorImpl {
+    pub async fn rat_send(&self, ship: String, kind: PacketKind) -> anyhow::Result<()> {
+        if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
+            let paket = Packet {
+                header: crate::net::Header::default(),
+                data: kind,
+            };
+            return client_info
+                .sender
+                .send(paket)
+                .await
+                .map_err(|e| anyhow!("Error while sending rat action: {e}"));
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        return Box::pin(self.rat_send(ship, kind)).await;
+    }
+
     // wait until all given clients are connected
     pub async fn ensure_clients_connected(
         rats: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::env::current_exe;
 
 use log::{debug, error, info, warn};
 use sea::coordinator::COMPARE_NODE_NAME;
@@ -37,7 +38,7 @@ impl Network {
 // hashmap[string] => ID
 // ID => VariableRule
 
-use sea::{ActionPlan, Coordinator};
+use sea::{ActionPlan, Coordinator, VariableHuman};
 
 #[derive(Debug)]
 enum LighthouseTask {
@@ -54,12 +55,20 @@ enum LighthouseTask {
         ship_name: String,
         data: sea::ActionPlan,
     },
+    AppendRule {
+        variable: String,
+        commands: Vec<VariableHuman>,
+    },
+    RulesClear,
+    LockNext,
+    Unlock,
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
+    // TODO use ratslang to parse this from a vec of (variablename, vec<varhuman>) tuple on initialize
     // -- CONFIG BEGIN --
     let mut rules = HashMap::new();
     rules.insert(
@@ -112,7 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // only use the rats that are mentioned. filter out the rest.
     // Winds are not mapped to rats, so they won't be filtered.
 
-    let rules = std::sync::Arc::new(rules);
+    let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
+    let rules_changer = std::sync::Arc::clone(&rules);
 
     let network = Network::new();
 
@@ -178,14 +188,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if let PacketKind::VariableTaskRequest(variable) =
                                                     packet.data
                                                 {
+                                                    let rat_rules_ref = rat_rules.read().unwrap();
                                                     let lighthouse_actions = sea::get_strategies(
-                                                        &rat_rules,
+                                                        &rat_rules_ref,
                                                         &lighthouse_name,
                                                         variable.clone(),
                                                         Some(&inner_name),
                                                     );
-
-                                                    dbg!(&lighthouse_actions, &variable);
 
                                                     for action in lighthouse_actions {
                                                         if !matches!(action, ActionPlan::Sail) {
@@ -202,7 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     }
 
                                                     let mut my_actions = sea::get_strategies(
-                                                        &rat_rules,
+                                                        &rat_rules_ref,
                                                         &inner_name,
                                                         variable.clone(),
                                                         None,
@@ -280,17 +289,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        debug!("waiting for coordinate_receiver channel");
+        let mut lock_next = false;
         while let Some(task) = coord_rx.recv().await {
             debug!("received coordinator task {:?}", task);
             match task {
-                // CoordinatorTask::GetVariableChannel { ship, answer } => {
-                //     let queue = queues
-                //         .get(&ship)
-                //         .expect("Unknown client, should be connected before sending here.");
-
-                //     answer.send(queue.resubscribe()).unwrap();
-                // }
+                LighthouseTask::AppendRule { variable, commands } => {
+                    let mut current_rules = rules_changer.write().unwrap();
+                    current_rules.insert(variable, commands).unwrap();
+                }
+                LighthouseTask::RulesClear => {
+                    let mut current_rules = rules_changer.write().unwrap();
+                    current_rules.clear();
+                }
+                LighthouseTask::LockNext => {
+                    lock_next = true;
+                }
+                LighthouseTask::Unlock => {
+                    let clients = coordinator.rat_qs.read().await;
+                    for (c, _) in clients.iter() {
+                        match coordinator
+                            .rat_send(c.clone(), PacketKind::Acknowledge)
+                            .await
+                        {
+                            Err(e) => {
+                                error!("Error while sending ack for unlocking to Rat {}: {}", c, e);
+                                std::process::exit(1);
+                            }
+                            Ok(_) => (),
+                        }
+                    }
+                    lock_next = false;
+                }
                 LighthouseTask::SendWind { ship_name, data } => {
                     match coordinator.blow_wind(ship_name.clone(), data).await {
                         Err(e) => {
@@ -332,11 +361,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             };
-                            dbg!(&data);
                         }
                     }
 
-                    match coordinator.rat_action_send(ship_name.clone(), data).await {
+                    let lock_next = if lock_next && ship_name != COMPARE_NODE_NAME {
+                        true
+                    } else {
+                        false
+                    };
+
+                    match coordinator
+                        .rat_action_send(ship_name.clone(), data, lock_next)
+                        .await
+                    {
                         Err(e) => {
                             error!("Error while sending action to Rat {}: {}", ship_name, e);
                             std::process::exit(1);

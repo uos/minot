@@ -24,43 +24,28 @@ use crate::{
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-
-    // let mut app = App::new();
-
-    // let backend = CrosstermBackend::new(io::stdout());
-    // let terminal = Terminal::new(backend)?;
-    // let events = EventHandler::new(250);
-    // let mut tui = Tui::new(terminal, events);
-    // tui.init()?;
-
-    // // Start the main loop.
-    // while app.running {
-    //     // Render the user interface.
-    //     tui.draw(&mut app)?;
-    //     // Handle events.
-    //     match tui.events.next().await? {
-    //         Event::Tick => app.tick(),
-    //         Event::Key(key_event) => handle_key_events(key_event, &mut app)?,
-    //         Event::Mouse(_) => {}
-    //         Event::Resize(_, _) => {}
-    //     }
-    // }
-
-    // tui.exit()?;
-    // return Ok(());
+    let env = env_logger::Env::new().filter_or("LH_LOG", "off");
+    env_logger::Builder::from_env(env).init();
 
     let var_data: Arc<RwLock<Vec<(String, String)>>> = Arc::new(RwLock::new(Vec::new()));
 
     let comparer =
         sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)
             .await?;
+    debug!("bla");
 
     // let (ndata_tx, mut ndata_rx) = tokio::sync::mpsc::channel(10);
     // let write_data = Arc::clone(&var_data);
     // tokio::spawn(async move {
-    let mut sub = {
+    let (mut sub, recv) = {
         let client = comparer.client.lock().await;
+        let sender = client
+            .coordinator_send
+            .read()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .expect("Sender coord not available");
         let sub = client
             .coordinator_receive
             .read()
@@ -70,42 +55,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or(anyhow!(
                 "Sender to Coordinator is available but Receiver is not."
             ))?;
-        sub
+        (sub, sender)
     };
 
-    loop {
-        match sub.recv().await {
-            Ok((packet, _)) => {
-                if let sea::net::PacketKind::RatAction(crate::Action::Catch { source }) =
-                    packet.data
-                {
-                    match comparer.get_cannon().catch_dyn(&source).await {
-                        Ok((strrep, var_type)) => {
-                            dbg!(strrep, var_type, source);
-                            // write_data.write().unwrap()
-                            // match ndata_tx.send((source, strrep, var_type)).await {
-                            //     Ok(_) => {}
-                            //     Err(e) => {
-                            //         error!("Error sending received variable: {e}");
-                            //     }
-                            // }
+    tokio::spawn(async move {
+        loop {
+            match sub.recv().await {
+                Ok((packet, _)) => {
+                    match packet.data {
+                        sea::net::PacketKind::RatAction {
+                            action,
+                            lock_until_ack: _,
+                        } => {
+                            if let crate::Action::Catch { source } = action {
+                                match comparer.get_cannon().catch_dyn(&source).await {
+                                    Ok((strrep, var_type)) => {
+                                        // dbg!(strrep, var_type, source);
+                                        // write_data.write().unwrap()
+                                        // match ndata_tx.send((source, strrep, var_type)).await {
+                                        //     Ok(_) => {}
+                                        //     Err(e) => {
+                                        //         error!("Error sending received variable: {e}");
+                                        //     }
+                                        // }
+                                    }
+                                    Err(e) => {
+                                        error!("Could not catch dynamic typed var: {e}");
+                                    }
+                                }
+                            }
                         }
-                        Err(e) => {
-                            error!("Could not catch dynamic typed var: {e}");
-                        }
+                        _ => (),
                     }
                 }
-            }
-            Err(e) => {
-                error!("Error receiving action for comparer: {e}");
+                Err(e) => {
+                    error!("Error receiving action for comparer: {e}");
+                }
             }
         }
+    });
+
+    let mut app = App::new();
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let terminal = Terminal::new(backend)?;
+    let events = EventHandler::new(250);
+    let mut tui = Tui::new(terminal, events);
+    tui.init()?;
+
+    // // Start the main loop.
+    while app.running {
+        // Render the user interface.
+        tui.draw(&mut app)?;
+        // Handle events.
+        match tui.events.next().await? {
+            Event::Tick => app.tick(),
+            Event::Key(key_event) => handle_key_events(key_event, &mut app)?,
+            Event::Mouse(_) => {}
+            Event::Resize(_, _) => {}
+        }
     }
-    // });
 
-    // loop {
-    // while let Some((source, sttrep, var_type)) = ndata_rx.recv().await {}
-    // }
-
-    // Ok(())
+    tui.exit()?;
+    return Ok(());
 }
