@@ -1,16 +1,16 @@
+use core::panic;
 use std::{
-    collections::LinkedList,
     error::{self},
-    fmt::{Display, Write},
+    fmt::Display,
     str::FromStr,
 };
 
 use anyhow::{anyhow, Error};
 use ratatui::{
     layout::Constraint,
-    widgets::{Cell, Row, Table},
+    style::Stylize,
+    widgets::{Cell, Row, ScrollbarState, Table, TableState},
 };
-use sea::Header;
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -35,34 +35,6 @@ impl Display for Mode {
 pub struct Tolerance {
     pub value: f64,
     pub pot_cursor: u8,
-}
-
-fn create_underlined_string(tolerance: f64, cursor: u8) -> String {
-    let decimal_places = if cursor == 0 { 0 } else { cursor as usize };
-    let formatted_tolerance = format!("{:.1$}", tolerance, decimal_places);
-    let chars: Vec<char> = formatted_tolerance.chars().collect();
-    let cursor_index = if cursor > 0 {
-        formatted_tolerance.find('.').unwrap_or(0) + cursor as usize
-    } else {
-        0
-    };
-
-    let mut result = String::new();
-    for (i, &c) in chars.iter().enumerate() {
-        if i == cursor_index {
-            if i == 0 {
-                result.push_str(&format!("{} ", c));
-            } else if i == chars.len() - 1 {
-                result.push_str(&format!(" {}", c));
-            } else {
-                result.push_str(&format!(" {} ", c));
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
 }
 
 impl Display for Tolerance {
@@ -148,7 +120,9 @@ pub enum WindSendState {
 }
 
 pub const WIND_POPUP_TITLE_NOERR: &'static str = "WindCursor to Line:";
-pub const WIND_POPUP_TITLE_ERR: &'static str = "Could not parse! Please correct:";
+pub const POPUP_TITLE_ERR: &'static str = "Could not parse! Please correct:";
+
+pub const COMPARE_POPUP_TITLE_NOERR: &'static str = "CompareCursor to row[:col]";
 
 #[derive(Debug, Default)]
 pub enum WindMode {
@@ -265,7 +239,132 @@ impl Ord for TotalF64 {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Copy, Clone)]
+enum CellDiff {
+    Higher(f64),
+    Lower(f64),
+    WithinTolerance,
+    OutOfBounds,
+}
+
+#[derive(Debug)]
+pub struct DiffMatrix {
+    data: Matrix,
+    diff: Vec<CellDiff>,
+}
+
+impl From<DiffMatrix> for Matrix {
+    fn from(value: DiffMatrix) -> Self {
+        value.data
+    }
+}
+
+const ROWS_COLS_CELL: &'static str = "↓ →";
+
+impl DiffMatrix {
+    pub fn new(reference: &Matrix, mat: Matrix, tolerance: Option<f64>) -> Self {
+        let rows = reference.nrows.max(mat.nrows);
+        let cols = reference.ncols.max(mat.ncols);
+        let mut diff = vec![CellDiff::OutOfBounds; rows * cols];
+        for col in 0..mat.ncols {
+            for row in 0..mat.nrows {
+                let cell_diff = match (reference.get(row, col), mat.get(row, col)) {
+                    (None, None) => panic!("wtf"),
+                    (None, Some(_)) => CellDiff::OutOfBounds,
+                    (Some(_), None) => CellDiff::OutOfBounds,
+                    (Some(l), Some(r)) => {
+                        let l = l.0;
+                        let r = r.0;
+
+                        if let Some(tolerance) = tolerance {
+                            if (l - r).abs() < tolerance {
+                                CellDiff::WithinTolerance
+                            } else {
+                                if l < r {
+                                    CellDiff::Higher(r - l)
+                                } else {
+                                    CellDiff::Lower(l - r)
+                                }
+                            }
+                        } else {
+                            if l < r {
+                                CellDiff::Higher(r - l)
+                            } else {
+                                CellDiff::Lower(l - r)
+                            }
+                        }
+                    }
+                };
+                let index = row + col * rows;
+                diff[index] = cell_diff;
+            }
+        }
+        Self { data: mat, diff }
+    }
+
+    pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
+        let header_cols_nums: Vec<Cell> = (0..self.data.ncols)
+            .map(|n| Cell::from(n.to_string()))
+            .collect();
+        let rows_cols_cell_len = ROWS_COLS_CELL.len() as u16;
+        let mut header_cols = vec![Cell::from(ROWS_COLS_CELL)];
+        header_cols.extend(header_cols_nums);
+
+        let header_rows: Vec<Cell> = (0..self.data.nrows)
+            .map(|n| Cell::from(n.to_string()))
+            .collect();
+
+        let cols_max_len: u16 = self
+            .data
+            .ncols
+            .to_string()
+            .len()
+            .try_into()
+            .map_err(|e| anyhow!("Too many cols: {e}"))?;
+        let rows_max_len: u16 = self
+            .data
+            .nrows
+            .to_string()
+            .len()
+            .try_into()
+            .map_err(|e| anyhow!("Too many rows: {e}"))?;
+        let max_data_len: u16 = if let Some(max) = self.data.data.iter().max() {
+            format!("{}", max)
+                .len()
+                .try_into()
+                .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?
+        } else {
+            return Ok(None);
+        };
+        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
+        let header_rows_cell_len = Constraint::Length(rows_max_len.max(rows_cols_cell_len));
+
+        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.data.nrows];
+        for row in 0..self.data.nrows {
+            let mut nrow = vec![Cell::from("".to_owned()); self.data.ncols + 1];
+            let row_header = unsafe { header_rows.get_unchecked(row) };
+            nrow[0] = row_header.clone();
+            for col in 0..self.data.ncols {
+                let mat_cell = unsafe { self.diff.get_unchecked(col * self.data.nrows + row) };
+                let str_cell = match mat_cell {
+                    CellDiff::Higher(diff) => Cell::from(format!("{:.1$}", diff, precision).blue()),
+                    CellDiff::Lower(diff) => Cell::from(format!("{:.1$}", diff, precision).red()),
+                    CellDiff::WithinTolerance => Cell::from(""),
+                    CellDiff::OutOfBounds => Cell::from("-".gray()),
+                };
+                unsafe { *nrow.get_unchecked_mut(col + 1) = str_cell };
+            }
+            unsafe { *rows.get_unchecked_mut(row) = Row::new(nrow) };
+        }
+
+        let mut widths = vec![header_rows_cell_len];
+        widths.extend(core::iter::repeat_n(data_cell_len, self.data.ncols));
+        let table = Table::new(rows, widths).header(Row::new(header_cols));
+        Ok(Some(table))
+    }
+}
+
+#[derive(Debug)]
 pub struct Matrix {
     data: Vec<TotalF64>,
     pub nrows: usize,
@@ -290,32 +389,14 @@ impl Matrix {
         }
     }
 
-    pub fn iter(&self) -> MatrixIterator {
-        MatrixIterator {
-            matrix: self,
-            current: 0,
-        }
-    }
-
-    pub fn row_vectors(&self) -> RowVectorIterator {
-        RowVectorIterator {
-            matrix: self,
-            current_row: 0,
-        }
-    }
-
-    pub fn render(&self) -> anyhow::Result<Option<Table>> {
+    pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
         let header_cols_nums: Vec<Cell> =
             (0..self.ncols).map(|n| Cell::from(n.to_string())).collect();
-
-        let rows_cols_cell = "↓ →";
-        let rows_cols_cell_len = rows_cols_cell.len() as u16;
-        let mut header_cols = vec![Cell::from(rows_cols_cell)];
-
+        let rows_cols_cell_len = ROWS_COLS_CELL.len() as u16;
+        let mut header_cols = vec![Cell::from(ROWS_COLS_CELL)];
         header_cols.extend(header_cols_nums);
 
         let header_rows: Vec<Cell> = (0..self.nrows).map(|n| Cell::from(n.to_string())).collect();
-
         let cols_max_len: u16 = self
             .ncols
             .to_string()
@@ -328,7 +409,7 @@ impl Matrix {
             .len()
             .try_into()
             .map_err(|e| anyhow!("Too many rows: {e}"))?;
-        let max_data_len: u16 = if let Some((_, _, max)) = self.iter().max() {
+        let max_data_len: u16 = if let Some(max) = self.data.iter().max() {
             format!("{}", max)
                 .len()
                 .try_into()
@@ -338,83 +419,28 @@ impl Matrix {
         };
         let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
         let header_rows_cell_len = Constraint::Length(rows_max_len.max(rows_cols_cell_len));
-        // let data_cell_height = Constraint::Length(3);
-        // let header_rows_cell_height = data_cell_height;
-        // let header_cols_cell_len = data_cell_len;
-        // let header_cols_cell_height = data_cell_height;
 
-        let mut rows: Vec<Row> = Vec::with_capacity(self.nrows);
-        for (row, data) in self.row_vectors().enumerate() {
-            let row_header = header_rows
-                .get(row)
-                .expect("Not enough header rows for data");
-
-            let mut out = Vec::with_capacity(self.ncols + 1);
-            out.push(row_header.clone());
-
-            let data: Vec<Cell> = data
-                .into_iter()
-                .map(|d| Cell::from(d.to_string()))
-                .collect();
-
-            out.extend(data);
-
-            rows.push(Row::new(out));
+        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.nrows];
+        for row in 0..self.nrows {
+            let mut nrow = vec![Cell::from("".to_owned()); self.ncols + 1];
+            let row_header = unsafe { header_rows.get_unchecked(row) };
+            nrow[0] = row_header.clone();
+            for col in 0..self.ncols {
+                unsafe {
+                    *nrow.get_unchecked_mut(col + 1) = Cell::from(format!(
+                        "{:.1$}",
+                        self.data.get_unchecked(col * self.nrows + row).0,
+                        precision
+                    ))
+                };
+            }
+            unsafe { *rows.get_unchecked_mut(row) = Row::new(nrow) };
         }
+
         let mut widths = vec![header_rows_cell_len];
         widths.extend(core::iter::repeat_n(data_cell_len, self.ncols));
         let table = Table::new(rows, widths).header(Row::new(header_cols));
         Ok(Some(table))
-    }
-
-    pub fn render_diff(&self, other: &Self) -> Table {
-        // write header,
-        todo!()
-    }
-}
-
-pub struct RowVectorIterator<'a> {
-    matrix: &'a Matrix,
-    current_row: usize,
-}
-
-impl<'a> Iterator for RowVectorIterator<'a> {
-    type Item = Vec<TotalF64>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current_row < self.matrix.nrows {
-            let mut row = Vec::with_capacity(self.matrix.ncols);
-            for col in 0..self.matrix.ncols {
-                if let Some(value) = self.matrix.get(self.current_row, col) {
-                    row.push(value);
-                }
-            }
-            self.current_row += 1;
-            Some(row)
-        } else {
-            None
-        }
-    }
-}
-
-pub struct MatrixIterator<'a> {
-    matrix: &'a Matrix,
-    current: usize,
-}
-
-impl<'a> Iterator for MatrixIterator<'a> {
-    type Item = (usize, usize, TotalF64); // (row, column, value)
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current < self.matrix.data.len() {
-            let col = self.current / self.matrix.nrows;
-            let row = self.current % self.matrix.nrows;
-            let value = self.matrix.data[self.current];
-            self.current += 1;
-            Some((row, col, value))
-        } else {
-            None
-        }
     }
 }
 
@@ -455,69 +481,259 @@ impl FromStr for Matrix {
     }
 }
 
-#[derive(Debug)]
-pub enum MatrixView {
-    Base {
-        data: Matrix,
-        client: String,
-    },
-    Diff {
-        base: Matrix,
-        data: Matrix,
-        client: String,
-    },
-}
+// #[derive(Debug)]
+// pub enum MatrixView {
+//     Base { data: Matrix, client: String },
+//     Diff { data: DiffMatrix, client: String },
+// }
 
-impl MatrixView {
-    pub fn client_name(&self) -> String {
-        match self {
-            MatrixView::Base { data, client } => client.clone(),
-            MatrixView::Diff { base, data, client } => client.clone(),
-        }
-    }
-}
-
-impl Display for MatrixView {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MatrixView::Base { data, client } => {
-                for el in data.data.iter() {
-                    f.write_str("Base\n")?;
-                    f.write_str(&el.to_string())?;
-                    f.write_str("\n")?;
-                }
-            }
-            MatrixView::Diff { base, data, client } => {
-                for el in data.data.iter() {
-                    f.write_str("diff\n")?;
-                    f.write_str(&el.to_string())?;
-                    f.write_str("\n")?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
+// impl MatrixView {
+//     pub fn client_name(&self) -> String {
+//         match self {
+//             MatrixView::Base { data: _, client } => client.clone(),
+//             MatrixView::Diff { data: _, client } => client.clone(),
+//         }
+//     }
+//     fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
+//         match self {
+//             MatrixView::Base { data, client: _ } => data.render(precision),
+//             MatrixView::Diff { data, client: _ } => data.render(precision),
+//         }
+//     }
+//     fn nrows(&self) -> usize {
+//         match self {
+//             MatrixView::Base { data, client: _ } => data.nrows,
+//             MatrixView::Diff { data, client: _ } => data.data.nrows,
+//         }
+//     }
+//     fn ncols(&self) -> usize {
+//         match self {
+//             MatrixView::Base { data, client: _ } => data.ncols,
+//             MatrixView::Diff { data, client: _ } => data.data.ncols,
+//         }
+//     }
+// }
 
 // -- Client Compare inner windows --------
+
+const ITEM_HEIGHT: usize = 4;
+
 #[derive(Debug)]
 pub struct ClientCompare {
-    pub left: MatrixView,
-    pub right: MatrixView,
+    pub vertical_scroll_state: ScrollbarState,
+    pub horizontal_scroll_state: ScrollbarState,
+    pub left_state: TableState,
+    pub right_state: TableState,
+    pub left: Option<(String, Matrix)>,
+    pub right: Option<(String, DiffMatrix)>,
+    pub show_line_input_popup: bool,
+    pub popup_buffer: Vec<char>,
+    pub popup_title: &'static str,
+}
+
+impl ClientCompare {
+    pub fn update(
+        &mut self,
+        mat_ref: (Matrix, String),
+        mat_diff: Option<(Matrix, String)>,
+        tolerance: Option<f64>,
+    ) {
+        self.left_state.select_cell(Some((0, 0)));
+        self.right_state.select_cell(Some((0, 0)));
+        let max_nrows = mat_ref
+            .0
+            .nrows
+            .max(mat_diff.as_ref().map(|(m, _)| m.nrows).unwrap_or_default());
+        let max_ncols = mat_ref
+            .0
+            .ncols
+            .max(mat_diff.as_ref().map(|(m, _)| m.ncols).unwrap_or_default());
+
+        self.vertical_scroll_state = ScrollbarState::new(max_nrows * ITEM_HEIGHT);
+        self.horizontal_scroll_state = ScrollbarState::new(max_ncols * ITEM_HEIGHT);
+
+        if let Some((rmat, rname)) = mat_diff {
+            let right = DiffMatrix::new(&mat_ref.0, rmat, tolerance);
+            self.right.replace((rname, right));
+        }
+
+        let left = mat_ref.0;
+        self.left.replace((mat_ref.1, left));
+    }
+
+    pub fn next_row(&mut self) {
+        match (self.left.as_ref(), self.right.as_ref()) {
+            (Some((_, l)), Some((_, r))) => {
+                let max_nrows = l.nrows.max(r.data.nrows);
+                let i = match self.left_state.selected() {
+                    Some(i) => {
+                        if i >= max_nrows - 1 {
+                            0
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.left_state.select(Some(i));
+                let i = match self.right_state.selected() {
+                    Some(i) => {
+                        if i >= max_nrows - 1 {
+                            0
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.right_state.select(Some(i));
+                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (_, _) => {}
+        };
+    }
+
+    pub fn previous_row(&mut self) {
+        match (self.left.as_ref(), self.right.as_ref()) {
+            (Some((_, l)), Some((_, r))) => {
+                let max_nrows = l.nrows.max(r.data.nrows);
+                let i = match self.left_state.selected() {
+                    Some(i) => {
+                        if i == 0 {
+                            max_nrows - 1
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.left_state.select(Some(i));
+                let i = match self.right_state.selected() {
+                    Some(i) => {
+                        if i == 0 {
+                            max_nrows - 1
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.right_state.select(Some(i));
+                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (_, _) => {}
+        };
+    }
+
+    pub fn col(&mut self, i: usize) {
+        match (self.left.as_ref(), self.right.as_ref()) {
+            (Some((_, l)), Some((_, r))) => {
+                let max_ncols = l.ncols.max(r.data.ncols);
+                if i < max_ncols {
+                    self.left_state.select_column(Some(i));
+                    self.right_state.select_column(Some(i));
+                    self.horizontal_scroll_state =
+                        self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+                }
+            }
+            (_, _) => {}
+        };
+    }
+
+    pub fn row(&mut self, i: usize) {
+        match (self.left.as_ref(), self.right.as_ref()) {
+            (Some((_, l)), Some((_, r))) => {
+                let max_nrows = l.nrows.max(r.data.nrows);
+                if i < max_nrows {
+                    self.left_state.select(Some(i));
+                    self.right_state.select(Some(i));
+                    self.horizontal_scroll_state =
+                        self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+                }
+            }
+            (_, _) => {}
+        };
+    }
+
+    pub fn next_col(&mut self) {
+        match (self.left.as_ref(), self.right.as_ref()) {
+            (Some((_, l)), Some((_, r))) => {
+                let max_ncols = l.ncols.max(r.data.ncols);
+                let i = match self.left_state.selected_column() {
+                    Some(i) => {
+                        if i >= max_ncols - 1 {
+                            0
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.left_state.select_column(Some(i));
+                let i = match self.right_state.selected_column() {
+                    Some(i) => {
+                        if i >= max_ncols - 1 {
+                            0
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.right_state.select_column(Some(i));
+                self.horizontal_scroll_state =
+                    self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (_, _) => {}
+        };
+    }
+
+    pub fn previous_col(&mut self) {
+        match (self.left.as_ref(), self.right.as_ref()) {
+            (Some((_, l)), Some((_, r))) => {
+                let max_ncols = l.ncols.max(r.data.ncols);
+                let i = match self.left_state.selected_column() {
+                    Some(i) => {
+                        if i == 0 {
+                            max_ncols - 1
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.left_state.select_column(Some(i));
+                let i = match self.right_state.selected_column() {
+                    Some(i) => {
+                        if i == 0 {
+                            max_ncols - 1
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.right_state.select_column(Some(i));
+                self.horizontal_scroll_state =
+                    self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (_, _) => {}
+        };
+    }
 }
 
 impl Default for ClientCompare {
     fn default() -> Self {
         Self {
-            left: MatrixView::Base {
-                data: Matrix::default(),
-                client: "<none>".to_owned(),
-            },
-            right: MatrixView::Diff {
-                base: Matrix::default(),
-                data: Matrix::default(),
-                client: "<none>".to_owned(),
-            },
+            left_state: TableState::default().with_selected(0),
+            right_state: TableState::default().with_selected(0),
+            horizontal_scroll_state: ScrollbarState::new(1 * ITEM_HEIGHT),
+            vertical_scroll_state: ScrollbarState::new(1 * ITEM_HEIGHT),
+            left: None,
+            right: None,
+            show_line_input_popup: false,
+            popup_buffer: Vec::new(),
+            popup_title: COMPARE_POPUP_TITLE_NOERR,
         }
     }
 }
@@ -533,15 +749,12 @@ pub struct App {
     pub tolerance: Tolerance,
     pub compare: ClientCompare,
     pub clients: Vec<String>,
-    /// counter
-    pub counter: u8,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
             running: true,
-            counter: 0,
             coordinator: Coordinator::default(),
             history: History::default(),
             wind_cursor: WindCursor::default(),
@@ -556,11 +769,13 @@ impl Default for App {
 pub enum HorizontalDirection {
     Left,
     Right,
+    Col(usize),
 }
 
 pub enum VerticalDirection {
     Up,
     Down,
+    Row(usize),
 }
 
 impl App {
@@ -584,8 +799,16 @@ impl App {
     pub fn render_vs_overview(&self) -> String {
         format!(
             "{} vs {}",
-            self.compare.left.client_name(),
-            self.compare.right.client_name()
+            self.compare
+                .left
+                .as_ref()
+                .map(|name| name.0.clone())
+                .unwrap_or("<none>".to_owned()),
+            self.compare
+                .right
+                .as_ref()
+                .map(|name| name.0.clone())
+                .unwrap_or("<none>".to_owned()),
         )
     }
 
@@ -603,16 +826,6 @@ impl App {
 
     pub fn render_wind_cursor(&self) -> String {
         format!("{}", self.wind_cursor)
-    }
-
-    // TODO make as scrollable table horizontal and vertical.
-    pub fn render_right_client(&self) -> String {
-        format!("{}", self.compare.right)
-    }
-
-    // TODO make as scrollable table horizontal and vertical.
-    pub fn render_left_client(&self) -> String {
-        format!("{}", self.compare.left)
     }
 
     pub fn focus_right_rat(&mut self) {
@@ -639,8 +852,22 @@ impl App {
         horizontal_dir: Option<HorizontalDirection>,
         vertical_dir: Option<VerticalDirection>,
     ) {
-        todo!()
+        if let Some(horiz) = horizontal_dir {
+            match horiz {
+                HorizontalDirection::Left => self.compare.previous_col(),
+                HorizontalDirection::Right => self.compare.next_col(),
+                HorizontalDirection::Col(line) => self.compare.col(line),
+            }
+        }
+        if let Some(vertical) = vertical_dir {
+            match vertical {
+                VerticalDirection::Up => self.compare.previous_row(),
+                VerticalDirection::Down => self.compare.next_row(),
+                VerticalDirection::Row(line) => self.compare.row(line),
+            }
+        }
     }
+
     pub fn wind_cursor(&mut self, direction: Option<VerticalDirection>, line: Option<usize>) {
         // TODO add cursor and use windmode to check if needing to select
         todo!()
@@ -657,6 +884,10 @@ impl App {
             WindMode::Select => WindMode::NormalCursor,
             WindMode::Inactive => WindMode::Inactive,
         };
+    }
+
+    pub fn compare_toggle_popup(&mut self) {
+        self.compare.show_line_input_popup = !self.compare.show_line_input_popup;
     }
 
     pub fn wind_toggle_mode(&mut self) {

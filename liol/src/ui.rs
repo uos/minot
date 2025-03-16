@@ -1,7 +1,12 @@
+use core::panic;
+
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Margin},
+    style::{palette::tailwind, Modifier, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, HighlightSpacing, Paragraph, Scrollbar, ScrollbarOrientation,
+    },
     Frame,
 };
 
@@ -21,26 +26,64 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).margin(2);
 
     let [client_base_area, client_diff_area] = inner_layout.areas(frame.area());
-
-    let client_base_paragraph = Paragraph::new(app.render_left_client());
-    let client_diff_paragraph = Paragraph::new(app.render_right_client());
-
     frame.render_widget(outer, frame.area());
-    frame.render_widget(
-        client_base_paragraph.block(
-            Block::new()
-                .border_type(BorderType::Plain)
-                .borders(Borders::RIGHT),
-        ),
-        client_base_area,
+
+    let selected_style = Style::default()
+        .add_modifier(Modifier::BOLD)
+        .bg(tailwind::GRAY.c500);
+
+    if let Some((lname, lmat)) = app.compare.left.as_ref() {
+        let ltable = lmat.render(app.tolerance.pot_cursor as usize).unwrap();
+        if let Some(ltable) = ltable {
+            let ltable = ltable
+                .cell_highlight_style(selected_style)
+                .highlight_spacing(HighlightSpacing::Always)
+                .block(
+                    Block::new()
+                        .border_type(BorderType::Plain)
+                        .borders(Borders::RIGHT),
+                );
+            frame.render_stateful_widget(ltable, client_base_area, &mut app.compare.left_state);
+        }
+    }
+
+    if let Some((rname, rmat)) = app.compare.right.as_ref() {
+        let rtable = rmat.render(app.tolerance.pot_cursor as usize).unwrap();
+        if let Some(rtable) = rtable {
+            let rtable = rtable
+                .cell_highlight_style(selected_style)
+                .highlight_spacing(HighlightSpacing::Always)
+                .block(
+                    Block::new()
+                        .border_type(BorderType::Plain)
+                        .borders(Borders::LEFT),
+                );
+            frame.render_stateful_widget(rtable, client_diff_area, &mut app.compare.right_state);
+        }
+    }
+
+    frame.render_stateful_widget(
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None),
+        frame.area().inner(Margin {
+            vertical: 1,
+            horizontal: 1,
+        }),
+        &mut app.compare.vertical_scroll_state,
     );
-    frame.render_widget(
-        client_diff_paragraph.block(
-            Block::new()
-                .border_type(BorderType::Plain)
-                .borders(Borders::LEFT),
-        ),
-        client_diff_area,
+
+    frame.render_stateful_widget(
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::HorizontalBottom)
+            .begin_symbol(None)
+            .end_symbol(None),
+        frame.area().inner(Margin {
+            vertical: 1,
+            horizontal: 1,
+        }),
+        &mut app.compare.horizontal_scroll_state,
     );
 
     if app.wind_cursor.showing_popup {
