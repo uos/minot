@@ -1,8 +1,16 @@
 use std::{
     collections::LinkedList,
-    error,
+    error::{self},
     fmt::{Display, Write},
+    str::FromStr,
 };
+
+use anyhow::{anyhow, Error};
+use ratatui::{
+    layout::Constraint,
+    widgets::{Cell, Row, Table},
+};
+use sea::Header;
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -199,14 +207,251 @@ impl Display for WindCursor {
 }
 
 // -- Matrix to parse and diff ------------
-#[derive(Debug)]
-pub struct Matrix {
-    data: Vec<f64>,
+use std::cmp::Ordering;
+
+#[derive(Debug, Clone, Copy)]
+pub struct TotalF64(f64);
+
+impl Eq for TotalF64 {}
+
+impl Display for TotalF64 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
-impl Default for Matrix {
-    fn default() -> Self {
-        Self { data: vec![0.05] }
+impl From<f64> for TotalF64 {
+    fn from(value: f64) -> Self {
+        Self(value)
+    }
+}
+
+// impl ToString for TotalF64 {
+//     fn to_string(&self) -> String {
+//         format!("{}", self)
+//     }
+// }
+
+impl From<TotalF64> for f64 {
+    fn from(value: TotalF64) -> Self {
+        value.0
+    }
+}
+
+impl PartialEq for TotalF64 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 || (self.0.is_nan() && other.0.is_nan())
+    }
+}
+
+impl PartialOrd for TotalF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TotalF64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Define NaN comparison behavior here to handle it the way you prefer
+        if self.0.is_nan() && other.0.is_nan() {
+            Ordering::Equal
+        } else if self.0.is_nan() {
+            Ordering::Less // or Greater, depending on application needs
+        } else if other.0.is_nan() {
+            Ordering::Greater
+        } else {
+            self.0.partial_cmp(&other.0).unwrap()
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Matrix {
+    data: Vec<TotalF64>,
+    pub nrows: usize,
+    pub ncols: usize,
+}
+
+impl Matrix {
+    pub fn new() -> Self {
+        Self {
+            data: vec![],
+            nrows: 0,
+            ncols: 0,
+        }
+    }
+
+    pub fn get(&self, row: usize, col: usize) -> Option<TotalF64> {
+        if row < self.nrows && col < self.ncols {
+            let index = col * self.nrows + row;
+            Some(self.data[index])
+        } else {
+            None
+        }
+    }
+
+    pub fn iter(&self) -> MatrixIterator {
+        MatrixIterator {
+            matrix: self,
+            current: 0,
+        }
+    }
+
+    pub fn row_vectors(&self) -> RowVectorIterator {
+        RowVectorIterator {
+            matrix: self,
+            current_row: 0,
+        }
+    }
+
+    pub fn render(&self) -> anyhow::Result<Option<Table>> {
+        let header_cols_nums: Vec<Cell> =
+            (0..self.ncols).map(|n| Cell::from(n.to_string())).collect();
+
+        let rows_cols_cell = "↓ →";
+        let rows_cols_cell_len = rows_cols_cell.len() as u16;
+        let mut header_cols = vec![Cell::from(rows_cols_cell)];
+
+        header_cols.extend(header_cols_nums);
+
+        let header_rows: Vec<Cell> = (0..self.nrows).map(|n| Cell::from(n.to_string())).collect();
+
+        let cols_max_len: u16 = self
+            .ncols
+            .to_string()
+            .len()
+            .try_into()
+            .map_err(|e| anyhow!("Too many cols: {e}"))?;
+        let rows_max_len: u16 = self
+            .nrows
+            .to_string()
+            .len()
+            .try_into()
+            .map_err(|e| anyhow!("Too many rows: {e}"))?;
+        let max_data_len: u16 = if let Some((_, _, max)) = self.iter().max() {
+            format!("{}", max)
+                .len()
+                .try_into()
+                .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?
+        } else {
+            return Ok(None);
+        };
+        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
+        let header_rows_cell_len = Constraint::Length(rows_max_len.max(rows_cols_cell_len));
+        // let data_cell_height = Constraint::Length(3);
+        // let header_rows_cell_height = data_cell_height;
+        // let header_cols_cell_len = data_cell_len;
+        // let header_cols_cell_height = data_cell_height;
+
+        let mut rows: Vec<Row> = Vec::with_capacity(self.nrows);
+        for (row, data) in self.row_vectors().enumerate() {
+            let row_header = header_rows
+                .get(row)
+                .expect("Not enough header rows for data");
+
+            let mut out = Vec::with_capacity(self.ncols + 1);
+            out.push(row_header.clone());
+
+            let data: Vec<Cell> = data
+                .into_iter()
+                .map(|d| Cell::from(d.to_string()))
+                .collect();
+
+            out.extend(data);
+
+            rows.push(Row::new(out));
+        }
+        let mut widths = vec![header_rows_cell_len];
+        widths.extend(core::iter::repeat_n(data_cell_len, self.ncols));
+        let table = Table::new(rows, widths).header(Row::new(header_cols));
+        Ok(Some(table))
+    }
+
+    pub fn render_diff(&self, other: &Self) -> Table {
+        // write header,
+        todo!()
+    }
+}
+
+pub struct RowVectorIterator<'a> {
+    matrix: &'a Matrix,
+    current_row: usize,
+}
+
+impl<'a> Iterator for RowVectorIterator<'a> {
+    type Item = Vec<TotalF64>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_row < self.matrix.nrows {
+            let mut row = Vec::with_capacity(self.matrix.ncols);
+            for col in 0..self.matrix.ncols {
+                if let Some(value) = self.matrix.get(self.current_row, col) {
+                    row.push(value);
+                }
+            }
+            self.current_row += 1;
+            Some(row)
+        } else {
+            None
+        }
+    }
+}
+
+pub struct MatrixIterator<'a> {
+    matrix: &'a Matrix,
+    current: usize,
+}
+
+impl<'a> Iterator for MatrixIterator<'a> {
+    type Item = (usize, usize, TotalF64); // (row, column, value)
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current < self.matrix.data.len() {
+            let col = self.current / self.matrix.nrows;
+            let row = self.current % self.matrix.nrows;
+            let value = self.matrix.data[self.current];
+            self.current += 1;
+            Some((row, col, value))
+        } else {
+            None
+        }
+    }
+}
+
+impl FromStr for Matrix {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let input = s.trim();
+
+        if !input.starts_with("VecStorage") || !input.ends_with("}") {
+            return Err(anyhow!("Not a VecStorage debug output."));
+        }
+
+        let data_start = "VecStorage { data: [".len();
+        let data_end = input
+            .rfind("]")
+            .ok_or_else(|| anyhow!("Could not find end of data."))?;
+        let data_str = &input[data_start..data_end];
+
+        let rest_start = data_end + "], nrows: Dyn(".len();
+        let rest_str = &input[rest_start..input.len() - 3]; // Exclude ending
+
+        let mut dims_iter = rest_str.split("), ncols: Dyn(");
+        let nrows_str = dims_iter.next().ok_or_else(|| anyhow!("Missing nrows"))?;
+        let ncols_str = dims_iter.next().ok_or_else(|| anyhow!("Missing ncols"))?;
+
+        let data = data_str
+            .split(',')
+            .map(str::trim)
+            .map(f64::from_str)
+            .map(|result| result.map(TotalF64::from))
+            .collect::<Result<Vec<TotalF64>, _>>()?;
+
+        let nrows = usize::from_str(nrows_str)?;
+        let ncols = usize::from_str(ncols_str)?;
+
+        Ok(Matrix { data, nrows, ncols })
     }
 }
 
