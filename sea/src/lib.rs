@@ -25,7 +25,7 @@ pub struct NetworkShipAddress {
     ip: [u8; 4],
     port: u16,
     ship: ShipName,
-    kind: ShipKind,
+    pub kind: ShipKind,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

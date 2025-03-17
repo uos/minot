@@ -2,7 +2,9 @@ use core::panic;
 use std::{
     error::{self},
     fmt::Display,
+    rc::Rc,
     str::FromStr,
+    sync::Mutex,
 };
 
 use anyhow::{anyhow, Error};
@@ -73,15 +75,257 @@ impl Display for Tolerance {
 }
 
 #[derive(Debug, Default)]
+enum MatSelectState {
+    Focused,
+    Diff,
+    #[default]
+    Hidden,
+}
+
+#[derive(Debug)]
+struct HistoryEntry {
+    pub mat: Matrix,
+    pub client: String,
+    pub state: MatSelectState,
+}
+
+#[derive(Debug, Default)]
 pub struct History {
-    history: Vec<String>,
-    pos: usize,
+    history: Vec<(String, usize, Rc<Mutex<Vec<HistoryEntry>>>)>, // variablename, calling id, buffers -- TODO a lifetime would be better here
+    cursor: usize,
+}
+
+impl History {
+    pub fn add(&mut self, mat: Matrix, client: String, variable: String) {
+        let var_changed = if let Some(cur_var) = self.current_var() {
+            variable == cur_var
+        } else {
+            self.history.is_empty()
+        };
+
+        let var_buffer = {
+            if let Some(var_buffer) = self
+                .history
+                .iter()
+                .find(|(name, _, _)| *name == variable)
+                .map(|el| el.2.clone())
+            {
+                var_buffer
+            } else {
+                Rc::new(Mutex::new(Vec::new()))
+            }
+        };
+
+        let change_buff = var_buffer.clone();
+        let call_id = {
+            let mut buffer = change_buff.lock().unwrap();
+
+            let call_id = if var_changed {
+                let count = self
+                    .history
+                    .iter()
+                    .filter(|(name, _call_id, _buff)| *name == variable)
+                    .count();
+                count + 1
+            } else {
+                1
+            };
+
+            if !self.shows_ref() {
+                buffer.push(HistoryEntry {
+                    mat,
+                    client,
+                    state: MatSelectState::Focused,
+                });
+                return;
+            }
+
+            if !self.shows_diff() {
+                buffer.push(HistoryEntry {
+                    mat,
+                    client,
+                    state: MatSelectState::Diff,
+                });
+                return;
+            }
+
+            // put to stack of clients
+            buffer.push(HistoryEntry {
+                mat,
+                client,
+                state: MatSelectState::Hidden,
+            });
+
+            call_id
+        };
+
+        if var_changed {
+            self.history.push((variable, call_id, var_buffer));
+        }
+    }
+
+    fn current_buff(&self) -> Rc<Mutex<Vec<HistoryEntry>>> {
+        self.history.get(self.cursor).unwrap().2.clone()
+    }
+    pub fn current_var(&self) -> Option<String> {
+        self.history.get(self.cursor).map(|el| el.0.clone())
+    }
+
+    pub fn shows_ref(&self) -> bool {
+        self.current_buff()
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|el| matches!(el.state, MatSelectState::Focused))
+            .is_some()
+    }
+
+    pub fn shows_diff(&self) -> bool {
+        self.current_buff()
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|el| matches!(el.state, MatSelectState::Diff))
+            .is_some()
+    }
+
+    pub fn diff_scroll(&mut self, direction: VerticalDirection) {
+        let buff_ref = self.current_buff().clone();
+        let mut current_buff = buff_ref.lock().unwrap();
+        match direction {
+            VerticalDirection::Up => {
+                if let Some(sel) = current_buff
+                    .iter()
+                    .position(|el| matches!(el.state, MatSelectState::Diff))
+                {
+                    if sel + 1 < current_buff.len() {
+                        current_buff[sel].state = MatSelectState::Hidden;
+                        current_buff[sel + 1].state = MatSelectState::Diff;
+                    }
+                }
+            }
+            VerticalDirection::Down => {
+                if let Some(sel) = current_buff
+                    .iter()
+                    .position(|el| matches!(el.state, MatSelectState::Diff))
+                {
+                    if sel - 1 > 0 {
+                        current_buff[sel].state = MatSelectState::Hidden;
+                        current_buff[sel - 1].state = MatSelectState::Diff;
+                    }
+                }
+            }
+            VerticalDirection::Row(idx) => {
+                if let Some(sel) = current_buff
+                    .iter()
+                    .position(|el| matches!(el.state, MatSelectState::Diff))
+                {
+                    if idx < current_buff.len() {
+                        current_buff[sel].state = MatSelectState::Hidden;
+                        current_buff[idx].state = MatSelectState::Diff;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn render_var_history(&self) -> String {
+        if let Some((current_var, call_id)) =
+            self.history.get(self.cursor).map(|el| (el.0.clone(), el.1))
+        {
+            let control_hints = {
+                let current_diff_pos = self.cursor;
+                let right_hint = if self.history.len() > current_diff_pos + 1 {
+                    "→".to_owned()
+                } else {
+                    "".to_owned()
+                };
+
+                let left_hint = if current_diff_pos == 0 {
+                    "".to_owned()
+                } else {
+                    "←".to_owned()
+                };
+
+                format!("{}{}", left_hint, right_hint)
+            };
+            format!("{}[{}]{}", current_var, call_id, control_hints)
+        } else {
+            "".to_owned()
+        }
+    }
+
+    pub fn scroll_history(&mut self, direction: HorizontalDirection) {
+        let new_idx = match direction {
+            HorizontalDirection::Left => {
+                if self.cursor == 0 {
+                    self.cursor
+                } else {
+                    self.cursor - 1
+                }
+            }
+            HorizontalDirection::Right => {
+                if self.cursor == self.history.len() - 1 {
+                    self.cursor
+                } else {
+                    self.cursor + 1
+                }
+            }
+            HorizontalDirection::Col(idx) => idx,
+        };
+
+        self.cursor = new_idx;
+    }
+
+    pub fn set_to_newest_history(&mut self) {
+        self.cursor = self.history.len() - 1;
+    }
+
+    pub fn render_vs_overview(&self) -> String {
+        let buff_ref = self.current_buff().clone();
+        let current_buff = buff_ref.lock().unwrap();
+        let current_focus = current_buff
+            .iter()
+            .find(|el| matches!(el.state, MatSelectState::Focused))
+            .map(|sel| sel.client.clone())
+            .unwrap_or("<none>".to_owned());
+        let current_diff = current_buff
+            .iter()
+            .find(|el| matches!(el.state, MatSelectState::Diff))
+            .map(|sel| sel.client.clone())
+            .unwrap_or("<none>".to_owned());
+
+        let control_hints = if current_diff != "<none>" {
+            let current_diff_pos = current_buff
+                .iter()
+                .position(|h| matches!(h.state, MatSelectState::Diff))
+                .expect("just checked");
+
+            let upper_hint = if current_buff.len() > current_diff_pos + 1 {
+                "↑".to_owned()
+            } else {
+                "".to_owned()
+            };
+
+            let lower_hint = if current_diff_pos == 0 {
+                "".to_owned()
+            } else {
+                "↓".to_owned()
+            };
+
+            format!("{}{}", lower_hint, upper_hint)
+        } else {
+            "".to_owned()
+        };
+
+        format!("{}  {}{}", current_focus, current_diff, control_hints)
+    }
 }
 
 impl Display for History {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.history.get(self.pos) {
-            Some(el) => f.write_str(el),
+        match self.current_var() {
+            Some(el) => f.write_str(&el),
             None => f.write_str(""),
         }
     }
@@ -481,39 +725,6 @@ impl FromStr for Matrix {
     }
 }
 
-// #[derive(Debug)]
-// pub enum MatrixView {
-//     Base { data: Matrix, client: String },
-//     Diff { data: DiffMatrix, client: String },
-// }
-
-// impl MatrixView {
-//     pub fn client_name(&self) -> String {
-//         match self {
-//             MatrixView::Base { data: _, client } => client.clone(),
-//             MatrixView::Diff { data: _, client } => client.clone(),
-//         }
-//     }
-//     fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
-//         match self {
-//             MatrixView::Base { data, client: _ } => data.render(precision),
-//             MatrixView::Diff { data, client: _ } => data.render(precision),
-//         }
-//     }
-//     fn nrows(&self) -> usize {
-//         match self {
-//             MatrixView::Base { data, client: _ } => data.nrows,
-//             MatrixView::Diff { data, client: _ } => data.data.nrows,
-//         }
-//     }
-//     fn ncols(&self) -> usize {
-//         match self {
-//             MatrixView::Base { data, client: _ } => data.ncols,
-//             MatrixView::Diff { data, client: _ } => data.data.ncols,
-//         }
-//     }
-// }
-
 // -- Client Compare inner windows --------
 
 const ITEM_HEIGHT: usize = 4;
@@ -748,7 +959,7 @@ pub struct App {
     pub mode: Mode,
     pub tolerance: Tolerance,
     pub compare: ClientCompare,
-    pub clients: Vec<String>,
+    // pub clients: Vec<String>,
 }
 
 impl Default for App {
@@ -761,7 +972,7 @@ impl Default for App {
             mode: Mode::default(),
             tolerance: Tolerance::default(),
             compare: ClientCompare::default(),
-            clients: Vec::new(),
+            // clients: Vec::new(),
         }
     }
 }
@@ -797,19 +1008,7 @@ impl App {
     }
 
     pub fn render_vs_overview(&self) -> String {
-        format!(
-            "{} vs {}",
-            self.compare
-                .left
-                .as_ref()
-                .map(|name| name.0.clone())
-                .unwrap_or("<none>".to_owned()),
-            self.compare
-                .right
-                .as_ref()
-                .map(|name| name.0.clone())
-                .unwrap_or("<none>".to_owned()),
-        )
+        self.history.render_vs_overview()
     }
 
     pub fn render_history(&self) -> String {
@@ -832,21 +1031,43 @@ impl App {
         todo!()
     }
 
+    pub fn change_diff_rat(&mut self, direction: VerticalDirection) {
+        self.history.diff_scroll(direction);
+    }
+
+    // TODO send to channel, react on outside
     pub fn send_lock_next(&mut self) {
         todo!()
     }
+
+    // TODO same
     pub fn send_unlock(&mut self) {
         todo!()
     }
+
     pub fn change_tolerance_at_current_cursor(&mut self, direction: VerticalDirection) {
         todo!()
     }
+
     pub fn change_tolerance_cursor(&mut self, direction: HorizontalDirection) {
         todo!()
     }
-    pub fn change_history(&mut self, direction: VerticalDirection) {
-        todo!()
+
+    pub fn change_history(&mut self, direction: HorizontalDirection) {
+        self.history.scroll_history(direction);
     }
+
+    // called from outside directly when receiving a new matrix. the selection what is shown is done by the history
+    pub fn add_to_newest_history(
+        &mut self,
+        mat_str: String,
+        client_name: String,
+        variable: String,
+    ) {
+        let mat = Matrix::from_str(&mat_str).unwrap();
+        self.history.add(mat, client_name, variable);
+    }
+
     pub fn scroll_compare(
         &mut self,
         horizontal_dir: Option<HorizontalDirection>,

@@ -70,6 +70,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let crate::Action::Catch { source } = action {
                                 match comparer.get_cannon().catch_dyn(&source).await {
                                     Ok((strrep, var_type)) => {
+                                        let name = match source.kind {
+                                            ShipKind::Rat(name) => name,
+                                            ShipKind::Wind(_) => {
+                                                error!("Received something from Wind.");
+                                                continue;
+                                            }
+                                        };
+
                                         // dbg!(strrep, var_type, source);
                                         // write_data.write().unwrap()
                                         // match ndata_tx.send((source, strrep, var_type)).await {

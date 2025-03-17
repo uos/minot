@@ -46,7 +46,11 @@ pub fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<()> {
             app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
         }
         KeyCode::Char('h') => {
-            app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_history(crate::app::HorizontalDirection::Left);
+            } else {
+                app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
+            }
         }
         KeyCode::Left => {
             app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
@@ -80,35 +84,24 @@ pub fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<()> {
         KeyCode::Char('P') => {
             app.change_tolerance_cursor(crate::app::HorizontalDirection::Right);
         }
-        KeyCode::Char('k') => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.change_history(crate::app::VerticalDirection::Up);
-            } else {
-                match app.wind_mode() {
-                    false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
-                    true => {
-                        app.wind_cursor(Some(crate::app::VerticalDirection::Up), None);
-                    }
-                }
+        KeyCode::Char('k') => match app.wind_mode() {
+            false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
+            true => {
+                app.wind_cursor(Some(crate::app::VerticalDirection::Up), None);
             }
+        },
+        KeyCode::Tab => {
+            app.change_history(crate::app::HorizontalDirection::Right);
         }
-        KeyCode::PageUp => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.change_history(crate::app::VerticalDirection::Up);
+        KeyCode::BackTab => {
+            app.change_history(crate::app::HorizontalDirection::Left);
+        }
+        KeyCode::Char('j') => match app.wind_mode() {
+            false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
+            true => {
+                app.wind_cursor(Some(crate::app::VerticalDirection::Down), None);
             }
-        }
-        KeyCode::Char('j') => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.change_history(crate::app::VerticalDirection::Down);
-            } else {
-                match app.wind_mode() {
-                    false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
-                    true => {
-                        app.wind_cursor(Some(crate::app::VerticalDirection::Down), None);
-                    }
-                }
-            }
-        }
+        },
         KeyCode::Down => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
             true => {
@@ -121,11 +114,6 @@ pub fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<()> {
                 app.wind_cursor(Some(crate::app::VerticalDirection::Up), None);
             }
         },
-        KeyCode::PageDown => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.change_history(crate::app::VerticalDirection::Down);
-            }
-        }
         KeyCode::Char('v') => {
             if app.wind_mode() {
                 app.wind_toggle_select();
@@ -209,6 +197,7 @@ pub fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<()> {
         }
         // --- Entering into popup --------
         KeyCode::Backspace
+        | KeyCode::Char(':')
         | KeyCode::Char('1')
         | KeyCode::Char('2')
         | KeyCode::Char('3')
@@ -291,6 +280,9 @@ pub fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<()> {
                         }
                         KeyCode::Char('0') => {
                             app.compare.popup_buffer.push('0');
+                        }
+                        KeyCode::Char(':') => {
+                            app.compare.popup_buffer.push(':');
                         }
                         _ => {}
                     }
