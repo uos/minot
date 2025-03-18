@@ -233,7 +233,6 @@ impl Client {
         mut wh: OwnedWriteHalf,
     ) {
         while let Some(packet) = channel.recv().await {
-            // let orig_packet = packet.clone(); // TODO rm after dbg
             let packet = bincode::serialize(&packet).expect("could not serialize packet");
             let packet_size = packet.len() as u32;
             let packet_size_buffer = packet_size.to_be_bytes();
@@ -245,13 +244,11 @@ impl Client {
                 packet_size_buffer[3],
             ];
             buffer.extend_from_slice(&packet);
-            // debug!("writing buffer: {}, {}", buffer.len(), packet.len());
             if let Err(e) = wh.write_all(&buffer).await {
                 error!("could not send to tcp socket: {e}");
                 channel.close();
                 return;
             }
-            // debug!("written packet to tcp stream {:?}", orig_packet);
         }
     }
 
@@ -441,6 +438,7 @@ impl Client {
         port: u16,
         data: Vec<u8>,
         variable_type: VariableType,
+        variable_name: &str,
     ) -> anyhow::Result<()> {
         loop {
             let addr = format!("{}:{}", address.to_string(), port);
@@ -449,6 +447,8 @@ impl Client {
                 tokio::net::TcpStream::connect(&addr),
             )
             .await;
+
+            let padded_var_name = Sea::pad_string(variable_name);
 
             match stream {
                 Err(_) => {
@@ -468,6 +468,12 @@ impl Client {
                 },
                 Ok(Ok(mut stream)) => {
                     // ask if ready to receive by sending ack and wait for ack answer
+                    let init_request = crate::net::Packet {
+                        header: Header::default(),
+                        data: PacketKind::RequestVarSend(padded_var_name),
+                    };
+                    let init_request_data =
+                        bincode::serialize(&init_request).expect("non serializable ack");
                     let ack_data = crate::net::Packet {
                         header: Header::default(),
                         data: PacketKind::Acknowledge,
@@ -480,7 +486,7 @@ impl Client {
                     {
                         let mut buf = vec![0; ack_data.len()];
                         loop {
-                            stream.write_all(&ack_data).await?;
+                            stream.write_all(&init_request_data).await?;
                             debug!("written ack_data, wait for response");
 
                             let timeout = tokio::time::timeout(
@@ -536,7 +542,7 @@ impl Client {
     pub async fn recv_raw_from_other_client(
         &self,
         sender: Option<&crate::NetworkShipAddress>,
-    ) -> anyhow::Result<(Vec<u8>, VariableType)> {
+    ) -> anyhow::Result<(Vec<u8>, VariableType, String)> {
         loop {
             let stream = tokio::time::timeout(
                 CLIENT_TO_CLIENT_TIMEOUT,
@@ -580,22 +586,37 @@ impl Client {
                     // Ask for other client if it is ready. Normally you would assume TCP handles handshakes etc but it seems to write
                     // to the socket into the void without the receiver being ready to receive anything. Tokio then merges the buffers when calling recv()?
                     // Another option would be to init the socket on each receive but then the socket could be set in the meantime by the operating system.
-                    let ack_data = crate::net::Packet {
+                    let handshake_init_data = crate::net::Packet {
                         header: Header::default(),
-                        data: PacketKind::Acknowledge,
+                        data: PacketKind::RequestVarSend(Sea::pad_string(" ")),
                     };
-                    let ack_data = bincode::serialize(&ack_data).expect("non serializable ack");
-                    let mut buf = vec![0; ack_data.len()];
+                    let handshake_init_data =
+                        bincode::serialize(&handshake_init_data).expect("non serializable ack");
+                    let mut buf = vec![0; handshake_init_data.len()];
                     stream.read_exact(&mut buf).await.map_err(|e| {
                         anyhow!("Could not read exact in receiver for other client comm: {e}")
                     })?;
                     let received_packet = bincode::deserialize::<crate::net::Packet>(&buf)?;
-                    if !matches!(received_packet.data, crate::net::PacketKind::Acknowledge) {
-                        return Err(anyhow!("Received packet for 1-1 handshake is not Ack"));
-                    }
+                    let var_name = if let crate::net::PacketKind::RequestVarSend(var_name) =
+                        received_packet.data
+                    {
+                        var_name
+                    } else {
+                        return Err(anyhow!(
+                            "Received packet for 1-1 handshake is of unexpected type"
+                        ));
+                    };
+                    let var_name = Sea::reverse_padding(&var_name);
 
-                    stream.write_all(&ack_data).await?;
-                    debug!("handshake sucess");
+                    let handshake_start_ack = crate::net::Packet {
+                        header: Header::default(),
+                        data: PacketKind::Acknowledge,
+                    };
+                    let handshake_start_ack_data =
+                        bincode::serialize(&handshake_start_ack).expect("non serializable ack");
+
+                    stream.write_all(&handshake_start_ack_data).await?;
+                    debug!("handshake sucess {}", var_name);
 
                     let mut buffer = Vec::with_capacity(1024);
                     let mut first = true;
@@ -638,7 +659,7 @@ impl Client {
 
                     if !buffer.is_empty() {
                         buffer = buffer[6..buffer.len()].into(); // TODO for large data, maybe better to directly delete the indicators when checking them to avoid large copies
-                        return Ok((buffer, variable_type));
+                        return Ok((buffer, variable_type, var_name));
                     }
 
                     return Err(anyhow!("Received data is not for us"));

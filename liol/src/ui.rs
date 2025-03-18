@@ -32,6 +32,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         .add_modifier(Modifier::BOLD)
         .bg(tailwind::GRAY.c500);
 
+    // TODO sync history cursor with cmp here. so if history has something but cmp does not show, call update here to set it to screen.
+    // if history got changed via keys, update here again via update() on compare to show the ones that history wants us to
+
+    // render reference
     if let Some((lname, lmat)) = app.compare.left.as_ref() {
         let ltable = lmat.render(app.tolerance.pot_cursor as usize).unwrap();
         if let Some(ltable) = ltable {
@@ -47,6 +51,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         }
     }
 
+    // render diff
     if let Some((rname, rmat)) = app.compare.right.as_ref() {
         let rtable = rmat.render(app.tolerance.pot_cursor as usize).unwrap();
         if let Some(rtable) = rtable {

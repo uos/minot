@@ -176,6 +176,7 @@ pub trait Cannon: Send + Sync + 'static {
         targets: &Vec<crate::NetworkShipAddress>,
         data: impl net::SeaSendableBuffer,
         variable_type: VariableType,
+        variable_name: &str,
     ) -> anyhow::Result<()>;
 
     /// Catch the dumped data from the source.
@@ -186,7 +187,7 @@ pub trait Cannon: Send + Sync + 'static {
     async fn catch_dyn(
         &self,
         target: &crate::NetworkShipAddress,
-    ) -> anyhow::Result<(String, VariableType)>;
+    ) -> anyhow::Result<(String, VariableType, String)>;
 }
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]

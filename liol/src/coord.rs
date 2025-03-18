@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::env::current_exe;
 
 use log::{debug, error, info, warn};
 use sea::coordinator::COMPARE_NODE_NAME;

@@ -148,7 +148,7 @@ where
 
                     rat_ship
                         .get_cannon()
-                        .shoot(&target, data.clone(), variable_type)
+                        .shoot(&target, data.clone(), variable_type, variable_name)
                         .await?;
 
                     if let Some(mut receiver) = receiver {

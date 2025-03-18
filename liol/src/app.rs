@@ -2,9 +2,10 @@ use core::panic;
 use std::{
     error::{self},
     fmt::Display,
+    i8,
     rc::Rc,
     str::FromStr,
-    sync::Mutex,
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::{anyhow, Error};
@@ -13,6 +14,7 @@ use ratatui::{
     style::Stylize,
     widgets::{Cell, Row, ScrollbarState, Table, TableState},
 };
+use sea::{net::PacketKind, NetworkShipAddress};
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -33,31 +35,141 @@ impl Display for Mode {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Tolerance {
-    pub value: f64,
+    pub value: String,
     pub pot_cursor: u8,
+}
+
+impl Default for Tolerance {
+    fn default() -> Self {
+        Self {
+            value: "0.".to_owned(),
+            pot_cursor: 0,
+        }
+    }
+}
+
+impl Tolerance {
+    pub fn change_tolerance_at_current_cursor(&mut self, direction: VerticalDirection) {
+        let dig = self
+            .value
+            .chars()
+            .skip(self.pot_cursor as usize)
+            .take(1)
+            .collect::<Vec<char>>()
+            .first()
+            .map(|c| c.to_digit(10).map(|el| el as i8));
+
+        self.value = self
+            .value
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                if self.pot_cursor as usize == i {
+                    let ndig = match direction {
+                        VerticalDirection::Up => {
+                            if let Some(Some(dig)) = dig {
+                                dig + 1
+                            } else {
+                                0
+                            }
+                        }
+                        VerticalDirection::Down => {
+                            if let Some(Some(dig)) = dig {
+                                (dig - 1).max(0)
+                            } else {
+                                0
+                            }
+                        }
+                        VerticalDirection::Row(ndig) => ndig as i8,
+                    }
+                    .max(0) as u32;
+                    char::from_digit(ndig, 10).unwrap()
+                } else {
+                    c
+                }
+            })
+            .collect();
+    }
+
+    pub fn scroll_cursor(&mut self, direction: HorizontalDirection) {
+        let ndig = match direction {
+            HorizontalDirection::Left => self.pot_cursor as i8 - 1,
+            HorizontalDirection::Right => self.pot_cursor as i8 + 1,
+            HorizontalDirection::Col(npot) => npot as i8,
+        };
+
+        // prepend
+        let ndig = {
+            if ndig < 0 {
+                let l = ndig.abs();
+                for _ in 0..l {
+                    self.value = "0".to_owned() + &self.value;
+                }
+                0
+            } else {
+                ndig
+            }
+        } as u8;
+
+        // skip cursor
+        let ndig = if ndig > 0 {
+            let at_cursor = self.value.chars().nth(ndig as usize);
+            if let Some(at_cursor) = at_cursor {
+                if at_cursor == '.' {
+                    match direction {
+                        HorizontalDirection::Left => ndig - 1,
+                        HorizontalDirection::Right => ndig + 1,
+                        HorizontalDirection::Col(_) => todo!(),
+                    }
+                } else {
+                    ndig
+                }
+            } else {
+                ndig
+            }
+        } else {
+            ndig
+        };
+
+        // trim firsts when moving to right
+        let ndig = if self.value.ends_with(".") && ndig > 0 && self.value.len() > 2 {
+            let diff = (ndig as i8 - self.pot_cursor as i8).abs() as usize;
+            self.value = self.value[diff..].to_owned();
+            0
+        } else {
+            ndig
+        };
+
+        // append
+        if ndig as usize > self.value.len() - 1 {
+            let diff = (ndig as usize).abs_diff(self.value.len() - 1);
+            for _ in 0..diff {
+                self.value += "0";
+            }
+        }
+
+        if (ndig as usize) < self.value.len() - 1 {
+            let diff = self.value.len() - 1 - ndig as usize;
+            for _ in 0..diff {
+                if !self.value.ends_with(".") {
+                    self.value.pop();
+                }
+            }
+        }
+
+        self.pot_cursor = ndig as u8;
+    }
 }
 
 impl Display for Tolerance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("tol ")?;
-        // f.write_str(create_underlined_string(self.value, self.pot_cursor).as_str())
-        let decimal_places = if self.pot_cursor == 0 {
-            0
-        } else {
-            self.pot_cursor as usize
-        };
-        let formatted_tolerance = format!("{:.1$}", self.value, decimal_places);
-        let chars: Vec<char> = formatted_tolerance.chars().collect();
-        let cursor_index = if self.pot_cursor > 0 {
-            formatted_tolerance.find('.').unwrap_or(0) + self.pot_cursor as usize
-        } else {
-            0
-        };
+        let chars: Vec<char> = self.value.chars().collect();
 
         for (i, &c) in chars.iter().enumerate() {
-            if i == cursor_index {
+            if i == self.pot_cursor as usize {
                 if i == 0 {
                     f.write_fmt(format_args!("{}", c))?;
                 } else if i == chars.len() - 1 {
@@ -91,14 +203,31 @@ struct HistoryEntry {
 
 #[derive(Debug, Default)]
 pub struct History {
-    history: Vec<(String, usize, Rc<Mutex<Vec<HistoryEntry>>>)>, // variablename, calling id, buffers -- TODO a lifetime would be better here
+    history: Vec<(String, usize, Arc<Mutex<Vec<HistoryEntry>>>)>, // variablename, calling id, buffers -- TODO a lifetime would be better here
     cursor: usize,
 }
 
 impl History {
+    pub fn diff_to_ref(&mut self) {
+        if let Some(curr_buff_in) = self.current_buff() {
+            let mut curr_buff = curr_buff_in.lock().unwrap();
+            let curr_focus = curr_buff
+                .iter()
+                .position(|hentry| matches!(hentry.state, MatSelectState::Focused));
+            let curr_diff = curr_buff
+                .iter()
+                .position(|hentry| matches!(hentry.state, MatSelectState::Diff));
+
+            if let (Some(focus_idx), Some(diff_idx)) = (curr_focus, curr_diff) {
+                curr_buff.get_mut(focus_idx).unwrap().state = MatSelectState::Diff;
+                curr_buff.get_mut(diff_idx).unwrap().state = MatSelectState::Focused;
+            }
+        }
+    }
+
     pub fn add(&mut self, mat: Matrix, client: String, variable: String) {
-        let var_changed = if let Some(cur_var) = self.current_var() {
-            variable == cur_var
+        let var_changed = if let Some(cur_var) = self.latest_var() {
+            variable != cur_var
         } else {
             self.history.is_empty()
         };
@@ -112,7 +241,7 @@ impl History {
             {
                 var_buffer
             } else {
-                Rc::new(Mutex::new(Vec::new()))
+                Arc::new(Mutex::new(Vec::new()))
             }
         };
 
@@ -131,30 +260,28 @@ impl History {
                 1
             };
 
-            if !self.shows_ref() {
+            if self.shows_ref() {
+                if self.shows_diff() {
+                    // put to stack of clients
+                    buffer.push(HistoryEntry {
+                        mat,
+                        client,
+                        state: MatSelectState::Hidden,
+                    });
+                } else {
+                    buffer.push(HistoryEntry {
+                        mat,
+                        client,
+                        state: MatSelectState::Diff,
+                    });
+                }
+            } else {
                 buffer.push(HistoryEntry {
                     mat,
                     client,
                     state: MatSelectState::Focused,
                 });
-                return;
             }
-
-            if !self.shows_diff() {
-                buffer.push(HistoryEntry {
-                    mat,
-                    client,
-                    state: MatSelectState::Diff,
-                });
-                return;
-            }
-
-            // put to stack of clients
-            buffer.push(HistoryEntry {
-                mat,
-                client,
-                state: MatSelectState::Hidden,
-            });
 
             call_id
         };
@@ -164,65 +291,76 @@ impl History {
         }
     }
 
-    fn current_buff(&self) -> Rc<Mutex<Vec<HistoryEntry>>> {
-        self.history.get(self.cursor).unwrap().2.clone()
+    fn current_buff(&self) -> Option<Arc<Mutex<Vec<HistoryEntry>>>> {
+        self.history.get(self.cursor).map(|f| f.2.clone())
     }
     pub fn current_var(&self) -> Option<String> {
         self.history.get(self.cursor).map(|el| el.0.clone())
     }
 
+    pub fn latest_var(&self) -> Option<String> {
+        self.history.last().map(|el| el.0.clone())
+    }
+
     pub fn shows_ref(&self) -> bool {
-        self.current_buff()
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|el| matches!(el.state, MatSelectState::Focused))
-            .is_some()
+        if let Some(buff) = self.current_buff() {
+            buff.lock()
+                .unwrap()
+                .iter()
+                .find(|el| matches!(el.state, MatSelectState::Focused))
+                .is_some()
+        } else {
+            false
+        }
     }
 
     pub fn shows_diff(&self) -> bool {
-        self.current_buff()
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|el| matches!(el.state, MatSelectState::Diff))
-            .is_some()
+        if let Some(buff) = self.current_buff() {
+            buff.lock()
+                .unwrap()
+                .iter()
+                .find(|el| matches!(el.state, MatSelectState::Diff))
+                .is_some()
+        } else {
+            false
+        }
     }
 
     pub fn diff_scroll(&mut self, direction: VerticalDirection) {
-        let buff_ref = self.current_buff().clone();
-        let mut current_buff = buff_ref.lock().unwrap();
-        match direction {
-            VerticalDirection::Up => {
-                if let Some(sel) = current_buff
-                    .iter()
-                    .position(|el| matches!(el.state, MatSelectState::Diff))
-                {
-                    if sel + 1 < current_buff.len() {
-                        current_buff[sel].state = MatSelectState::Hidden;
-                        current_buff[sel + 1].state = MatSelectState::Diff;
+        if let Some(buff_ref) = self.current_buff().clone() {
+            let mut current_buff = buff_ref.lock().unwrap();
+            match direction {
+                VerticalDirection::Up => {
+                    if let Some(sel) = current_buff
+                        .iter()
+                        .position(|el| matches!(el.state, MatSelectState::Diff))
+                    {
+                        if sel + 1 < current_buff.len() {
+                            current_buff[sel].state = MatSelectState::Hidden;
+                            current_buff[sel + 1].state = MatSelectState::Diff;
+                        }
                     }
                 }
-            }
-            VerticalDirection::Down => {
-                if let Some(sel) = current_buff
-                    .iter()
-                    .position(|el| matches!(el.state, MatSelectState::Diff))
-                {
-                    if sel - 1 > 0 {
-                        current_buff[sel].state = MatSelectState::Hidden;
-                        current_buff[sel - 1].state = MatSelectState::Diff;
+                VerticalDirection::Down => {
+                    if let Some(sel) = current_buff
+                        .iter()
+                        .position(|el| matches!(el.state, MatSelectState::Diff))
+                    {
+                        if sel - 1 > 0 {
+                            current_buff[sel].state = MatSelectState::Hidden;
+                            current_buff[sel - 1].state = MatSelectState::Diff;
+                        }
                     }
                 }
-            }
-            VerticalDirection::Row(idx) => {
-                if let Some(sel) = current_buff
-                    .iter()
-                    .position(|el| matches!(el.state, MatSelectState::Diff))
-                {
-                    if idx < current_buff.len() {
-                        current_buff[sel].state = MatSelectState::Hidden;
-                        current_buff[idx].state = MatSelectState::Diff;
+                VerticalDirection::Row(idx) => {
+                    if let Some(sel) = current_buff
+                        .iter()
+                        .position(|el| matches!(el.state, MatSelectState::Diff))
+                    {
+                        if idx < current_buff.len() {
+                            current_buff[sel].state = MatSelectState::Hidden;
+                            current_buff[idx].state = MatSelectState::Diff;
+                        }
                     }
                 }
             }
@@ -282,43 +420,46 @@ impl History {
     }
 
     pub fn render_vs_overview(&self) -> String {
-        let buff_ref = self.current_buff().clone();
-        let current_buff = buff_ref.lock().unwrap();
-        let current_focus = current_buff
-            .iter()
-            .find(|el| matches!(el.state, MatSelectState::Focused))
-            .map(|sel| sel.client.clone())
-            .unwrap_or("<none>".to_owned());
-        let current_diff = current_buff
-            .iter()
-            .find(|el| matches!(el.state, MatSelectState::Diff))
-            .map(|sel| sel.client.clone())
-            .unwrap_or("<none>".to_owned());
-
-        let control_hints = if current_diff != "<none>" {
-            let current_diff_pos = current_buff
+        if let Some(buff_ref) = self.current_buff().clone() {
+            let current_buff = buff_ref.lock().unwrap();
+            let current_focus = current_buff
                 .iter()
-                .position(|h| matches!(h.state, MatSelectState::Diff))
-                .expect("just checked");
+                .find(|el| matches!(el.state, MatSelectState::Focused))
+                .map(|sel| sel.client.clone())
+                .unwrap_or("<none>".to_owned());
+            let current_diff = current_buff
+                .iter()
+                .find(|el| matches!(el.state, MatSelectState::Diff))
+                .map(|sel| sel.client.clone())
+                .unwrap_or("<none>".to_owned());
 
-            let upper_hint = if current_buff.len() > current_diff_pos + 1 {
-                "↑".to_owned()
+            let control_hints = if current_diff != "<none>" {
+                let current_diff_pos = current_buff
+                    .iter()
+                    .position(|h| matches!(h.state, MatSelectState::Diff))
+                    .expect("just checked");
+
+                let upper_hint = if current_buff.len() > current_diff_pos + 1 {
+                    "↑".to_owned()
+                } else {
+                    "".to_owned()
+                };
+
+                let lower_hint = if current_diff_pos == 0 {
+                    "".to_owned()
+                } else {
+                    "↓".to_owned()
+                };
+
+                format!("{}{}", lower_hint, upper_hint)
             } else {
                 "".to_owned()
             };
 
-            let lower_hint = if current_diff_pos == 0 {
-                "".to_owned()
-            } else {
-                "↓".to_owned()
-            };
-
-            format!("{}{}", lower_hint, upper_hint)
+            format!("{}  {}{}", current_focus, current_diff, control_hints)
         } else {
             "".to_owned()
-        };
-
-        format!("{}  {}{}", current_focus, current_diff, control_hints)
+        }
     }
 }
 
@@ -954,27 +1095,12 @@ impl Default for ClientCompare {
 pub struct App {
     pub running: bool,
     pub coordinator: Coordinator,
-    pub history: History, // 0 var1; -1 var2 etc.
+    pub history: Arc<RwLock<History>>, // 0 var1; -1 var2 etc.
     pub wind_cursor: WindCursor,
     pub mode: Mode,
     pub tolerance: Tolerance,
     pub compare: ClientCompare,
-    // pub clients: Vec<String>,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            running: true,
-            coordinator: Coordinator::default(),
-            history: History::default(),
-            wind_cursor: WindCursor::default(),
-            mode: Mode::default(),
-            tolerance: Tolerance::default(),
-            compare: ClientCompare::default(),
-            // clients: Vec::new(),
-        }
-    }
+    pub send_coordinator: tokio::sync::mpsc::Sender<PacketKind>,
 }
 
 pub enum HorizontalDirection {
@@ -991,8 +1117,30 @@ pub enum VerticalDirection {
 
 impl App {
     /// Constructs a new instance of [`App`].
-    pub fn new() -> Self {
-        Self::default()
+    pub async fn new(
+        sender: tokio::sync::mpsc::Sender<PacketKind>,
+        mut receiver: tokio::sync::mpsc::Receiver<(String, String, String)>,
+    ) -> Self {
+        let history = Arc::new(RwLock::new(History::default()));
+        let history_add = Arc::clone(&history);
+        tokio::spawn(async move {
+            while let Some((client_name, mat, var_name)) = receiver.recv().await {
+                let mut hist = history_add.write().unwrap();
+                let mat = Matrix::from_str(&mat).unwrap();
+                hist.add(mat, client_name, var_name);
+            }
+        });
+        tokio::task::yield_now().await;
+        Self {
+            running: true,
+            coordinator: Coordinator::default(),
+            history,
+            wind_cursor: WindCursor::default(),
+            mode: Mode::default(),
+            tolerance: Tolerance::default(),
+            compare: ClientCompare::default(),
+            send_coordinator: sender,
+        }
     }
 
     /// Handles the tick event of the terminal.
@@ -1008,11 +1156,11 @@ impl App {
     }
 
     pub fn render_vs_overview(&self) -> String {
-        self.history.render_vs_overview()
+        self.history.read().unwrap().render_vs_overview()
     }
 
     pub fn render_history(&self) -> String {
-        format!("{}", self.history)
+        format!("{}", self.history.read().unwrap().render_var_history())
     }
 
     pub fn render_tolerance(&self) -> String {
@@ -1028,44 +1176,37 @@ impl App {
     }
 
     pub fn focus_right_rat(&mut self) {
-        todo!()
+        self.history.write().unwrap().diff_to_ref()
     }
 
     pub fn change_diff_rat(&mut self, direction: VerticalDirection) {
-        self.history.diff_scroll(direction);
+        self.history.write().unwrap().diff_scroll(direction)
     }
 
-    // TODO send to channel, react on outside
-    pub fn send_lock_next(&mut self) {
-        todo!()
+    pub async fn send_lock_next(&mut self) {
+        self.send_coordinator
+            .send(PacketKind::LockNext)
+            .await
+            .unwrap();
     }
 
-    // TODO same
-    pub fn send_unlock(&mut self) {
-        todo!()
+    pub async fn send_unlock(&mut self) {
+        self.send_coordinator
+            .send(PacketKind::Unlock)
+            .await
+            .unwrap();
     }
 
     pub fn change_tolerance_at_current_cursor(&mut self, direction: VerticalDirection) {
-        todo!()
+        self.tolerance.change_tolerance_at_current_cursor(direction)
     }
 
     pub fn change_tolerance_cursor(&mut self, direction: HorizontalDirection) {
-        todo!()
+        self.tolerance.scroll_cursor(direction)
     }
 
     pub fn change_history(&mut self, direction: HorizontalDirection) {
-        self.history.scroll_history(direction);
-    }
-
-    // called from outside directly when receiving a new matrix. the selection what is shown is done by the history
-    pub fn add_to_newest_history(
-        &mut self,
-        mat_str: String,
-        client_name: String,
-        variable: String,
-    ) {
-        let mat = Matrix::from_str(&mat_str).unwrap();
-        self.history.add(mat, client_name, variable);
+        self.history.write().unwrap().scroll_history(direction)
     }
 
     pub fn scroll_compare(

@@ -28,6 +28,7 @@ pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
+    RequestVarSend(String),
     JoinRequest(u16, u16, ShipKind),
     Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
@@ -37,7 +38,8 @@ pub enum PacketKind {
         commands: Vec<VariableHuman>,
     },
     RulesClear,
-    LockNext, // lock next variable so after a client does catch/shoot, it blocks until receiving an ack. The initial ack is sent from lh to the coordinator, that then sends ack to all connected clients
+    LockNext, // TODO lock next variable so after a client does catch/shoot, it blocks until receiving an ack. The initial ack is sent from lh to the coordinator, that then sends ack to all connected clients
+    Unlock,
     RawDataf64(nalgebra::DMatrix<f64>),
     RawDataf32(nalgebra::DMatrix<f32>),
     RawDatai32(nalgebra::DMatrix<i32>),

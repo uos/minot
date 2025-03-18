@@ -20,6 +20,7 @@ impl crate::Cannon for NetworkShipImpl {
         targets: &Vec<crate::NetworkShipAddress>,
         data: impl crate::net::SeaSendableBuffer,
         variable_type: VariableType,
+        variable_name: &str,
     ) -> anyhow::Result<()> {
         let client = self.client.lock().await;
         for target in targets.iter() {
@@ -30,7 +31,7 @@ impl crate::Cannon for NetworkShipImpl {
             ))
             .unwrap();
             client
-                .send_raw_to_other_client(ip_addr, target.port, data, variable_type)
+                .send_raw_to_other_client(ip_addr, target.port, data, variable_type, &variable_name)
                 .await?;
         }
         Ok(())
@@ -49,9 +50,10 @@ impl crate::Cannon for NetworkShipImpl {
     async fn catch_dyn(
         &self,
         target: &crate::NetworkShipAddress,
-    ) -> anyhow::Result<(String, VariableType)> {
+    ) -> anyhow::Result<(String, VariableType, String)> {
         let client = self.client.lock().await;
-        let (raw_data, var_type) = client.recv_raw_from_other_client(Some(target)).await?;
+        let (raw_data, var_type, var_name) =
+            client.recv_raw_from_other_client(Some(target)).await?;
         let strrep = match var_type {
             VariableType::StaticOnly => {
                 return Err(anyhow!(
@@ -76,7 +78,7 @@ impl crate::Cannon for NetworkShipImpl {
             }
         };
 
-        Ok((strrep, var_type))
+        Ok((strrep, var_type, var_name))
     }
 }
 
