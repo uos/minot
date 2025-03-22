@@ -1,9 +1,7 @@
-use core::panic;
 use std::{
     error::{self},
     fmt::Display,
     i8,
-    rc::Rc,
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
 };
@@ -14,7 +12,7 @@ use ratatui::{
     style::Stylize,
     widgets::{Cell, Row, ScrollbarState, Table, TableState},
 };
-use sea::{net::PacketKind, NetworkShipAddress};
+use sea::net::PacketKind;
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -47,6 +45,18 @@ impl Default for Tolerance {
             value: "0.".to_owned(),
             pot_cursor: 0,
         }
+    }
+}
+
+impl From<&Tolerance> for f64 {
+    fn from(value: &Tolerance) -> Self {
+        let v = if value.value.ends_with(".") {
+            value.value.clone() + "0"
+        } else {
+            value.value.clone()
+        };
+        v.parse::<f64>()
+            .expect("tolerance string value is not a float")
     }
 }
 
@@ -85,7 +95,11 @@ impl Tolerance {
                         VerticalDirection::Row(ndig) => ndig as i8,
                     }
                     .max(0) as u32;
-                    char::from_digit(ndig, 10).unwrap()
+                    if ndig < 10 {
+                        char::from_digit(ndig, 10).unwrap()
+                    } else {
+                        c
+                    }
                 } else {
                     c
                 }
@@ -165,7 +179,7 @@ impl Tolerance {
 
 impl Display for Tolerance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("tol ")?;
+        f.write_str("Tol ")?;
         let chars: Vec<char> = self.value.chars().collect();
 
         for (i, &c) in chars.iter().enumerate() {
@@ -181,21 +195,20 @@ impl Display for Tolerance {
                 f.write_fmt(format_args!("{}", c))?;
             }
         }
-
         Ok(())
     }
 }
 
-#[derive(Debug, Default)]
-enum MatSelectState {
+#[derive(Debug, Default, Clone)]
+pub enum MatSelectState {
     Focused,
     Diff,
     #[default]
     Hidden,
 }
 
-#[derive(Debug)]
-struct HistoryEntry {
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
     pub mat: Matrix,
     pub client: String,
     pub state: MatSelectState,
@@ -203,8 +216,8 @@ struct HistoryEntry {
 
 #[derive(Debug, Default)]
 pub struct History {
-    history: Vec<(String, usize, Arc<Mutex<Vec<HistoryEntry>>>)>, // variablename, calling id, buffers -- TODO a lifetime would be better here
-    cursor: usize,
+    pub history: Vec<(HistoryKey, Arc<Mutex<Vec<HistoryEntry>>>)>,
+    pub cursor: Option<HistoryKey>,
 }
 
 impl History {
@@ -225,85 +238,153 @@ impl History {
         }
     }
 
+    pub fn key_of_ref_by_key(&self, key: &HistoryKey) -> Option<MatHistIdx> {
+        let (_, buff) = self.history.iter().find(|(k, _)| k == key)?;
+        let buff = buff.lock().unwrap();
+        let idx = buff
+            .iter()
+            .position(|hentry| matches!(hentry.state, MatSelectState::Focused))?;
+        return Some(MatHistIdx {
+            history_key: key.clone(),
+            buffer_idx: idx,
+        });
+    }
+
+    pub fn key_of_diff_by_key(&self, key: &HistoryKey) -> Option<MatHistIdx> {
+        let (_, buff) = self.history.iter().find(|(k, _)| k == key)?;
+        let buff = buff.lock().unwrap();
+        let idx = buff
+            .iter()
+            .position(|hentry| matches!(hentry.state, MatSelectState::Diff))?;
+        return Some(MatHistIdx {
+            history_key: key.clone(),
+            buffer_idx: idx,
+        });
+    }
+
+    pub fn key_of_ref(&self) -> Option<MatHistIdx> {
+        let cursor = self.cursor.as_ref()?;
+        self.key_of_ref_by_key(cursor)
+    }
+
+    pub fn key_of_diff(&self) -> Option<MatHistIdx> {
+        let cursor = self.cursor.as_ref()?;
+        self.key_of_diff_by_key(cursor)
+    }
+
+    pub fn mat_with_key(&self, key: &MatHistIdx) -> Option<(Matrix, String)> {
+        let entry = self
+            .history
+            .iter()
+            .find(|(k, _)| *k == key.history_key)
+            .map(|(_, v)| {
+                let buf = v.lock().unwrap();
+                buf.iter().nth(key.buffer_idx).cloned()
+            })??;
+        Some((entry.mat, entry.client))
+    }
+
     pub fn add(&mut self, mat: Matrix, client: String, variable: String) {
-        let var_changed = if let Some(cur_var) = self.latest_var() {
-            variable != cur_var
+        let key = if let Some(cur_var) = self.latest_var() {
+            let changed = variable != cur_var;
+            let call_id = if changed {
+                let var_count = self
+                    .history
+                    .iter()
+                    .filter(|(key, _)| *key.variable == variable)
+                    .count();
+                var_count + 1
+            } else {
+                self.cursor
+                    .as_ref()
+                    .expect("curr var without cursor")
+                    .call_id
+            };
+
+            let key = HistoryKey {
+                variable: variable.clone(),
+                call_id,
+            };
+            key
         } else {
-            self.history.is_empty()
+            let changed = self.history.is_empty();
+            let call_id = if changed {
+                1
+            } else {
+                unreachable!("no var but history wasn't empty");
+            };
+
+            let key = HistoryKey {
+                variable: variable.clone(),
+                call_id,
+            };
+            key
         };
 
+        let mut is_new = false;
         let var_buffer = {
-            if let Some(var_buffer) = self
-                .history
-                .iter()
-                .find(|(name, _, _)| *name == variable)
-                .map(|el| el.2.clone())
-            {
+            if let Some(var_buffer) = self.buff_at(&key) {
                 var_buffer
             } else {
+                is_new = true;
                 Arc::new(Mutex::new(Vec::new()))
             }
         };
 
         let change_buff = var_buffer.clone();
-        let call_id = {
-            let mut buffer = change_buff.lock().unwrap();
 
-            let call_id = if var_changed {
-                let count = self
-                    .history
-                    .iter()
-                    .filter(|(name, _call_id, _buff)| *name == variable)
-                    .count();
-                count + 1
-            } else {
-                1
-            };
-
-            if self.shows_ref() {
-                if self.shows_diff() {
-                    // put to stack of clients
-                    buffer.push(HistoryEntry {
-                        mat,
-                        client,
-                        state: MatSelectState::Hidden,
-                    });
-                } else {
-                    buffer.push(HistoryEntry {
-                        mat,
-                        client,
-                        state: MatSelectState::Diff,
-                    });
-                }
-            } else {
+        if self.shows_ref_at(&key) {
+            if self.shows_diff_at(&key) {
+                let mut buffer = change_buff.lock().unwrap();
+                // put to stack of clients
                 buffer.push(HistoryEntry {
                     mat,
                     client,
-                    state: MatSelectState::Focused,
+                    state: MatSelectState::Hidden,
+                });
+            } else {
+                let mut buffer = change_buff.lock().unwrap();
+                buffer.push(HistoryEntry {
+                    mat,
+                    client,
+                    state: MatSelectState::Diff,
                 });
             }
+        } else {
+            let mut buffer = change_buff.lock().unwrap();
+            buffer.push(HistoryEntry {
+                mat,
+                client,
+                state: MatSelectState::Focused,
+            });
+        }
 
-            call_id
-        };
-
-        if var_changed {
-            self.history.push((variable, call_id, var_buffer));
+        if is_new {
+            if self.history.is_empty() {
+                self.cursor = Some(key.clone());
+            }
+            self.history.push((key, var_buffer));
         }
     }
 
     fn current_buff(&self) -> Option<Arc<Mutex<Vec<HistoryEntry>>>> {
-        self.history.get(self.cursor).map(|f| f.2.clone())
+        let curr_cursor = self.cursor.as_ref()?;
+        self.buff_at(curr_cursor)
     }
-    pub fn current_var(&self) -> Option<String> {
-        self.history.get(self.cursor).map(|el| el.0.clone())
+
+    fn buff_at(&self, key: &HistoryKey) -> Option<Arc<Mutex<Vec<HistoryEntry>>>> {
+        self.history
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
     }
 
     pub fn latest_var(&self) -> Option<String> {
-        self.history.last().map(|el| el.0.clone())
+        self.history.iter().last().map(|el| el.0.variable.clone())
     }
 
-    pub fn shows_ref(&self) -> bool {
-        if let Some(buff) = self.current_buff() {
+    fn shows_ref_at(&self, key: &HistoryKey) -> bool {
+        if let Some(buff) = self.buff_at(key) {
             buff.lock()
                 .unwrap()
                 .iter()
@@ -314,13 +395,29 @@ impl History {
         }
     }
 
-    pub fn shows_diff(&self) -> bool {
-        if let Some(buff) = self.current_buff() {
+    pub fn shows_ref(&self) -> bool {
+        if let Some(cursor) = self.cursor.as_ref() {
+            self.shows_ref_at(cursor)
+        } else {
+            false
+        }
+    }
+
+    fn shows_diff_at(&self, key: &HistoryKey) -> bool {
+        if let Some(buff) = self.buff_at(key) {
             buff.lock()
                 .unwrap()
                 .iter()
                 .find(|el| matches!(el.state, MatSelectState::Diff))
                 .is_some()
+        } else {
+            false
+        }
+    }
+
+    pub fn shows_diff(&self) -> bool {
+        if let Some(cursor) = self.cursor.as_ref() {
+            self.shows_diff_at(cursor)
         } else {
             false
         }
@@ -368,55 +465,100 @@ impl History {
     }
 
     pub fn render_var_history(&self) -> String {
-        if let Some((current_var, call_id)) =
-            self.history.get(self.cursor).map(|el| (el.0.clone(), el.1))
-        {
-            let control_hints = {
-                let current_diff_pos = self.cursor;
-                let right_hint = if self.history.len() > current_diff_pos + 1 {
-                    "→".to_owned()
-                } else {
-                    "".to_owned()
-                };
+        if let Some(curr_cursor) = self.cursor.as_ref() {
+            if let Some(idx) = self.history.iter().position(|(k, _)| k == curr_cursor) {
+                let (key, _) = &self.history[idx];
+                let control_hints = {
+                    let right_hint = if self.history.len() > idx + 1 {
+                        "→".to_owned()
+                    } else {
+                        "".to_owned()
+                    };
 
-                let left_hint = if current_diff_pos == 0 {
-                    "".to_owned()
-                } else {
-                    "←".to_owned()
-                };
+                    let left_hint = if idx == 0 {
+                        "".to_owned()
+                    } else {
+                        "←".to_owned()
+                    };
 
-                format!("{}{}", left_hint, right_hint)
-            };
-            format!("{}[{}]{}", current_var, call_id, control_hints)
+                    (left_hint, right_hint)
+                };
+                format!(
+                    "{}{}[{}]{}",
+                    control_hints.0, key.variable, key.call_id, control_hints.1
+                )
+            } else {
+                "".to_owned()
+            }
         } else {
             "".to_owned()
         }
     }
 
     pub fn scroll_history(&mut self, direction: HorizontalDirection) {
-        let new_idx = match direction {
-            HorizontalDirection::Left => {
-                if self.cursor == 0 {
-                    self.cursor
-                } else {
-                    self.cursor - 1
+        if let Some(curr_cursor) = self.cursor.as_ref() {
+            if let Some(idx) = self.history.iter().position(|(k, _)| k == curr_cursor) {
+                let new_idx = match direction {
+                    HorizontalDirection::Left => {
+                        if idx == 0 {
+                            idx
+                        } else {
+                            idx - 1
+                        }
+                    }
+                    HorizontalDirection::Right => {
+                        if idx == self.history.len() - 1 {
+                            idx
+                        } else {
+                            idx + 1
+                        }
+                    }
+                    HorizontalDirection::Col(idx) => idx,
+                };
+
+                self.cursor = Some(
+                    self.history
+                        .get(new_idx)
+                        .expect("new history idx not checked correctly")
+                        .clone()
+                        .0,
+                );
+
+                // enable the first entries from the newly focused buffer if there are none in there
+                let new_ref = self.key_of_ref();
+                let new_diff = self.key_of_diff();
+
+                match (new_ref, new_diff) {
+                    (None, None) => {
+                        let mut next_buff = self.history[new_idx].1.lock().unwrap();
+
+                        if let Some(next_ref) = next_buff.first_mut() {
+                            next_ref.state = MatSelectState::Focused;
+                        }
+
+                        if let Some(next_diff) = next_buff.iter_mut().nth(2) {
+                            // dbg!("do some diff");
+                            next_diff.state = MatSelectState::Diff;
+                        }
+                    }
+                    (None, Some(_diff_idx)) => {
+                        unreachable!("Diff exists but no ref");
+                    }
+                    (Some(_ref_idx), None) => {
+                        let mut next_buff = self.history[new_idx].1.lock().unwrap();
+
+                        // find next best non-focused hentry
+                        if let Some(n) = next_buff
+                            .iter_mut()
+                            .find(|hentry| !matches!(hentry.state, MatSelectState::Focused))
+                        {
+                            n.state = MatSelectState::Diff;
+                        }
+                    }
+                    (Some(_ref_idx), Some(_diff_idx)) => {}
                 }
             }
-            HorizontalDirection::Right => {
-                if self.cursor == self.history.len() - 1 {
-                    self.cursor
-                } else {
-                    self.cursor + 1
-                }
-            }
-            HorizontalDirection::Col(idx) => idx,
-        };
-
-        self.cursor = new_idx;
-    }
-
-    pub fn set_to_newest_history(&mut self) {
-        self.cursor = self.history.len() - 1;
+        }
     }
 
     pub fn render_vs_overview(&self) -> String {
@@ -439,24 +581,37 @@ impl History {
                     .position(|h| matches!(h.state, MatSelectState::Diff))
                     .expect("just checked");
 
-                let upper_hint = if current_buff.len() > current_diff_pos + 1 {
+                let is_other_hidden_lower = current_buff
+                    .iter()
+                    .take(current_diff_pos)
+                    .any(|hentry| matches!(hentry.state, MatSelectState::Hidden));
+
+                let is_other_hidden_upper = current_buff
+                    .iter()
+                    .skip(current_diff_pos + 1)
+                    .any(|hentry| matches!(hentry.state, MatSelectState::Hidden));
+
+                let upper_hint = if is_other_hidden_upper {
                     "↑".to_owned()
                 } else {
                     "".to_owned()
                 };
 
-                let lower_hint = if current_diff_pos == 0 {
-                    "".to_owned()
-                } else {
+                let lower_hint = if is_other_hidden_lower {
                     "↓".to_owned()
+                } else {
+                    "".to_owned()
                 };
 
-                format!("{}{}", lower_hint, upper_hint)
+                (lower_hint, upper_hint)
             } else {
-                "".to_owned()
+                ("".to_owned(), "".to_owned())
             };
 
-            format!("{}  {}{}", current_focus, current_diff, control_hints)
+            format!(
+                "{}  {}{}{}",
+                current_focus, control_hints.0, current_diff, control_hints.1
+            )
         } else {
             "".to_owned()
         }
@@ -465,9 +620,10 @@ impl History {
 
 impl Display for History {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.current_var() {
-            Some(el) => f.write_str(&el),
-            None => f.write_str(""),
+        if let Some(cursor) = self.cursor.as_ref() {
+            f.write_str(&cursor.variable)
+        } else {
+            f.write_str("")
         }
     }
 }
@@ -636,6 +792,8 @@ enum CellDiff {
 pub struct DiffMatrix {
     data: Matrix,
     diff: Vec<CellDiff>,
+    nrows: usize, // padded with ref
+    ncols: usize,
 }
 
 impl From<DiffMatrix> for Matrix {
@@ -645,30 +803,28 @@ impl From<DiffMatrix> for Matrix {
 }
 
 const ROWS_COLS_CELL: &'static str = "↓ →";
+const ROWS_COLS_CELL_LEN: u16 = 3;
 
 impl DiffMatrix {
     pub fn new(reference: &Matrix, mat: Matrix, tolerance: Option<f64>) -> Self {
-        let rows = reference.nrows.max(mat.nrows);
-        let cols = reference.ncols.max(mat.ncols);
-        let mut diff = vec![CellDiff::OutOfBounds; rows * cols];
-        for col in 0..mat.ncols {
-            for row in 0..mat.nrows {
+        let nrows = reference.nrows.max(mat.nrows);
+        let ncols = reference.ncols.max(mat.ncols);
+        let mut diff = vec![CellDiff::OutOfBounds; nrows * ncols];
+        for col in 0..ncols {
+            for row in 0..nrows {
                 let cell_diff = match (reference.get(row, col), mat.get(row, col)) {
-                    (None, None) => panic!("wtf"),
-                    (None, Some(_)) => CellDiff::OutOfBounds,
-                    (Some(_), None) => CellDiff::OutOfBounds,
                     (Some(l), Some(r)) => {
                         let l = l.0;
                         let r = r.0;
 
                         if let Some(tolerance) = tolerance {
-                            if (l - r).abs() < tolerance {
+                            if (l - r).abs() <= tolerance {
                                 CellDiff::WithinTolerance
                             } else {
                                 if l < r {
-                                    CellDiff::Higher(r - l)
+                                    CellDiff::Higher(r - l - tolerance)
                                 } else {
-                                    CellDiff::Lower(l - r)
+                                    CellDiff::Lower(l - r - tolerance)
                                 }
                             }
                         } else {
@@ -679,58 +835,68 @@ impl DiffMatrix {
                             }
                         }
                     }
+                    (_, _) => CellDiff::OutOfBounds,
                 };
-                let index = row + col * rows;
+                let index = row + col * nrows;
                 diff[index] = cell_diff;
             }
         }
-        Self { data: mat, diff }
+        Self {
+            data: mat,
+            diff,
+            nrows,
+            ncols,
+        }
     }
 
     pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
-        let header_cols_nums: Vec<Cell> = (0..self.data.ncols)
-            .map(|n| Cell::from(n.to_string()))
-            .collect();
-        let rows_cols_cell_len = ROWS_COLS_CELL.len() as u16;
+        let header_cols_nums: Vec<Cell> =
+            (0..self.ncols).map(|n| Cell::from(n.to_string())).collect();
         let mut header_cols = vec![Cell::from(ROWS_COLS_CELL)];
         header_cols.extend(header_cols_nums);
 
-        let header_rows: Vec<Cell> = (0..self.data.nrows)
-            .map(|n| Cell::from(n.to_string()))
-            .collect();
+        let header_rows: Vec<Cell> = (0..self.nrows).map(|n| Cell::from(n.to_string())).collect();
 
         let cols_max_len: u16 = self
-            .data
             .ncols
             .to_string()
             .len()
             .try_into()
             .map_err(|e| anyhow!("Too many cols: {e}"))?;
         let rows_max_len: u16 = self
-            .data
             .nrows
             .to_string()
             .len()
             .try_into()
             .map_err(|e| anyhow!("Too many rows: {e}"))?;
-        let max_data_len: u16 = if let Some(max) = self.data.data.iter().max() {
-            format!("{}", max)
-                .len()
-                .try_into()
-                .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?
-        } else {
-            return Ok(None);
-        };
-        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
-        let header_rows_cell_len = Constraint::Length(rows_max_len.max(rows_cols_cell_len));
+        let max_data_len: u16 = self
+            .diff
+            .iter()
+            .map(|c| match c {
+                CellDiff::Higher(d) => {
+                    format!("{:.1$}", d, precision)
+                }
+                CellDiff::Lower(d) => {
+                    format!("{:.1$}", d, precision)
+                }
+                _ => "".to_owned(),
+            })
+            .map(|l| l.len())
+            .max()
+            .unwrap_or_default()
+            .try_into()
+            .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?;
 
-        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.data.nrows];
-        for row in 0..self.data.nrows {
-            let mut nrow = vec![Cell::from("".to_owned()); self.data.ncols + 1];
+        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
+        let header_rows_cell_len = Constraint::Length(rows_max_len.max(ROWS_COLS_CELL_LEN));
+
+        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.nrows];
+        for row in 0..self.nrows {
+            let mut nrow = vec![Cell::from("".to_owned()); self.ncols + 1];
             let row_header = unsafe { header_rows.get_unchecked(row) };
             nrow[0] = row_header.clone();
-            for col in 0..self.data.ncols {
-                let mat_cell = unsafe { self.diff.get_unchecked(col * self.data.nrows + row) };
+            for col in 0..self.ncols {
+                let mat_cell = unsafe { self.diff.get_unchecked(col * self.nrows + row) };
                 let str_cell = match mat_cell {
                     CellDiff::Higher(diff) => Cell::from(format!("{:.1$}", diff, precision).blue()),
                     CellDiff::Lower(diff) => Cell::from(format!("{:.1$}", diff, precision).red()),
@@ -743,13 +909,13 @@ impl DiffMatrix {
         }
 
         let mut widths = vec![header_rows_cell_len];
-        widths.extend(core::iter::repeat_n(data_cell_len, self.data.ncols));
-        let table = Table::new(rows, widths).header(Row::new(header_cols));
+        widths.extend(core::iter::repeat_n(data_cell_len, self.ncols));
+        let table = Table::new(rows, widths).header(Row::new(header_cols).height(2));
         Ok(Some(table))
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Matrix {
     data: Vec<TotalF64>,
     pub nrows: usize,
@@ -777,7 +943,6 @@ impl Matrix {
     pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
         let header_cols_nums: Vec<Cell> =
             (0..self.ncols).map(|n| Cell::from(n.to_string())).collect();
-        let rows_cols_cell_len = ROWS_COLS_CELL.len() as u16;
         let mut header_cols = vec![Cell::from(ROWS_COLS_CELL)];
         header_cols.extend(header_cols_nums);
 
@@ -794,16 +959,19 @@ impl Matrix {
             .len()
             .try_into()
             .map_err(|e| anyhow!("Too many rows: {e}"))?;
-        let max_data_len: u16 = if let Some(max) = self.data.iter().max() {
-            format!("{}", max)
-                .len()
-                .try_into()
-                .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?
-        } else {
-            return Ok(None);
-        };
+
+        let max_data_len: u16 = self
+            .data
+            .iter()
+            .map(|c| format!("{:.1$}", c, precision))
+            .map(|l| l.len())
+            .max()
+            .unwrap_or_default()
+            .try_into()
+            .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?;
+
         let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
-        let header_rows_cell_len = Constraint::Length(rows_max_len.max(rows_cols_cell_len));
+        let header_rows_cell_len = Constraint::Length(rows_max_len.max(ROWS_COLS_CELL_LEN));
 
         let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.nrows];
         for row in 0..self.nrows {
@@ -824,7 +992,7 @@ impl Matrix {
 
         let mut widths = vec![header_rows_cell_len];
         widths.extend(core::iter::repeat_n(data_cell_len, self.ncols));
-        let table = Table::new(rows, widths).header(Row::new(header_cols));
+        let table = Table::new(rows, widths).header(Row::new(header_cols).height(2));
         Ok(Some(table))
     }
 }
@@ -868,7 +1036,19 @@ impl FromStr for Matrix {
 
 // -- Client Compare inner windows --------
 
-const ITEM_HEIGHT: usize = 4;
+const ITEM_HEIGHT: usize = 1;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HistoryKey {
+    variable: String,
+    call_id: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MatHistIdx {
+    pub history_key: HistoryKey,
+    pub buffer_idx: usize,
+}
 
 #[derive(Debug)]
 pub struct ClientCompare {
@@ -876,58 +1056,67 @@ pub struct ClientCompare {
     pub horizontal_scroll_state: ScrollbarState,
     pub left_state: TableState,
     pub right_state: TableState,
-    pub left: Option<(String, Matrix)>,
-    pub right: Option<(String, DiffMatrix)>,
+    pub left: Option<(MatHistIdx, Matrix)>,
+    pub right: Option<(MatHistIdx, DiffMatrix)>,
     pub show_line_input_popup: bool,
     pub popup_buffer: Vec<char>,
     pub popup_title: &'static str,
 }
 
 impl ClientCompare {
-    pub fn update(
-        &mut self,
-        mat_ref: (Matrix, String),
-        mat_diff: Option<(Matrix, String)>,
-        tolerance: Option<f64>,
-    ) {
-        self.left_state.select_cell(Some((0, 0)));
-        self.right_state.select_cell(Some((0, 0)));
-        let max_nrows = mat_ref
-            .0
-            .nrows
-            .max(mat_diff.as_ref().map(|(m, _)| m.nrows).unwrap_or_default());
-        let max_ncols = mat_ref
-            .0
-            .ncols
-            .max(mat_diff.as_ref().map(|(m, _)| m.ncols).unwrap_or_default());
+    pub fn update_states(&mut self) {
+        let max_nrows = self
+            .left
+            .as_ref()
+            .map(|(_, m)| m.nrows)
+            .unwrap_or_default()
+            .max(
+                self.right
+                    .as_ref()
+                    .map(|(_, m)| m.data.nrows)
+                    .unwrap_or_default(),
+            );
+        let max_ncols = self
+            .left
+            .as_ref()
+            .map(|(_, m)| m.ncols)
+            .unwrap_or_default()
+            .max(
+                self.right
+                    .as_ref()
+                    .map(|(_, m)| m.data.ncols)
+                    .unwrap_or_default(),
+            );
 
-        self.vertical_scroll_state = ScrollbarState::new(max_nrows * ITEM_HEIGHT);
-        self.horizontal_scroll_state = ScrollbarState::new(max_ncols * ITEM_HEIGHT);
+        self.vertical_scroll_state = ScrollbarState::new((max_nrows + 1) * ITEM_HEIGHT);
+        self.horizontal_scroll_state = ScrollbarState::new(max_ncols * ITEM_HEIGHT)
+    }
 
-        if let Some((rmat, rname)) = mat_diff {
-            let right = DiffMatrix::new(&mat_ref.0, rmat, tolerance);
-            self.right.replace((rname, right));
+    pub fn update_ref(&mut self, mat: Option<(Matrix, MatHistIdx)>) {
+        if let Some((mat, idx)) = mat {
+            self.left.replace((idx, mat));
+        } else {
+            self.left.take();
         }
+    }
 
-        let left = mat_ref.0;
-        self.left.replace((mat_ref.1, left));
+    pub fn update_diff(&mut self, mat: Option<(Matrix, MatHistIdx)>, tolerance: Option<f64>) {
+        if let Some((mat, idx)) = mat {
+            let (_, mat_ref) = self
+                .left
+                .as_ref()
+                .expect("Wants to update diff but no mat ref present!");
+            let right = DiffMatrix::new(&mat_ref, mat, tolerance);
+            self.right.replace((idx, right));
+        } else {
+            self.right.take();
+        }
     }
 
     pub fn next_row(&mut self) {
         match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, l)), Some((_, r))) => {
-                let max_nrows = l.nrows.max(r.data.nrows);
-                let i = match self.left_state.selected() {
-                    Some(i) => {
-                        if i >= max_nrows - 1 {
-                            0
-                        } else {
-                            i + 1
-                        }
-                    }
-                    None => 0,
-                };
-                self.left_state.select(Some(i));
+            (Some((_, _l)), Some((_, r))) => {
+                let max_nrows = r.nrows;
                 let i = match self.right_state.selected() {
                     Some(i) => {
                         if i >= max_nrows - 1 {
@@ -939,6 +1128,23 @@ impl ClientCompare {
                     None => 0,
                 };
                 self.right_state.select(Some(i));
+                self.left_state.select(Some(i));
+                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (Some((_, l)), None) => {
+                let max_nrows = l.nrows;
+                let i = match self.left_state.selected() {
+                    Some(i) => {
+                        if i >= max_nrows - 1 {
+                            0
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.right_state.select(Some(i));
+                self.left_state.select(Some(i));
                 self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
             }
             (_, _) => {}
@@ -947,8 +1153,24 @@ impl ClientCompare {
 
     pub fn previous_row(&mut self) {
         match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, l)), Some((_, r))) => {
-                let max_nrows = l.nrows.max(r.data.nrows);
+            (Some((_, _l)), Some((_, r))) => {
+                let max_nrows = r.nrows;
+                let i = match self.right_state.selected() {
+                    Some(i) => {
+                        if i == 0 {
+                            max_nrows - 1
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.left_state.select(Some(i));
+                self.right_state.select(Some(i));
+                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (Some((_, l)), None) => {
+                let max_nrows = l.nrows;
                 let i = match self.left_state.selected() {
                     Some(i) => {
                         if i == 0 {
@@ -960,16 +1182,6 @@ impl ClientCompare {
                     None => 0,
                 };
                 self.left_state.select(Some(i));
-                let i = match self.right_state.selected() {
-                    Some(i) => {
-                        if i == 0 {
-                            max_nrows - 1
-                        } else {
-                            i - 1
-                        }
-                    }
-                    None => 0,
-                };
                 self.right_state.select(Some(i));
                 self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
             }
@@ -1009,32 +1221,39 @@ impl ClientCompare {
 
     pub fn next_col(&mut self) {
         match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, l)), Some((_, r))) => {
-                let max_ncols = l.ncols.max(r.data.ncols);
-                let i = match self.left_state.selected_column() {
-                    Some(i) => {
-                        if i >= max_ncols - 1 {
-                            0
-                        } else {
-                            i + 1
-                        }
-                    }
-                    None => 0,
-                };
-                self.left_state.select_column(Some(i));
+            (Some((_, _l)), Some((_, r))) => {
+                let max_ncols = r.ncols;
                 let i = match self.right_state.selected_column() {
                     Some(i) => {
-                        if i >= max_ncols - 1 {
-                            0
+                        if i >= max_ncols {
+                            1
                         } else {
                             i + 1
                         }
                     }
-                    None => 0,
+                    None => 1,
                 };
                 self.right_state.select_column(Some(i));
+                self.left_state.select_column(Some(i));
                 self.horizontal_scroll_state =
-                    self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
+            }
+            (Some((_, l)), None) => {
+                let max_ncols = l.ncols;
+                let i = match self.left_state.selected_column() {
+                    Some(i) => {
+                        if i >= max_ncols {
+                            1
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 1,
+                };
+                self.left_state.select_column(Some(i));
+                self.right_state.select_column(Some(i));
+                self.horizontal_scroll_state =
+                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
@@ -1042,32 +1261,39 @@ impl ClientCompare {
 
     pub fn previous_col(&mut self) {
         match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, l)), Some((_, r))) => {
-                let max_ncols = l.ncols.max(r.data.ncols);
-                let i = match self.left_state.selected_column() {
-                    Some(i) => {
-                        if i == 0 {
-                            max_ncols - 1
-                        } else {
-                            i - 1
-                        }
-                    }
-                    None => 0,
-                };
-                self.left_state.select_column(Some(i));
+            (Some((_, _l)), Some((_, r))) => {
+                let max_ncols = r.ncols;
                 let i = match self.right_state.selected_column() {
                     Some(i) => {
-                        if i == 0 {
-                            max_ncols - 1
+                        if i == 1 {
+                            max_ncols
                         } else {
                             i - 1
                         }
                     }
-                    None => 0,
+                    None => 1,
                 };
                 self.right_state.select_column(Some(i));
+                self.left_state.select_column(Some(i));
                 self.horizontal_scroll_state =
-                    self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
+            }
+            (Some((_, l)), None) => {
+                let max_ncols = l.ncols;
+                let i = match self.left_state.selected_column() {
+                    Some(i) => {
+                        if i == 1 {
+                            max_ncols
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 1,
+                };
+                self.right_state.select_column(Some(i));
+                self.left_state.select_column(Some(i));
+                self.horizontal_scroll_state =
+                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
@@ -1077,8 +1303,12 @@ impl ClientCompare {
 impl Default for ClientCompare {
     fn default() -> Self {
         Self {
-            left_state: TableState::default().with_selected(0),
-            right_state: TableState::default().with_selected(0),
+            left_state: TableState::default()
+                .with_selected(0)
+                .with_selected_column(1),
+            right_state: TableState::default()
+                .with_selected(0)
+                .with_selected_column(1),
             horizontal_scroll_state: ScrollbarState::new(1 * ITEM_HEIGHT),
             vertical_scroll_state: ScrollbarState::new(1 * ITEM_HEIGHT),
             left: None,
@@ -1198,7 +1428,16 @@ impl App {
     }
 
     pub fn change_tolerance_at_current_cursor(&mut self, direction: VerticalDirection) {
-        self.tolerance.change_tolerance_at_current_cursor(direction)
+        self.tolerance.change_tolerance_at_current_cursor(direction);
+        if let Some((matidx, _)) = self.compare.right.as_ref() {
+            let curr_history = self.history.read().unwrap();
+            if let Some((mat, _)) = curr_history.mat_with_key(&matidx) {
+                self.compare.update_diff(
+                    Some((mat, matidx.clone())),
+                    Some(f64::from(&self.tolerance)),
+                );
+            }
+        }
     }
 
     pub fn change_tolerance_cursor(&mut self, direction: HorizontalDirection) {
@@ -1230,7 +1469,7 @@ impl App {
         }
     }
 
-    pub fn wind_cursor(&mut self, direction: Option<VerticalDirection>, line: Option<usize>) {
+    pub fn wind_cursor(&mut self, _direction: Option<VerticalDirection>, _line: Option<usize>) {
         // TODO add cursor and use windmode to check if needing to select
         todo!()
     }

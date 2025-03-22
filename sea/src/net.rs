@@ -23,7 +23,7 @@ pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
 pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
 pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(700); // TODO smaller after debugging
+    std::time::Duration::from_millis(50);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {

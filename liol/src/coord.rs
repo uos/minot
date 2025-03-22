@@ -148,7 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 data: sea::net::PacketKind::Acknowledge,
             };
             for (_client_name, client) in clients.iter() {
-                // TODO check here
                 match client.sender.send(ack.clone()).await {
                     Err(e) => {
                         error!("Could not send ack to unlock client: {e}");

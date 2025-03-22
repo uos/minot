@@ -122,6 +122,12 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char(' ') => {
             app.wind_fire_at_current_cursor();
         }
+        KeyCode::PageUp => {
+            app.change_diff_rat(crate::app::VerticalDirection::Up);
+        }
+        KeyCode::PageDown => {
+            app.change_diff_rat(crate::app::VerticalDirection::Down);
+        }
         KeyCode::Enter => {
             if app.wind_mode() && app.wind_cursor.showing_popup {
                 let buffer = app.wind_cursor.popup_buffer.clone();

@@ -1,7 +1,4 @@
-use core::panic;
-use std::sync::{Arc, RwLock};
-
-use log::{debug, error, info};
+use log::error;
 use sea::{coordinator::COMPARE_NODE_NAME, net::Packet, Action, Cannon, Ship, ShipKind};
 
 use anyhow::anyhow;
@@ -17,7 +14,7 @@ pub mod ui;
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::{
-    app::{App, AppResult},
+    app::App,
     event::{Event, EventHandler},
     handler::handle_key_events,
     tui::Tui,
@@ -33,7 +30,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let comparer =
         sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)
             .await?;
-    // debug!("bla");
 
     let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
     // let write_data = Arc::clone(&var_data);
@@ -98,8 +94,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             }
                                         };
 
-                                        // dbg!(&strrep, var_type, source);
-                                        // write_data.write().unwrap()
                                         match ndata_tx.send((name, strrep, var_name)).await {
                                             Ok(_) => {}
                                             Err(e) => {
@@ -108,9 +102,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                     Err(e) => {
+                                        // TODO should print all errors somewhere in the TUI. maybe popup?
                                         error!("Could not catch dynamic typed var: {e}");
                                     }
                                 }
+                                // dbg!("Catched!");
                             }
                         }
                         _ => (),
@@ -133,6 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // // Start the main loop.
     while app.running {
+        tokio::task::yield_now().await;
         // Render the user interface.
         tui.draw(&mut app)?;
         // Handle events.
@@ -145,5 +142,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tui.exit()?;
+    // loop {
+    //     tokio::task::yield_now().await;
+    // }
     return Ok(());
 }
