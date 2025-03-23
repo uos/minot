@@ -537,7 +537,6 @@ impl History {
                         }
 
                         if let Some(next_diff) = next_buff.iter_mut().nth(2) {
-                            // dbg!("do some diff");
                             next_diff.state = MatSelectState::Diff;
                         }
                     }
@@ -792,8 +791,14 @@ enum CellDiff {
 pub struct DiffMatrix {
     data: Matrix,
     diff: Vec<CellDiff>,
-    nrows: usize, // padded with ref
-    ncols: usize,
+    pub nrows: usize, // padded with ref
+    pub ncols: usize,
+    pub curr_offset_cols: usize,
+    pub curr_offset_rows: usize,
+    pub rect_width: usize,
+    pub rect_height: usize,
+    pub max_rows: usize,
+    pub max_cols: usize,
 }
 
 impl From<DiffMatrix> for Matrix {
@@ -806,13 +811,22 @@ const ROWS_COLS_CELL: &'static str = "↓ →";
 const ROWS_COLS_CELL_LEN: u16 = 3;
 
 impl DiffMatrix {
-    pub fn new(reference: &Matrix, mat: Matrix, tolerance: Option<f64>) -> Self {
+    pub fn new(
+        reference: &Matrix,
+        tolerance: Option<f64>,
+        max_cols: usize,
+        max_rows: usize,
+        mat: Matrix,
+    ) -> Self {
         let nrows = reference.nrows.max(mat.nrows);
         let ncols = reference.ncols.max(mat.ncols);
         let mut diff = vec![CellDiff::OutOfBounds; nrows * ncols];
         for col in 0..ncols {
             for row in 0..nrows {
-                let cell_diff = match (reference.get(row, col), mat.get(row, col)) {
+                let idx = col * nrows + row;
+                let ref_data = reference.get(row, col);
+                let mat_data = mat.get(row, col);
+                let cell_diff = match (ref_data, mat_data) {
                     (Some(l), Some(r)) => {
                         let l = l.0;
                         let r = r.0;
@@ -837,8 +851,7 @@ impl DiffMatrix {
                     }
                     (_, _) => CellDiff::OutOfBounds,
                 };
-                let index = row + col * nrows;
-                diff[index] = cell_diff;
+                diff[idx] = cell_diff;
             }
         }
         Self {
@@ -846,16 +859,36 @@ impl DiffMatrix {
             diff,
             nrows,
             ncols,
+            curr_offset_cols: 0,
+            curr_offset_rows: 0,
+            max_rows: nrows.min(max_rows),
+            max_cols: ncols.min(max_cols),
+            rect_width: 0,
+            rect_height: 0,
         }
     }
 
+    pub fn update_max_view(&mut self, height: u16, width: u16) {
+        let show_max_rows = height - 1 - 2; // minus header and padding
+        let show_max_cols = width / 4; // TODO if a header can be printed, print only one and see how long it would look like as a string. divide by this to get cols
+        self.max_rows = show_max_rows as usize;
+        self.max_cols = show_max_cols as usize;
+    }
+
     pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
-        let header_cols_nums: Vec<Cell> =
-            (0..self.ncols).map(|n| Cell::from(n.to_string())).collect();
+        let header_cols_nums: Vec<Cell> = (0..self.ncols)
+            .skip(self.curr_offset_cols)
+            .take(self.max_cols)
+            .map(|n| Cell::from(n.to_string()))
+            .collect();
         let mut header_cols = vec![Cell::from(ROWS_COLS_CELL)];
         header_cols.extend(header_cols_nums);
 
-        let header_rows: Vec<Cell> = (0..self.nrows).map(|n| Cell::from(n.to_string())).collect();
+        let header_rows: Vec<Cell> = (0..self.nrows)
+            .skip(self.curr_offset_rows)
+            .take(self.max_rows)
+            .map(|n| Cell::from(n.to_string()))
+            .collect();
 
         let cols_max_len: u16 = self
             .ncols
@@ -869,47 +902,41 @@ impl DiffMatrix {
             .len()
             .try_into()
             .map_err(|e| anyhow!("Too many rows: {e}"))?;
-        let max_data_len: u16 = self
-            .diff
-            .iter()
-            .map(|c| match c {
-                CellDiff::Higher(d) => {
-                    format!("{:.1$}", d, precision)
-                }
-                CellDiff::Lower(d) => {
-                    format!("{:.1$}", d, precision)
-                }
-                _ => "".to_owned(),
-            })
-            .map(|l| l.len())
-            .max()
-            .unwrap_or_default()
-            .try_into()
-            .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?;
 
-        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
+        let nrows = (self.nrows - self.curr_offset_rows).min(self.max_rows);
+        let ncols = (self.ncols - self.curr_offset_cols).min(self.max_cols);
+
         let header_rows_cell_len = Constraint::Length(rows_max_len.max(ROWS_COLS_CELL_LEN));
 
-        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.nrows];
-        for row in 0..self.nrows {
-            let mut nrow = vec![Cell::from("".to_owned()); self.ncols + 1];
-            let row_header = unsafe { header_rows.get_unchecked(row) };
+        let mut max_data_len: u16 = 1;
+        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); nrows];
+        for row in self.curr_offset_rows..(self.curr_offset_rows + nrows) {
+            let mut nrow = vec![Cell::from("".to_owned()); ncols + 1];
+            let row_header = unsafe { header_rows.get_unchecked(row - self.curr_offset_rows) };
             nrow[0] = row_header.clone();
-            for col in 0..self.ncols {
+            for col in self.curr_offset_cols..(self.curr_offset_cols + ncols) {
                 let mat_cell = unsafe { self.diff.get_unchecked(col * self.nrows + row) };
                 let str_cell = match mat_cell {
-                    CellDiff::Higher(diff) => Cell::from(format!("{:.1$}", diff, precision).blue()),
-                    CellDiff::Lower(diff) => Cell::from(format!("{:.1$}", diff, precision).red()),
+                    CellDiff::Higher(diff) => {
+                        let d = format!("{:.1$}", diff, precision);
+                        max_data_len = max_data_len.max(d.len() as u16);
+                        Cell::from(d.blue())
+                    }
+                    CellDiff::Lower(diff) => {
+                        let d = format!("{:.1$}", diff, precision);
+                        max_data_len = max_data_len.max(d.len() as u16);
+                        Cell::from(d.red())
+                    }
                     CellDiff::WithinTolerance => Cell::from(""),
                     CellDiff::OutOfBounds => Cell::from("-".gray()),
                 };
-                unsafe { *nrow.get_unchecked_mut(col + 1) = str_cell };
+                unsafe { *nrow.get_unchecked_mut(col - self.curr_offset_cols + 1) = str_cell };
             }
-            unsafe { *rows.get_unchecked_mut(row) = Row::new(nrow) };
+            unsafe { *rows.get_unchecked_mut(row - self.curr_offset_rows) = Row::new(nrow) };
         }
-
+        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
         let mut widths = vec![header_rows_cell_len];
-        widths.extend(core::iter::repeat_n(data_cell_len, self.ncols));
+        widths.extend(core::iter::repeat_n(data_cell_len, ncols));
         let table = Table::new(rows, widths).header(Row::new(header_cols).height(2));
         Ok(Some(table))
     }
@@ -920,6 +947,10 @@ pub struct Matrix {
     data: Vec<TotalF64>,
     pub nrows: usize,
     pub ncols: usize,
+    pub curr_offset_cols: usize,
+    pub curr_offset_rows: usize,
+    pub max_rows: usize,
+    pub max_cols: usize,
 }
 
 impl Matrix {
@@ -928,31 +959,51 @@ impl Matrix {
             data: vec![],
             nrows: 0,
             ncols: 0,
+            curr_offset_cols: 0,
+            curr_offset_rows: 0,
+            max_rows: 0,
+            max_cols: 0,
         }
     }
 
     pub fn get(&self, row: usize, col: usize) -> Option<TotalF64> {
         if row < self.nrows && col < self.ncols {
             let index = col * self.nrows + row;
-            Some(self.data[index])
+            self.data.get(index).cloned()
         } else {
             None
         }
     }
 
+    pub fn update_max_view(&mut self, height: u16, width: u16) {
+        let show_max_rows = height - 1 - 2; // minus header and padding
+        let show_max_cols = width / 4; // TODO if a header can be printed, print only one and see how long it would look like as a string. divide by this to get cols
+        self.max_rows = show_max_rows as usize;
+        self.max_cols = show_max_cols as usize;
+    }
+
     pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
-        let header_cols_nums: Vec<Cell> =
-            (0..self.ncols).map(|n| Cell::from(n.to_string())).collect();
+        let header_cols_nums: Vec<Cell> = (0..self.ncols)
+            .skip(self.curr_offset_cols)
+            .take(self.max_cols)
+            .map(|n| Cell::from(n.to_string()))
+            .collect();
         let mut header_cols = vec![Cell::from(ROWS_COLS_CELL)];
         header_cols.extend(header_cols_nums);
 
-        let header_rows: Vec<Cell> = (0..self.nrows).map(|n| Cell::from(n.to_string())).collect();
+        let header_rows: Vec<Cell> = (0..self.nrows)
+            .skip(self.curr_offset_rows)
+            .take(self.max_rows)
+            .map(|n| Cell::from(n.to_string()))
+            .collect();
+
         let cols_max_len: u16 = self
             .ncols
             .to_string()
             .len()
             .try_into()
             .map_err(|e| anyhow!("Too many cols: {e}"))?;
+
         let rows_max_len: u16 = self
             .nrows
             .to_string()
@@ -960,38 +1011,34 @@ impl Matrix {
             .try_into()
             .map_err(|e| anyhow!("Too many rows: {e}"))?;
 
-        let max_data_len: u16 = self
-            .data
-            .iter()
-            .map(|c| format!("{:.1$}", c, precision))
-            .map(|l| l.len())
-            .max()
-            .unwrap_or_default()
-            .try_into()
-            .map_err(|e| anyhow!("Too many digits in the data to show: {e}"))?;
-
-        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
         let header_rows_cell_len = Constraint::Length(rows_max_len.max(ROWS_COLS_CELL_LEN));
 
-        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); self.nrows];
-        for row in 0..self.nrows {
-            let mut nrow = vec![Cell::from("".to_owned()); self.ncols + 1];
-            let row_header = unsafe { header_rows.get_unchecked(row) };
+        let nrows = (self.nrows - self.curr_offset_rows).min(self.max_rows);
+        let ncols = (self.ncols - self.curr_offset_cols).min(self.max_cols);
+
+        let mut max_data_len: u16 = 1;
+        let mut rows: Vec<Row> = vec![Row::new(Vec::<Cell>::new()); nrows];
+        for row in self.curr_offset_rows..(self.curr_offset_rows + nrows) {
+            let mut nrow = vec![Cell::from("".to_owned()); ncols + 1];
+            let row_header = unsafe { header_rows.get_unchecked(row - self.curr_offset_rows) };
             nrow[0] = row_header.clone();
-            for col in 0..self.ncols {
+            for col in self.curr_offset_cols..(self.curr_offset_cols + ncols) {
                 unsafe {
-                    *nrow.get_unchecked_mut(col + 1) = Cell::from(format!(
+                    let d = format!(
                         "{:.1$}",
                         self.data.get_unchecked(col * self.nrows + row).0,
                         precision
-                    ))
+                    );
+                    max_data_len = max_data_len.max(d.len() as u16);
+                    *nrow.get_unchecked_mut(col - self.curr_offset_cols + 1) = Cell::from(d)
                 };
             }
-            unsafe { *rows.get_unchecked_mut(row) = Row::new(nrow) };
+            unsafe { *rows.get_unchecked_mut(row - self.curr_offset_rows) = Row::new(nrow) };
         }
 
+        let data_cell_len = Constraint::Length(max_data_len.max(cols_max_len));
         let mut widths = vec![header_rows_cell_len];
-        widths.extend(core::iter::repeat_n(data_cell_len, self.ncols));
+        widths.extend(core::iter::repeat_n(data_cell_len, ncols));
         let table = Table::new(rows, widths).header(Row::new(header_cols).height(2));
         Ok(Some(table))
     }
@@ -1030,7 +1077,15 @@ impl FromStr for Matrix {
         let nrows = usize::from_str(nrows_str)?;
         let ncols = usize::from_str(ncols_str)?;
 
-        Ok(Matrix { data, nrows, ncols })
+        Ok(Matrix {
+            data,
+            nrows,
+            ncols,
+            max_rows: nrows,
+            max_cols: ncols,
+            curr_offset_cols: 0,
+            curr_offset_rows: 0,
+        })
     }
 }
 
@@ -1061,9 +1116,26 @@ pub struct ClientCompare {
     pub show_line_input_popup: bool,
     pub popup_buffer: Vec<char>,
     pub popup_title: &'static str,
+    pub ref_width: u16,
+    pub ref_height: u16,
+    pub diff_width: u16,
+    pub diff_height: u16,
 }
 
 impl ClientCompare {
+    pub fn update_rects(
+        &mut self,
+        ref_width: u16,
+        ref_height: u16,
+        diff_width: u16,
+        diff_height: u16,
+    ) {
+        self.ref_width = ref_width;
+        self.ref_height = ref_height;
+        self.diff_width = diff_width;
+        self.diff_height = diff_height;
+    }
+
     pub fn update_states(&mut self) {
         let max_nrows = self
             .left
@@ -1073,7 +1145,7 @@ impl ClientCompare {
             .max(
                 self.right
                     .as_ref()
-                    .map(|(_, m)| m.data.nrows)
+                    .map(|(_, m)| m.nrows)
                     .unwrap_or_default(),
             );
         let max_ncols = self
@@ -1084,7 +1156,7 @@ impl ClientCompare {
             .max(
                 self.right
                     .as_ref()
-                    .map(|(_, m)| m.data.ncols)
+                    .map(|(_, m)| m.ncols)
                     .unwrap_or_default(),
             );
 
@@ -1092,21 +1164,32 @@ impl ClientCompare {
         self.horizontal_scroll_state = ScrollbarState::new(max_ncols * ITEM_HEIGHT)
     }
 
-    pub fn update_ref(&mut self, mat: Option<(Matrix, MatHistIdx)>) {
-        if let Some((mat, idx)) = mat {
+    pub fn update_ref(&mut self, mat: Option<(Matrix, MatHistIdx)>, cols_layouting: bool) {
+        if let Some((mut mat, idx)) = mat {
+            if cols_layouting {
+                mat.update_max_view(self.ref_height, self.ref_width);
+            }
             self.left.replace((idx, mat));
         } else {
             self.left.take();
         }
     }
 
-    pub fn update_diff(&mut self, mat: Option<(Matrix, MatHistIdx)>, tolerance: Option<f64>) {
-        if let Some((mat, idx)) = mat {
+    pub fn update_diff(
+        &mut self,
+        mat: Option<(Matrix, MatHistIdx)>,
+        tolerance: Option<f64>,
+        cols_layouting: bool,
+    ) {
+        if let Some((mut mat, idx)) = mat {
+            if cols_layouting {
+                mat.update_max_view(self.diff_height, self.diff_width);
+            }
             let (_, mat_ref) = self
                 .left
                 .as_ref()
                 .expect("Wants to update diff but no mat ref present!");
-            let right = DiffMatrix::new(&mat_ref, mat, tolerance);
+            let right = DiffMatrix::new(&mat_ref, tolerance, mat.max_cols, mat.max_rows, mat);
             self.right.replace((idx, right));
         } else {
             self.right.take();
@@ -1114,186 +1197,293 @@ impl ClientCompare {
     }
 
     pub fn next_row(&mut self) {
-        match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, _l)), Some((_, r))) => {
-                let max_nrows = r.nrows;
+        match (self.left.as_mut(), self.right.as_mut()) {
+            (Some((_, l)), Some((_, r))) => {
                 let i = match self.right_state.selected() {
                     Some(i) => {
-                        if i >= max_nrows - 1 {
+                        if i + r.curr_offset_rows == r.nrows - 1 {
+                            r.curr_offset_rows = 0;
                             0
                         } else {
-                            i + 1
+                            if i == r.max_rows - 1 {
+                                r.curr_offset_rows += 1;
+                                i
+                            } else {
+                                i + 1
+                            }
                         }
                     }
                     None => 0,
                 };
                 self.right_state.select(Some(i));
-                self.left_state.select(Some(i));
-                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+
+                let l_start = r.curr_offset_rows.min(l.nrows - 1);
+                l.curr_offset_rows = l_start;
+                let i_l = i.min((l.max_rows - 1).min(l.nrows - 1));
+                self.left_state.select(Some(i_l));
+
+                self.vertical_scroll_state = self
+                    .vertical_scroll_state
+                    .position((i + r.curr_offset_rows) * ITEM_HEIGHT);
             }
             (Some((_, l)), None) => {
-                let max_nrows = l.nrows;
                 let i = match self.left_state.selected() {
                     Some(i) => {
-                        if i >= max_nrows - 1 {
+                        if i + l.curr_offset_rows == l.nrows - 1 {
+                            l.curr_offset_rows = 0;
                             0
                         } else {
-                            i + 1
+                            if i == l.max_rows - 1 {
+                                l.curr_offset_rows += 1;
+                                i
+                            } else {
+                                i + 1
+                            }
                         }
                     }
                     None => 0,
                 };
-                self.right_state.select(Some(i));
                 self.left_state.select(Some(i));
-                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+                self.vertical_scroll_state = self
+                    .vertical_scroll_state
+                    .position((i + l.curr_offset_rows) * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
     }
 
     pub fn previous_row(&mut self) {
-        match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, _l)), Some((_, r))) => {
-                let max_nrows = r.nrows;
+        match (self.left.as_mut(), self.right.as_mut()) {
+            (Some((_, l)), Some((_, r))) => {
                 let i = match self.right_state.selected() {
                     Some(i) => {
-                        if i == 0 {
-                            max_nrows - 1
+                        // wrap around to end
+                        if i == 0 && r.curr_offset_rows == 0 {
+                            if r.nrows >= r.max_rows {
+                                r.curr_offset_rows =
+                                    (r.nrows as i32 - r.max_rows as i32).max(0) as usize;
+                            }
+                            (r.max_rows.min(r.nrows) as i32 - 1).max(0) as usize
                         } else {
-                            i - 1
+                            if i == 0 {
+                                r.curr_offset_rows -= 1;
+                                i
+                            } else {
+                                i - 1
+                            }
                         }
                     }
                     None => 0,
                 };
-                self.left_state.select(Some(i));
                 self.right_state.select(Some(i));
-                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+
+                let l_start = r.curr_offset_rows.min(l.nrows - 1);
+                l.curr_offset_rows = l_start;
+                let i_l = i.min((l.max_rows - 1).min(l.nrows - 1));
+                self.left_state.select(Some(i_l));
+
+                self.vertical_scroll_state = self
+                    .vertical_scroll_state
+                    .position((i + r.curr_offset_rows) * ITEM_HEIGHT);
             }
             (Some((_, l)), None) => {
-                let max_nrows = l.nrows;
                 let i = match self.left_state.selected() {
                     Some(i) => {
-                        if i == 0 {
-                            max_nrows - 1
+                        if i == 0 && l.curr_offset_rows == 0 {
+                            l.curr_offset_rows =
+                                (l.nrows as i32 - l.max_rows as i32).max(0) as usize;
+                            (l.max_rows.min(l.nrows) as i32 - 1).max(0) as usize
                         } else {
-                            i - 1
+                            if i == 0 {
+                                l.curr_offset_rows -= 1;
+                                i
+                            } else {
+                                i - 1
+                            }
                         }
                     }
                     None => 0,
                 };
                 self.left_state.select(Some(i));
-                self.right_state.select(Some(i));
-                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+                self.vertical_scroll_state = self
+                    .vertical_scroll_state
+                    .position((i + l.curr_offset_rows) * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
     }
 
     pub fn col(&mut self, i: usize) {
-        match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, l)), Some((_, r))) => {
-                let max_ncols = l.ncols.max(r.data.ncols);
-                if i < max_ncols {
-                    self.left_state.select_column(Some(i));
-                    self.right_state.select_column(Some(i));
-                    self.horizontal_scroll_state =
-                        self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+        match (self.left.as_mut(), self.right.as_mut()) {
+            (Some((_, l)), None) => {
+                if i >= l.ncols {
+                    // avoid out of bounds jump
+                    return;
                 }
+                l.curr_offset_cols = i;
+                self.left_state.select_column(Some(1));
+                self.horizontal_scroll_state =
+                    self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (Some((_, l)), Some((_, r))) => {
+                if i >= l.ncols {
+                    // avoid out of bounds jump
+                    return;
+                }
+
+                r.curr_offset_cols = i;
+                self.right_state.select_column(Some(1));
+                l.curr_offset_cols = i.min(l.ncols - 1);
+                self.left_state.select_column(Some(1));
+
+                self.horizontal_scroll_state =
+                    self.horizontal_scroll_state.position(i * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
     }
 
     pub fn row(&mut self, i: usize) {
-        match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, l)), Some((_, r))) => {
-                let max_nrows = l.nrows.max(r.data.nrows);
-                if i < max_nrows {
-                    self.left_state.select(Some(i));
-                    self.right_state.select(Some(i));
-                    self.horizontal_scroll_state =
-                        self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+        match (self.left.as_mut(), self.right.as_mut()) {
+            (Some((_, l)), None) => {
+                if i >= l.nrows {
+                    // avoid out of bounds jump
+                    return;
                 }
+                l.curr_offset_rows = i;
+                self.left_state.select(Some(1));
+                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+            }
+            (Some((_, l)), Some((_, r))) => {
+                if i >= l.nrows {
+                    // avoid out of bounds jump
+                    return;
+                }
+
+                r.curr_offset_rows = i;
+                self.right_state.select(Some(1));
+                l.curr_offset_rows = i.min(l.nrows - 1);
+                self.left_state.select(Some(1));
+
+                self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
     }
 
     pub fn next_col(&mut self) {
-        match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, _l)), Some((_, r))) => {
-                let max_ncols = r.ncols;
+        match (self.left.as_mut(), self.right.as_mut()) {
+            (Some((_, l)), Some((_, r))) => {
                 let i = match self.right_state.selected_column() {
                     Some(i) => {
-                        if i >= max_ncols {
+                        if i + r.curr_offset_cols == r.ncols {
+                            r.curr_offset_cols = 0;
                             1
                         } else {
-                            i + 1
+                            if i == r.max_cols {
+                                r.curr_offset_cols += 1;
+                                i
+                            } else {
+                                i + 1
+                            }
                         }
                     }
                     None => 1,
                 };
                 self.right_state.select_column(Some(i));
-                self.left_state.select_column(Some(i));
-                self.horizontal_scroll_state =
-                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
+
+                let l_start = r.curr_offset_cols.min(l.ncols - 1);
+                l.curr_offset_cols = l_start;
+                let i_l = i.min((l.max_cols).min(l.ncols));
+                self.left_state.select_column(Some(i_l));
+
+                self.horizontal_scroll_state = self
+                    .horizontal_scroll_state
+                    .position((i + r.curr_offset_cols - 1) * ITEM_HEIGHT);
             }
             (Some((_, l)), None) => {
-                let max_ncols = l.ncols;
                 let i = match self.left_state.selected_column() {
                     Some(i) => {
-                        if i >= max_ncols {
+                        if i + l.curr_offset_cols == l.ncols {
+                            l.curr_offset_cols = 0;
                             1
                         } else {
-                            i + 1
+                            if i == l.max_cols {
+                                l.curr_offset_cols += 1;
+                                i
+                            } else {
+                                i + 1
+                            }
                         }
                     }
                     None => 1,
                 };
                 self.left_state.select_column(Some(i));
-                self.right_state.select_column(Some(i));
-                self.horizontal_scroll_state =
-                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
+                self.horizontal_scroll_state = self
+                    .horizontal_scroll_state
+                    .position((i + l.curr_offset_cols - 1) * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
     }
 
     pub fn previous_col(&mut self) {
-        match (self.left.as_ref(), self.right.as_ref()) {
-            (Some((_, _l)), Some((_, r))) => {
-                let max_ncols = r.ncols;
+        match (self.left.as_mut(), self.right.as_mut()) {
+            (Some((_, l)), Some((_, r))) => {
                 let i = match self.right_state.selected_column() {
                     Some(i) => {
-                        if i == 1 {
-                            max_ncols
+                        // wrap around to end of cols
+                        if i == 1 && r.curr_offset_cols == 0 {
+                            if r.ncols >= r.max_cols {
+                                r.curr_offset_cols = r.ncols - r.max_cols;
+                            }
+                            r.max_cols.min(r.ncols)
                         } else {
-                            i - 1
+                            if i == 1 {
+                                r.curr_offset_cols -= 1;
+                                i
+                            } else {
+                                i - 1
+                            }
                         }
                     }
                     None => 1,
                 };
                 self.right_state.select_column(Some(i));
-                self.left_state.select_column(Some(i));
-                self.horizontal_scroll_state =
-                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
+
+                let l_start = r.curr_offset_cols.min(l.ncols - 1);
+                l.curr_offset_cols = l_start;
+                let i_l = i.min(l.max_cols.min(l.ncols));
+                self.left_state.select_column(Some(i_l));
+
+                self.horizontal_scroll_state = self
+                    .horizontal_scroll_state
+                    .position((i + r.curr_offset_cols - 1) * ITEM_HEIGHT);
             }
             (Some((_, l)), None) => {
-                let max_ncols = l.ncols;
                 let i = match self.left_state.selected_column() {
                     Some(i) => {
-                        if i == 1 {
-                            max_ncols
+                        if i == 1 && l.curr_offset_cols == 0 {
+                            if l.ncols >= l.max_cols {
+                                l.curr_offset_cols = l.ncols - l.max_cols;
+                            }
+                            l.max_cols.min(l.ncols)
                         } else {
-                            i - 1
+                            if i == 1 {
+                                l.curr_offset_cols -= 1;
+                                i
+                            } else {
+                                i - 1
+                            }
                         }
                     }
                     None => 1,
                 };
-                self.right_state.select_column(Some(i));
+                // self.right_state.select_column(Some(i));
                 self.left_state.select_column(Some(i));
-                self.horizontal_scroll_state =
-                    self.horizontal_scroll_state.position((i - 1) * ITEM_HEIGHT);
+                self.horizontal_scroll_state = self
+                    .horizontal_scroll_state
+                    .position((i + l.curr_offset_cols - 1) * ITEM_HEIGHT);
             }
             (_, _) => {}
         };
@@ -1316,6 +1506,10 @@ impl Default for ClientCompare {
             show_line_input_popup: false,
             popup_buffer: Vec::new(),
             popup_title: COMPARE_POPUP_TITLE_NOERR,
+            ref_width: 0,
+            ref_height: 0,
+            diff_width: 0,
+            diff_height: 0,
         }
     }
 }
@@ -1429,12 +1623,15 @@ impl App {
 
     pub fn change_tolerance_at_current_cursor(&mut self, direction: VerticalDirection) {
         self.tolerance.change_tolerance_at_current_cursor(direction);
-        if let Some((matidx, _)) = self.compare.right.as_ref() {
+        if let Some((matidx, old_mat)) = self.compare.right.as_ref() {
             let curr_history = self.history.read().unwrap();
-            if let Some((mat, _)) = curr_history.mat_with_key(&matidx) {
+            if let Some((mut mat, _)) = curr_history.mat_with_key(&matidx) {
+                mat.max_rows = old_mat.max_rows;
+                mat.max_cols = old_mat.max_cols;
                 self.compare.update_diff(
                     Some((mat, matidx.clone())),
                     Some(f64::from(&self.tolerance)),
+                    false,
                 );
             }
         }
@@ -1446,6 +1643,34 @@ impl App {
 
     pub fn change_history(&mut self, direction: HorizontalDirection) {
         self.history.write().unwrap().scroll_history(direction)
+    }
+
+    pub fn change_cols_ref(&mut self, direction: VerticalDirection) {
+        if let Some((_, reference)) = self.compare.left.as_mut() {
+            match direction {
+                VerticalDirection::Up => {
+                    reference.max_cols += 1;
+                }
+                VerticalDirection::Down => {
+                    reference.max_cols -= 1;
+                }
+                VerticalDirection::Row(_) => todo!(),
+            }
+        }
+    }
+
+    pub fn change_cols_diff(&mut self, direction: VerticalDirection) {
+        if let Some((_, diff)) = self.compare.right.as_mut() {
+            match direction {
+                VerticalDirection::Up => {
+                    diff.max_cols += 1;
+                }
+                VerticalDirection::Down => {
+                    diff.max_cols -= 1;
+                }
+                VerticalDirection::Row(_) => todo!(),
+            }
+        }
     }
 
     pub fn scroll_compare(

@@ -81,6 +81,21 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('p') => {
             app.change_tolerance_cursor(crate::app::HorizontalDirection::Left);
         }
+
+        // TODO non-freedom chars
+        KeyCode::Char('ü') => {
+            app.change_cols_ref(crate::app::VerticalDirection::Up);
+        }
+        KeyCode::Char('ä') => {
+            app.change_cols_ref(crate::app::VerticalDirection::Down);
+        }
+        KeyCode::Char('+') => {
+            app.change_cols_diff(crate::app::VerticalDirection::Up);
+        }
+        KeyCode::Char('#') => {
+            app.change_cols_diff(crate::app::VerticalDirection::Down);
+        }
+
         KeyCode::Char('P') => {
             app.change_tolerance_cursor(crate::app::HorizontalDirection::Right);
         }

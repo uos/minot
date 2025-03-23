@@ -106,7 +106,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         error!("Could not catch dynamic typed var: {e}");
                                     }
                                 }
-                                // dbg!("Catched!");
                             }
                         }
                         _ => (),

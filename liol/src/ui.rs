@@ -27,6 +27,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let [client_base_area, client_diff_area] = inner_layout.areas(frame.area());
     frame.render_widget(outer, frame.area());
 
+    app.compare.update_rects(
+        client_base_area.width,
+        client_base_area.height,
+        client_diff_area.width,
+        client_diff_area.height,
+    );
+
     let selected_style = Style::default()
         .add_modifier(Modifier::BOLD)
         .bg(tailwind::GRAY.c500);
@@ -38,12 +45,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let updated_ref = match (history_left_key, compare_left) {
         (None, None) => false,
         (None, Some(_)) => {
-            app.compare.update_ref(None);
+            app.compare.update_ref(None, false);
             true
         }
         (Some(should_idx), None) => {
             if let Some((mat, _var)) = curr_history.mat_with_key(&should_idx) {
-                app.compare.update_ref(Some((mat, should_idx)));
+                app.compare.update_ref(Some((mat, should_idx)), true);
                 true
             } else {
                 false
@@ -52,7 +59,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         (Some(should_idx), Some((is_idx, _))) => {
             if should_idx != *is_idx {
                 if let Some((mat, _var)) = curr_history.mat_with_key(&should_idx) {
-                    app.compare.update_ref(Some((mat, should_idx)));
+                    app.compare.update_ref(Some((mat, should_idx)), true);
                     true
                 } else {
                     false
@@ -69,13 +76,16 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let updated_diff = match (history_right_key, compare_right) {
         (None, None) => false,
         (None, Some(_)) => {
-            app.compare.update_diff(None, None);
+            app.compare.update_diff(None, None, true);
             true
         }
         (Some(should_idx), None) => {
             if let Some((mat, _var)) = curr_history.mat_with_key(&should_idx) {
-                app.compare
-                    .update_diff(Some((mat, should_idx)), Some(f64::from(&app.tolerance)));
+                app.compare.update_diff(
+                    Some((mat, should_idx)),
+                    Some(f64::from(&app.tolerance)),
+                    true,
+                );
                 true
             } else {
                 false
@@ -84,8 +94,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         (Some(should_idx), Some((is_idx, _))) => {
             if should_idx != *is_idx {
                 if let Some((mat, _var)) = curr_history.mat_with_key(&should_idx) {
-                    app.compare
-                        .update_diff(Some((mat, should_idx)), Some(f64::from(&app.tolerance)));
+                    app.compare.update_diff(
+                        Some((mat, should_idx)),
+                        Some(f64::from(&app.tolerance)),
+                        true,
+                    );
                     true
                 } else {
                     false
