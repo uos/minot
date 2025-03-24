@@ -37,15 +37,19 @@ rust-nightly:
     - export DATE=$(date +%Y-%m-%d)
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/liol-coord liol-coord-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/lh lh-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/lh-coord lh-coord-$TRIPLE-$DATE-nightly
     - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
     - mv target/$RUST_TARGET/release/librat.so librat-$DATE-nightly.so
   artifacts:
     paths:
-      - liol-$TRIPLE-*-nightly
-      - liol-coord-$TRIPLE-*-nightly
+      - wind-ros1-$TRIPLE-*-nightly
+      - wind-ros2-$TRIPLE-*-nightly
+      - lh-$TRIPLE-*-nightly
+      - lh-coord-$TRIPLE-*-nightly
       - librat-*-nightly.so
       - librat-*-nightly.a
     expire_in: 1 week
@@ -59,13 +63,17 @@ snapshot:linux:x86_64-musl:
     - export DATE=$(date +%Y-%m-%d)
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol-coord liol-coord-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/lh-coord lh-coord-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/lh lh-$TRIPLE-$DATE-nightly
     - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
   artifacts:
     paths:
-      - liol-coord-$TRIPLE-*-nightly
-      - liol-$TRIPLE-*-nightly
+      - lh-coord-$TRIPLE-*-nightly
+      - wind-ros1-$TRIPLE-*-nightly
+      - wind-ros2-$TRIPLE-*-nightly
+      - lh-$TRIPLE-*-nightly
       - librat-nightly-*-nightly.a
     expire_in: 1 week
   variables:
@@ -106,15 +114,19 @@ snapshot:linux:riscv64-musl:
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/liol-coord liol-coord-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/liol liol-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/lh-coord lh-coord-$TRIPLE-$DATE-nightly
+    - mv target/$RUST_TARGET/release/lh lh-$TRIPLE-$DATE-nightly
     - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
     - mv target/$RUST_TARGET/release/librat.so librat-$DATE-nightly.so
   artifacts:
     paths:
-      - liol-coord-$TRIPLE-*-nightly
-      - liol-$TRIPLE-*-nightly
+      - wind-ros1-$TRIPLE-*-nightly
+      - wind-ros2-$TRIPLE-*-nightly
+      - lh-coord-$TRIPLE-*-nightly
+      - lh-$TRIPLE-*-nightly
       - librat-*-nightly.so
       - librat-*-nightly.a
     expire_in: 1 week

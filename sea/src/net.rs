@@ -10,7 +10,7 @@ use nalgebra::DMatrix;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{client::Client, Action, ShipKind, ShipName, VariableHuman, WindData};
+use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client};
 
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
@@ -313,7 +313,9 @@ impl Sea {
                             {
                                 let mut lock = rat_lock.lock().unwrap();
                                 if let Some(_) = lock.get(&ship_kind) {
-                                    debug!("requested client already exists or is in the progress of joining the network");
+                                    debug!(
+                                        "requested client already exists or is in the progress of joining the network"
+                                    );
                                     continue;
                                 }
                                 lock.insert(ship_kind.clone());
@@ -344,7 +346,9 @@ impl Sea {
                                             .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
                                     )
                                     .unwrap();
-
+                                socket
+                                    .set_linger(Some(std::time::Duration::from_secs(30)))
+                                    .unwrap();
                                 let stream: TcpStream = socket.into();
                                 let client_stream =
                                     tokio::net::TcpStream::from_std(stream).unwrap();

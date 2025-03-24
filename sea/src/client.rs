@@ -6,20 +6,20 @@ use pnet::datalink::{self, NetworkInterface};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpListener, UdpSocket,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
     },
 };
 
 use crate::{
+    ShipKind, ShipName, VariableType,
     coordinator::COMPARE_NODE_NAME,
     net::{
-        Header, Packet, PacketKind, Sea, CLIENT_HEARTBEAT_TCP_INTERVAL,
-        CLIENT_HEARTBEAT_TCP_TIMEOUT, CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT,
-        CLIENT_REJOIN_POLL_INTERVAL, CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT, CLIENT_TO_CLIENT_TIMEOUT,
-        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER,
+        CLIENT_HEARTBEAT_TCP_INTERVAL, CLIENT_HEARTBEAT_TCP_TIMEOUT, CLIENT_LISTEN_PORT,
+        CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL, CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT,
+        CLIENT_TO_CLIENT_TIMEOUT, CONTROLLER_CLIENT_ID, Header, PROTO_IDENTIFIER, Packet,
+        PacketKind, Sea,
     },
-    ShipKind, ShipName, VariableType,
 };
 
 #[derive(Debug)]
@@ -118,6 +118,9 @@ impl Client {
                                     .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
                             )
                             .unwrap();
+                        socket
+                            .set_linger(Some(std::time::Duration::from_secs(30)))
+                            .unwrap();
                         let stream: TcpStream = socket.into();
                         let stream = tokio::net::TcpStream::from_std(stream).unwrap();
                         match stream.readable().await {
@@ -198,7 +201,9 @@ impl Client {
                                             };
                                             match coord_raw_sender.send(packet).await {
                                                 Err(e) => {
-                                                    error!("could not send heartbeat to coordinator: {e}");
+                                                    error!(
+                                                        "could not send heartbeat to coordinator: {e}"
+                                                    );
                                                     return; // channel closed
                                                 }
                                                 Ok(_) => {
@@ -271,7 +276,9 @@ impl Client {
                 let mut buf = [0; 1024];
                 let n = match rh.read(&mut buf).await {
                     Err(e) => {
-                        error!("Could not read from TCP stream in client connection to coordinator: {e}");
+                        error!(
+                            "Could not read from TCP stream in client connection to coordinator: {e}"
+                        );
                         return;
                     }
                     Ok(n) => n,
@@ -627,7 +634,9 @@ impl Client {
                         let mut buf = [0; 1024];
                         let n = match stream.read(&mut buf).await {
                             Err(e) => {
-                                return Err(anyhow!("Could not read from TCP stream when receiving from other client: {e}"));
+                                return Err(anyhow!(
+                                    "Could not read from TCP stream when receiving from other client: {e}"
+                                ));
                             }
                             Ok(n) => n,
                         };

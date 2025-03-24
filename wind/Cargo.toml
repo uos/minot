@@ -30,9 +30,9 @@ ros2-interfaces-jazzy = { version = "0.0.4", features = [
 
 
 [[bin]]
-name = "ros1"
+name = "wind-ros1"
 path = "src/ros1.rs"
 
 [[bin]]
-name = "ros2"
+name = "wind-ros2"
 path = "src/ros2.rs"
