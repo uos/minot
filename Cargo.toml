@@ -1,10 +1,5 @@
 [workspace]
-members = [
-    "liol",
-    "rat",
-    "sea",
-    "wind",
-]
+members = ["lighthouse", "rat", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
@@ -12,12 +7,8 @@ version = "0.1.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://gitlabti.informatik.uni-osnabrueck.de/chsieh/liolink/"
-edition = "2021"
-include = [
-    "**/*.rs",
-    "**/*.md",
-    "**/Cargo.toml",
-]
+edition = "2024"
+include = ["**/*.rs", "**/*.md", "**/Cargo.toml"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -31,12 +22,15 @@ version = "0.33.2"
 features = ["serde-serialize"]
 
 [workspace.dependencies.ros_pointcloud2]
-version = "0.5.2"
+version = "0.5.3"
 git = "https://github.com/stelzo/ros_pointcloud2.git"
-features = ["serde"]
+features = ["serde", "ros2-interfaces-jazzy"]
 
 [workspace.dependencies.sea]
 path = "sea"
+
+[workspace.dependencies.wind]
+path = "wind"
 
 [workspace.dependencies.serde]
 version = "1.0"
@@ -45,3 +39,8 @@ features = ["derive"]
 [workspace.dependencies.tokio]
 version = "1"
 features = ["full"]
+
+[profile.release]
+lto = true          # Link Time Optimization
+codegen-units = 1   # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
+strip = "debuginfo" # Significantly reduce binary size

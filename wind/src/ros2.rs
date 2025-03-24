@@ -1,0 +1,198 @@
+use ros2_client::ros2;
+use ros2_client::{NodeName, NodeOptions};
+use ros2_interfaces_jazzy::geometry_msgs::msg::Vector3;
+use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
+use ros2_interfaces_jazzy::{
+    builtin_interfaces::msg::Time, geometry_msgs::msg::Quaternion, sensor_msgs::msg::PointCloud2,
+    std_msgs::msg::Header,
+};
+
+use anyhow::anyhow;
+use log::error;
+use wind::wind;
+
+fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
+    match std::env::var(key) {
+        Ok(name) => Ok(name),
+        Err(e) => match e {
+            std::env::VarError::NotPresent => Ok(default.to_owned()),
+            std::env::VarError::NotUnicode(_os_string) => {
+                error!("Could not fetch node name because it is not unicode");
+                Err(anyhow!("Could not initialize node"))
+            }
+        },
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub enum Qos {
+    Sensor,
+    #[default]
+    SystemDefault,
+}
+
+impl TryFrom<String> for Qos {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "sensor" => Ok(Qos::Sensor),
+            "system_default" => Ok(Qos::SystemDefault),
+            _ => Err(anyhow!("Invalid QoS value")),
+        }
+    }
+}
+
+impl From<crate::Qos> for ros2::QosPolicies {
+    fn from(value: crate::Qos) -> Self {
+        match value {
+            Qos::Sensor => ros2::QosPolicyBuilder::new()
+                .durability(ros2::policy::Durability::Volatile)
+                .deadline(ros2::policy::Deadline(ros2::Duration::INFINITE))
+                .ownership(ros2::policy::Ownership::Shared)
+                .reliability(ros2::policy::Reliability::BestEffort)
+                .history(ros2::policy::History::KeepLast { depth: 5 })
+                .lifespan(ros2::policy::Lifespan {
+                    duration: ros2::Duration::INFINITE,
+                })
+                .build(),
+            _ => ros2::QosPolicyBuilder::new()
+                .durability(ros2::policy::Durability::Volatile)
+                .deadline(ros2::policy::Deadline(ros2::Duration::INFINITE))
+                .ownership(ros2::policy::Ownership::Shared)
+                .reliability(ros2::policy::Reliability::Reliable {
+                    max_blocking_time: ros2::Duration::from_millis(100),
+                })
+                .history(ros2::policy::History::KeepLast { depth: 1 })
+                .lifespan(ros2::policy::Lifespan {
+                    duration: ros2::Duration::INFINITE,
+                })
+                .build(),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
+    let wind_name = get_env_or_default("wind_name", "turbine-ros1")?;
+
+    let cloud_topic = get_env_or_default("CLOUD_TOPIC", "/wind_cloud")?;
+    let cloud_qos = get_env_or_default("CLOUD_QOS", "sensor")?;
+    let cloud_qos = Qos::try_from(cloud_qos)?;
+
+    let imu_topic = get_env_or_default("IMU_TOPIC", "/wind_imu")?;
+    let imu_qos = get_env_or_default("IMU_QOS", "sensor")?;
+    let imu_qos = Qos::try_from(imu_qos)?;
+
+    let ctx = ros2_client::Context::new()?;
+    let namespace = wind_name.clone();
+    let node_name = wind_name + "_node";
+    let mut node = ctx.new_node(
+        NodeName::new(&namespace, &node_name)?,
+        NodeOptions::new().enable_rosout(true),
+    )?;
+
+    let cloud_publisher = node
+        .create_publisher(
+            &node
+                .create_topic(
+                    &ros2_client::Name::new(&namespace, &cloud_topic).unwrap(),
+                    ros2_client::MessageTypeName::new("sensor_msgs", "PointCloud2"),
+                    &cloud_qos.into(),
+                )
+                .unwrap(),
+            None,
+        )
+        .unwrap();
+
+    let imu_publisher = node
+        .create_publisher(
+            &node
+                .create_topic(
+                    &ros2_client::Name::new(&namespace, &imu_topic).unwrap(),
+                    ros2_client::MessageTypeName::new("sensor_msgs", "Imu"),
+                    &imu_qos.into(),
+                )
+                .unwrap(),
+            None,
+        )
+        .unwrap();
+
+    let mut wind_receiver = wind(&namespace).await?;
+
+    while let Some(data) = wind_receiver.recv().await {
+        match data {
+            wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
+                let msg: PointCloud2 = point_cloud2_msg.into();
+                cloud_publisher.publish(msg)?;
+            }
+            wind::sea::WindData::Imu(imu_msg) => {
+                let msg = Imu {
+                    header: Header {
+                        stamp: Time {
+                            sec: imu_msg.header.stamp.sec,
+                            nanosec: imu_msg.header.stamp.nanosec,
+                        },
+                        frame_id: imu_msg.header.frame_id,
+                    },
+                    orientation: {
+                        Quaternion {
+                            x: imu_msg.orientation.i,
+                            y: imu_msg.orientation.j,
+                            z: imu_msg.orientation.k,
+                            w: imu_msg.orientation.w,
+                        }
+                    },
+                    orientation_covariance: [
+                        imu_msg.orientation_covariance[0],
+                        imu_msg.orientation_covariance[1],
+                        imu_msg.orientation_covariance[2],
+                        imu_msg.orientation_covariance[3],
+                        imu_msg.orientation_covariance[4],
+                        imu_msg.orientation_covariance[5],
+                        imu_msg.orientation_covariance[6],
+                        imu_msg.orientation_covariance[7],
+                        imu_msg.orientation_covariance[8],
+                    ],
+                    angular_velocity: Vector3 {
+                        x: imu_msg.angular_velocity.x,
+                        y: imu_msg.angular_velocity.y,
+                        z: imu_msg.angular_velocity.z,
+                    },
+                    angular_velocity_covariance: [
+                        imu_msg.angular_velocity[0],
+                        imu_msg.angular_velocity[1],
+                        imu_msg.angular_velocity[2],
+                        imu_msg.angular_velocity[3],
+                        imu_msg.angular_velocity[4],
+                        imu_msg.angular_velocity[5],
+                        imu_msg.angular_velocity[6],
+                        imu_msg.angular_velocity[7],
+                        imu_msg.angular_velocity[8],
+                    ],
+                    linear_acceleration: Vector3 {
+                        x: imu_msg.linear_acceleration.x,
+                        y: imu_msg.linear_acceleration.y,
+                        z: imu_msg.linear_acceleration.z,
+                    },
+                    linear_acceleration_covariance: [
+                        imu_msg.linear_acceleration_covariance[0],
+                        imu_msg.linear_acceleration_covariance[1],
+                        imu_msg.linear_acceleration_covariance[2],
+                        imu_msg.linear_acceleration_covariance[3],
+                        imu_msg.linear_acceleration_covariance[4],
+                        imu_msg.linear_acceleration_covariance[5],
+                        imu_msg.linear_acceleration_covariance[6],
+                        imu_msg.linear_acceleration_covariance[7],
+                        imu_msg.linear_acceleration_covariance[8],
+                    ],
+                };
+                imu_publisher.publish(msg)?;
+            }
+        }
+    }
+
+    Ok(())
+}

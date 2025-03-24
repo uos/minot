@@ -18,3 +18,21 @@ bincode.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 async-trait.workspace = true
+
+roslibrust = { version = "0.12.2", features = ["ros1", "macro"] }
+ros2-client = "0.7.6"
+ros2-interfaces-jazzy = { version = "0.0.4", features = [
+    "std_msgs",
+    "geometry_msgs",
+    "sensor_msgs",
+    "builtin_interfaces",
+] }
+
+
+[[bin]]
+name = "ros1"
+path = "src/ros1.rs"
+
+[[bin]]
+name = "ros2"
+path = "src/ros2.rs"

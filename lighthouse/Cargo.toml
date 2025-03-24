@@ -1,5 +1,5 @@
 [package]
-name = "liol"
+name = "lighthouse"
 edition.workspace = true
 include.workspace = true
 keywords.workspace = true
@@ -30,14 +30,13 @@ strip = "debuginfo" # Significantly reduce binary size
 opt-level = 3
 
 [[bin]]
-name = "liol-coord"
+name = "lh-coord"
 path = "src/coord.rs"
 test = false
 bench = false
 
 [[bin]]
-name = "liol"
+name = "lh"
 path = "src/lighthouse.rs"
 test = false
 bench = false
-

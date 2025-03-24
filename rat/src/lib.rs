@@ -237,7 +237,7 @@ type CFfiString = u8;
 ))]
 type CFfiString = i8;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i32 {
     let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
     let node_name = node_name.to_str().unwrap();
@@ -257,7 +257,7 @@ pub extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rat_deinit() -> i32 {
     match deinit() {
         Ok(_) => 0,
@@ -268,7 +268,7 @@ pub extern "C" fn rat_deinit() -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_f32(
     variable_name: *const CFfiString,
@@ -298,7 +298,7 @@ pub extern "C" fn rat_bacon_f32(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_f64(
     variable_name: *const CFfiString,
@@ -328,7 +328,7 @@ pub extern "C" fn rat_bacon_f64(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_i32(
     variable_name: *const CFfiString,
@@ -358,7 +358,7 @@ pub extern "C" fn rat_bacon_i32(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 pub extern "C" fn rat_bacon_u8(
     variable_name: *const CFfiString,

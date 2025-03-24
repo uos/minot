@@ -2,6 +2,8 @@ use log::{error, info};
 use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+pub use sea;
+
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>> {
     let kind = ShipKind::Wind(name.to_string());
     let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
@@ -22,6 +24,8 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>
             }
         }
     });
+
+    tokio::task::yield_now().await;
 
     Ok(rx)
 }
