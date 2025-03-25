@@ -2162,8 +2162,7 @@ dependencies = [
 [[package]]
 name = "roslibrust"
 version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773ad489941a70a071c4e8fa4cbe8855e48c374a21794984c3aaa7f203aab82b"
+source = "git+https://github.com/stelzo/roslibrust?branch=rustls#ff7b8d8a6019a24851863bdc8361b1a34dba5059"
 dependencies = [
  "roslibrust_codegen",
  "roslibrust_codegen_macro",
@@ -2174,8 +2173,7 @@ dependencies = [
 [[package]]
 name = "roslibrust_codegen"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1413c748132051884ea22b25075bf35eae85d5273631f4c7b9b0090d1f5e9646"
+source = "git+https://github.com/stelzo/roslibrust?branch=rustls#ff7b8d8a6019a24851863bdc8361b1a34dba5059"
 dependencies = [
  "lazy_static",
  "log",
@@ -2198,8 +2196,7 @@ dependencies = [
 [[package]]
 name = "roslibrust_codegen_macro"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d727f45feef91c6d068e976744766d53f791e492cf734e49c5bc8742c56f776e"
+source = "git+https://github.com/stelzo/roslibrust?branch=rustls#ff7b8d8a6019a24851863bdc8361b1a34dba5059"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2210,8 +2207,7 @@ dependencies = [
 [[package]]
 name = "roslibrust_common"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f95bffec011ab11a12fd26e632802ee3c32d9b5406732efd9997d9c951cd340"
+source = "git+https://github.com/stelzo/roslibrust?branch=rustls#ff7b8d8a6019a24851863bdc8361b1a34dba5059"
 dependencies = [
  "anyhow",
  "futures",
@@ -2223,8 +2219,7 @@ dependencies = [
 [[package]]
 name = "roslibrust_ros1"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "273912a6c5a29e9d420619cb8b67f9209e163d3284cdc8d58c197d12b3f0fbb8"
+source = "git+https://github.com/stelzo/roslibrust?branch=rustls#ff7b8d8a6019a24851863bdc8361b1a34dba5059"
 dependencies = [
  "abort-on-drop",
  "anyhow",

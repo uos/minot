@@ -40,6 +40,9 @@ features = ["derive"]
 version = "1"
 features = ["full"]
 
+[patch.crates-io]
+roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls", features = ["rustls"] }
+
 [profile.release]
 lto = true          # Link Time Optimization
 codegen-units = 1   # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
