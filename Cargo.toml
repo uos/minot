@@ -16,32 +16,15 @@ async-trait = "0.1.86"
 bincode = "1.3.3"
 env_logger = "0.11.6"
 log = "0.4.25"
-
-[workspace.dependencies.nalgebra]
-version = "0.33.2"
-features = ["serde-serialize"]
-
-[workspace.dependencies.ros_pointcloud2]
-version = "0.5.3"
-git = "https://github.com/stelzo/ros_pointcloud2.git"
-features = ["serde", "ros2-interfaces-jazzy"]
-
-[workspace.dependencies.sea]
-path = "sea"
-
-[workspace.dependencies.wind]
-path = "wind"
-
-[workspace.dependencies.serde]
-version = "1.0"
-features = ["derive"]
-
-[workspace.dependencies.tokio]
-version = "1"
-features = ["full"]
+nalgebra = { version = "0.33.2", features = ["serde-serialize"] }
+ros_pointcloud2 = { version = "0.5.3", git = "https://github.com/stelzo/ros_pointcloud2.git", features = ["serde", "ros2-interfaces-jazzy"] }
+sea = { path = "sea"}
+wind = { path = "wind"}
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] } 
 
 [patch.crates-io]
-roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls", features = ["rustls"] }
+roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls", features = ["rustls-tls", "macos-system-configuration"] }
 
 [profile.release]
 lto = true          # Link Time Optimization
