@@ -239,31 +239,45 @@ type CFfiString = i8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i32 {
-    let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
-    let node_name = node_name.to_str().unwrap();
+    let catch = std::panic::catch_unwind(|| {
+        let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
+        let node_name = node_name.to_str().unwrap();
 
-    let timeout = if timeout_secs <= 0 {
-        None
-    } else {
-        Some(std::time::Duration::from_secs(timeout_secs as u64))
-    };
+        let timeout = if timeout_secs <= 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(timeout_secs as u64))
+        };
 
-    match init(node_name, timeout, None) {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to init: {}", e);
+        init(node_name, timeout, None)
+    });
+
+    match catch {
+        Ok(Ok(_)) => 0,
+        Ok(Err(e)) => {
+            error!("Could not initialize Rat: {e}.");
             -1
+        }
+        Err(_) => {
+            error!("Rust did panic unexpectedly.");
+            -2
         }
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rat_deinit() -> i32 {
-    match deinit() {
-        Ok(_) => 0,
-        Err(e) => {
-            error!("Failed to deinit: {}", e);
+    let catch = std::panic::catch_unwind(|| deinit());
+
+    match catch {
+        Ok(Ok(_)) => 0,
+        Ok(Err(e)) => {
+            error!("Could not deinitialize Rat: {e}.");
             -1
+        }
+        Err(_) => {
+            error!("Rust did panic unexpectedly.");
+            -2
         }
     }
 }
@@ -276,24 +290,31 @@ pub extern "C" fn rat_bacon_f32(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
+    let catch = std::panic::catch_unwind(|| {
+        let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
+        let variable_name = variable_name.to_str().unwrap();
 
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
+        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix, VariableType::F32) {
-        Ok(_) => {
+        bacon(variable_name, &mut matrix, VariableType::F32).map(|_| {
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
                 }
             }
-            0
-        }
-        Err(e) => {
+        })
+    });
+
+    match catch {
+        Ok(Ok(_)) => 0,
+        Ok(Err(e)) => {
             error!("Failed to bacon: {}", e);
             -1
+        }
+        Err(_) => {
+            error!("Rust did panic unexpectedly.");
+            -2
         }
     }
 }
@@ -306,24 +327,31 @@ pub extern "C" fn rat_bacon_f64(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
+    let catch = std::panic::catch_unwind(|| {
+        let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
+        let variable_name = variable_name.to_str().unwrap();
 
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
+        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix, VariableType::F64) {
-        Ok(_) => {
+        bacon(variable_name, &mut matrix, VariableType::F64).map(|_| {
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
                 }
             }
-            0
-        }
-        Err(e) => {
+        })
+    });
+
+    match catch {
+        Ok(Ok(_)) => 0,
+        Ok(Err(e)) => {
             error!("Failed to bacon: {}", e);
             -1
+        }
+        Err(_) => {
+            error!("Rust did panic unexpectedly.");
+            -2
         }
     }
 }
@@ -336,24 +364,31 @@ pub extern "C" fn rat_bacon_i32(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
+    let catch = std::panic::catch_unwind(|| {
+        let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
+        let variable_name = variable_name.to_str().unwrap();
 
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
+        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix, VariableType::I32) {
-        Ok(_) => {
+        bacon(variable_name, &mut matrix, VariableType::I32).map(|_| {
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
                 }
             }
-            0
-        }
-        Err(e) => {
+        })
+    });
+
+    match catch {
+        Ok(Ok(_)) => 0,
+        Ok(Err(e)) => {
             error!("Failed to bacon: {}", e);
             -1
+        }
+        Err(_) => {
+            error!("Rust did panic unexpectedly.");
+            -2
         }
     }
 }
@@ -366,24 +401,31 @@ pub extern "C" fn rat_bacon_u8(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
-    let variable_name = variable_name.to_str().unwrap();
+    let catch = std::panic::catch_unwind(|| {
+        let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
+        let variable_name = variable_name.to_str().unwrap();
 
-    let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-    let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
+        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-    match bacon(variable_name, &mut matrix, VariableType::U8) {
-        Ok(_) => {
+        bacon(variable_name, &mut matrix, VariableType::U8).map(|_| {
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
                 }
             }
-            0
-        }
-        Err(e) => {
+        })
+    });
+
+    match catch {
+        Ok(Ok(_)) => 0,
+        Ok(Err(e)) => {
             error!("Failed to bacon: {}", e);
             -1
+        }
+        Err(_) => {
+            error!("Rust did panic unexpectedly.");
+            -2
         }
     }
 }
