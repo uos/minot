@@ -37,7 +37,7 @@ rust-nightly:
   stage: snapshot
   script:
     - export DATE=$(date +%Y-%m-%d)
-    - rustup default stable
+    - rustup default nightly
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
@@ -64,7 +64,7 @@ snapshot:linux:x86_64-musl:
   stage: snapshot
   script:
     - export DATE=$(date +%Y-%m-%d)
-    - rustup default stable
+    - rustup default nightly
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
@@ -115,7 +115,7 @@ snapshot:linux:riscv64-musl:
   stage: snapshot
   script:
     - export DATE=$(date +%Y-%m-%d)
-    - rustup default stable
+    - rustup default nightly
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
