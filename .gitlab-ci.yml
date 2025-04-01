@@ -1,4 +1,4 @@
-image: rust:nightly
+image: rust:latest
 
 variables:
   CARGO_INCREMENTAL: "0"
@@ -11,11 +11,12 @@ stages:
 before_script:
   - apt-get update
   - apt-get install -y curl gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+  - rustup update
 
 rust-stable:
   stage: build
-  image: rust:latest
   script:
+    - rustup default stable
     - cargo build --verbose
     - cargo test --verbose
   rules:
@@ -24,6 +25,7 @@ rust-stable:
 rust-nightly:
   stage: build
   script:
+    - rustup default nightly
     - cargo build --verbose
     - cargo test --verbose
   allow_failure: true
@@ -35,6 +37,7 @@ rust-nightly:
   stage: snapshot
   script:
     - export DATE=$(date +%Y-%m-%d)
+    - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
@@ -61,6 +64,7 @@ snapshot:linux:x86_64-musl:
   stage: snapshot
   script:
     - export DATE=$(date +%Y-%m-%d)
+    - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
@@ -111,6 +115,7 @@ snapshot:linux:riscv64-musl:
   stage: snapshot
   script:
     - export DATE=$(date +%Y-%m-%d)
+    - rustup default stable
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
