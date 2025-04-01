@@ -1,4 +1,4 @@
-image: ghcr.io/rust-lang/rust:latest
+image: ubuntu:latest
 
 variables:
   CARGO_INCREMENTAL: "0"
@@ -10,7 +10,7 @@ stages:
 
 before_script:
   - apt-get update
-  - apt-get install -y curl gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+  - apt-get install -y rustup curl gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
   - rustup update
 
 rust-stable:
