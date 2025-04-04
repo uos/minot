@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use log::{debug, error, info, warn};
 use sea::coordinator::COMPARE_NODE_NAME;
@@ -37,7 +39,8 @@ impl Network {
 // hashmap[string] => ID
 // ID => VariableRule
 
-use sea::{ActionPlan, Coordinator, VariableHuman};
+use rlc::ActionPlan;
+use sea::Coordinator;
 
 #[derive(Debug)]
 enum LighthouseTask {
@@ -52,11 +55,11 @@ enum LighthouseTask {
     },
     SendRatAction {
         ship_name: String,
-        data: sea::ActionPlan,
+        data: ActionPlan,
     },
     AppendRule {
         variable: String,
-        commands: Vec<VariableHuman>,
+        commands: Vec<rlc::VariableHuman>,
     },
     RulesClear,
     LockNext,
@@ -67,50 +70,53 @@ enum LighthouseTask {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
+    let rules_file = PathBuf::from_str("./rules.rats")?;
+    let rules = rlc::evaluate_rules_file(&rules_file)?;
+
     // TODO use ratslang to parse this from a vec of (variablename, vec<varhuman>) tuple on initialize
     // -- CONFIG BEGIN --
-    let mut rules = HashMap::new();
-    rules.insert(
-        "var1".to_string(),
-        vec![sea::VariableHuman {
-            ship: "testRat1".to_string(),
-            strategy: Some(sea::ActionPlan::Shoot {
-                target: vec!["testRat2".to_string()],
-            }),
-        }],
-    );
+    // let mut rules = HashMap::new();
+    // rules.insert(
+    //     "var1".to_string(),
+    //     vec![VariableHuman {
+    //         ship: "testRat1".to_string(),
+    //         strategy: Some(ActionPlan::Shoot {
+    //             target: vec!["testRat2".to_string()],
+    //         }),
+    //     }],
+    // );
 
-    rules.insert(
-        "var3".to_string(),
-        vec![sea::VariableHuman {
-            ship: "testRat2".to_string(),
-            strategy: Some(sea::ActionPlan::Shoot {
-                target: vec!["testRat1".to_string(), COMPARE_NODE_NAME.to_string()],
-            }),
-        }],
-    );
+    // rules.insert(
+    //     "var3".to_string(),
+    //     vec![VariableHuman {
+    //         ship: "testRat2".to_string(),
+    //         strategy: Some(ActionPlan::Shoot {
+    //             target: vec!["testRat1".to_string(), COMPARE_NODE_NAME.to_string()],
+    //         }),
+    //     }],
+    // );
 
-    rules.insert(
-        "var4".to_string(),
-        vec![
-            sea::VariableHuman {
-                ship: "testRat2".to_string(),
-                strategy: Some(sea::ActionPlan::Shoot {
-                    target: vec![COMPARE_NODE_NAME.to_string()],
-                }),
-            },
-            sea::VariableHuman {
-                ship: "testRat1".to_string(),
-                strategy: Some(sea::ActionPlan::Shoot {
-                    target: vec![COMPARE_NODE_NAME.to_string()],
-                }),
-            },
-        ],
-    );
+    // rules.insert(
+    //     "var4".to_string(),
+    //     vec![
+    //         VariableHuman {
+    //             ship: "testRat2".to_string(),
+    //             strategy: Some(ActionPlan::Shoot {
+    //                 target: vec![COMPARE_NODE_NAME.to_string()],
+    //             }),
+    //         },
+    //         VariableHuman {
+    //             ship: "testRat1".to_string(),
+    //             strategy: Some(ActionPlan::Shoot {
+    //                 target: vec![COMPARE_NODE_NAME.to_string()],
+    //             }),
+    //         },
+    //     ],
+    // );
     // -- CONFIG END --
 
     let mut clients = HashSet::new();
-    for (_, inner_clients) in rules.iter() {
+    for (_, inner_clients) in rules.raw().iter() {
         inner_clients.iter().for_each(|client| {
             clients.insert(client.ship.clone());
         });
@@ -231,7 +237,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 }
                                             }
                                             Err(e) => {
-                                                warn!("Could not receive packet from client {inner_name}: {e}");
+                                                warn!(
+                                                    "Could not receive packet from client {inner_name}: {e}"
+                                                );
                                                 return;
                                             }
                                         }
@@ -293,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match task {
                 LighthouseTask::AppendRule { variable, commands } => {
                     let mut current_rules = rules_changer.write().unwrap();
-                    current_rules.insert(variable, commands).unwrap();
+                    current_rules.insert(variable, commands);
                 }
                 LighthouseTask::RulesClear => {
                     let mut current_rules = rules_changer.write().unwrap();

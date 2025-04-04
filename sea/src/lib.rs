@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use nalgebra::{UnitQuaternion, Vector3};
 use net::SeaSendableBuffer;
+use rlc::{ActionPlan, VariableHuman};
 use ros_pointcloud2::PointCloud2Msg;
 use serde::{Deserialize, Serialize};
 
@@ -40,23 +41,23 @@ pub enum Action {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub enum ActionPlan {
-    #[default]
-    Sail,
-    Shoot {
-        target: Vec<String>,
-    },
-    Catch {
-        source: String,
-    },
-}
+// #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+// pub enum ActionPlan {
+//     #[default]
+//     Sail,
+//     Shoot {
+//         target: Vec<String>,
+//     },
+//     Catch {
+//         source: String,
+//     },
+// }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct VariableHuman {
-    pub ship: String,
-    pub strategy: Option<ActionPlan>,
-}
+// #[derive(Clone, Debug, Deserialize, Serialize)]
+// pub struct VariableHuman {
+//     pub ship: String,
+//     pub strategy: Option<ActionPlan>,
+// }
 
 #[derive(Clone, Debug)]
 pub struct Variable {
@@ -65,12 +66,12 @@ pub struct Variable {
 }
 
 pub fn get_strategies(
-    haystack: &HashMap<String, Vec<VariableHuman>>,
+    haystack: &rlc::Rules,
     rat_ship: &str,
     variable: String,
     indirect_parent_rat: Option<&str>,
 ) -> Vec<ActionPlan> {
-    match haystack.get(&variable) {
+    match haystack.raw().get(&variable) {
         None => vec![ActionPlan::default()],
         Some(plans) => {
             // directly because rule was set
@@ -233,7 +234,7 @@ pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_send(
         &self,
         ship: String,
-        action: crate::ActionPlan,
+        action: rlc::ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()>;
 }

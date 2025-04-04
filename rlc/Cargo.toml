@@ -1,0 +1,17 @@
+[package]
+name = "rlc"
+version.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+include.workspace = true
+
+[dependencies]
+env_logger.workspace = true
+log.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+logos = "0.15.0"
+chumsky = "0.10.0"
+ariadne = "0.4"

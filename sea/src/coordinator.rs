@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use log::{debug, error};
 
 use crate::{
-    net::{Packet, PacketKind},
     NetworkShipAddress, ShipName,
+    net::{Packet, PacketKind},
 };
 
 pub struct ClientInfo {
@@ -59,7 +59,7 @@ impl crate::Coordinator for CoordinatorImpl {
     async fn rat_action_send(
         &self,
         ship: String,
-        action: crate::ActionPlan,
+        action: rlc::ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()> {
         if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
@@ -128,11 +128,11 @@ impl CoordinatorImpl {
 
     async fn convert_action(
         &self,
-        human_action: &crate::ActionPlan,
+        human_action: &rlc::ActionPlan,
     ) -> anyhow::Result<crate::Action> {
         let action = match human_action {
-            crate::ActionPlan::Sail => crate::Action::Sail,
-            crate::ActionPlan::Shoot { target } => {
+            rlc::ActionPlan::Sail => crate::Action::Sail,
+            rlc::ActionPlan::Shoot { target } => {
                 let mut targets = Vec::with_capacity(target.len());
                 for client_name in target.into_iter() {
                     let rat = self.rat_qs.read().await;
