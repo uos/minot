@@ -1,5 +1,13 @@
+use anyhow::anyhow;
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use core::fmt;
+use logos::{Lexer, Logos};
 use serde::{Deserialize, Serialize};
+
+use chumsky::{
+    input::{Stream, ValueInput},
+    prelude::*,
+};
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rules(std::collections::HashMap<String, Vec<VariableHuman>>);
@@ -50,14 +58,6 @@ pub enum ActionPlan {
         source: String,
     },
 }
-
-use ariadne::{Color, Label, Report, ReportKind, Source};
-use logos::{Lexer, Logos};
-
-use chumsky::{
-    input::{Stream, ValueInput},
-    prelude::*,
-};
 
 fn floating_millimeter<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<f64> {
     let slice = lex.slice();
@@ -169,6 +169,12 @@ enum Token<'a> {
     #[token("-")]
     OpMinus,
 
+    #[regex(".", priority = 1)]
+    Dot,
+
+    #[token(",")]
+    Comma,
+
     #[token("\n")]
     NewLine,
 
@@ -259,45 +265,13 @@ enum Token<'a> {
     PredefVariable(&'a str),
 }
 
-#[derive(Debug)]
-enum SExpr<'a> {
-    Float(f64),
-    Integer(i64),
-    FloatMilliseconds(f64),
-    FloatMillimeter(f64),
-    IntegerMilliseconds(i64),
-    IntegerMillimeter(i64),
-    Variable(&'a str),
-    AssignLeft,
-    AssignRight,
-    FnPlayFrames,
-    True,
-    False,
-    PredefVariable(&'a str),
-    CommentLineStart,
-    OpPlus,
-    OpMinus,
-    NewLine,
-    RuleDefinitionOpen,
-    RuleDefinitionClose,
-    BlockStart,
-    BlockEnd,
-    LParen,
-    RParen,
-    OpCompare,
-    OpAssignToLeft,
-    OpAssignToRight,
-    OpRange,
-    If,
-    DoNotCareOptim,
-    Log,
-}
-
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::Comma => write!(f, ","),
             Self::KwLog => write!(f, "LOG"),
             Self::OpPlus => write!(f, "+"),
+            Self::Dot => write!(f, "."),
             Self::OpMinus => write!(f, "-"),
             Self::Error => write!(f, "<error>"),
             Self::CommentLineStart => write!(f, "#"),
@@ -328,6 +302,42 @@ impl fmt::Display for Token<'_> {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct RuleSexpr<'a> {
+    pub rules: Vec<Rule<'a>>,
+}
+
+#[derive(Debug)]
+pub struct Rule<'a> {
+    pub variable: &'a str,
+    pub stmt: Statement<'a>,
+}
+
+#[derive(Debug)]
+pub enum Statement<'a> {
+    // A statement is a left-hand side (one or more terms)
+    // an operator ("->", "<-" or "==") and a right-hand side term.
+    Assign {
+        lhs: Vec<Expr<'a>>,
+        op: Operator,
+        rhs: Expr<'a>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Operator {
+    Right,   // corresponds to "->"
+    Left,    // corresponds to "<-"
+    Compare, // corresponds to "=="
+}
+
+#[derive(Debug)]
+pub enum Expr<'a> {
+    Var(&'a str),
+    Log, // represents the LOG keyword.
+}
+
 // This function signature looks complicated, but don't fear! We're just saying that this function is generic over
 // inputs that:
 //     - Can have tokens pulled out of them by-value, by cloning (`ValueInput`)
@@ -338,68 +348,94 @@ impl fmt::Display for Token<'_> {
 //     - Has an input type of type `I`, the one we declared as a type parameter
 //     - Produces an `SExpr` as its output
 //     - Uses `Rich`, a built-in error type provided by chumsky, for error generation
-fn parser<'a, I>() -> impl Parser<'a, I, SExpr<'a>, extra::Err<Rich<'a, Token<'a>>>>
+fn parser<'a, I>() -> impl Parser<'a, I, RuleSexpr<'a>, extra::Err<Rich<'a, Token<'a>>>>
 where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
     recursive(|sexpr| {
-        let atom = select! {
-            Token::FloatingNumber(x) => SExpr::Float(x),
-            Token::IntegerNumber(x) => SExpr::Integer(x),
-            Token::IntegerNumberMillimeter(x) => SExpr::IntegerMillimeter(x),
-            Token::IntegerNumberMillisecond(x) => SExpr::IntegerMilliseconds(x),
-            Token::FloatingNumberMillimeter(x) => SExpr::FloatMillimeter(x),
-            Token::FloatingNumberMillisecond(x) => SExpr::FloatMilliseconds(x),
-            Token::Variable(x) => SExpr::Variable(x),
-            Token::PredefVariable(x) => SExpr::PredefVariable(x),
-            Token::OpAssignToLeft => SExpr::AssignLeft,
-            Token::OpAssignToRight => SExpr::AssignRight,
-            Token::FnPlayFrames=> SExpr::FnPlayFrames,
-            Token::True => SExpr::True,
-            Token::False => SExpr::False,
-            Token::CommentLineStart=> SExpr::CommentLineStart,
-            Token::OpPlus => SExpr::OpPlus,
-            Token::OpMinus => SExpr::OpMinus,
-            Token::OpMinus => SExpr::OpMinus,
-            Token::NewLine => SExpr::NewLine,
-            Token::RuleDefinitionOpen => SExpr::RuleDefinitionOpen,
-            Token::RuleDefinitionClose => SExpr::RuleDefinitionClose,
-            Token::BlockStart => SExpr::BlockStart,
-            Token::BlockEnd => SExpr::BlockEnd,
-            Token::LParen => SExpr::LParen,
-            Token::RParen => SExpr::RParen,
-            Token::OpCompare => SExpr::OpCompare,
-            Token::OpRange => SExpr::OpRange,
-            Token::KwIf => SExpr::If,
-            Token::DoNotCareOptim => SExpr::DoNotCareOptim,
-            Token::KwLog => SExpr::Log,
-        };
+        // let atom = select! {
+        //     Token::FloatingNumber(x) => SExpr::Float(x),
+        //     Token::IntegerNumber(x) => SExpr::Integer(x),
+        //     Token::IntegerNumberMillimeter(x) => SExpr::IntegerMillimeter(x),
+        //     Token::IntegerNumberMillisecond(x) => SExpr::IntegerMilliseconds(x),
+        //     Token::FloatingNumberMillimeter(x) => SExpr::FloatMillimeter(x),
+        //     Token::FloatingNumberMillisecond(x) => SExpr::FloatMilliseconds(x),
+        //     Token::Variable(x) => SExpr::Variable(x),
+        //     Token::PredefVariable(x) => SExpr::PredefVariable(x),
+        //     Token::OpAssignToLeft => SExpr::AssignLeft,
+        //     Token::OpAssignToRight => SExpr::AssignRight,
+        //     Token::FnPlayFrames=> SExpr::FnPlayFrames,
+        //     Token::True => SExpr::True,
+        //     Token::False => SExpr::False,
+        //     Token::CommentLineStart=> SExpr::CommentLineStart,
+        //     Token::OpPlus => SExpr::OpPlus,
+        //     Token::OpMinus => SExpr::OpMinus,
+        //     Token::OpMinus => SExpr::OpMinus,
+        //     Token::NewLine => SExpr::NewLine,
+        //     Token::RuleDefinitionOpen => SExpr::RuleDefinitionOpen,
+        //     Token::RuleDefinitionClose => SExpr::RuleDefinitionClose,
+        //     Token::BlockStart => SExpr::BlockStart,
+        //     Token::BlockEnd => SExpr::BlockEnd,
+        //     Token::LParen => SExpr::LParen,
+        //     Token::RParen => SExpr::RParen,
+        //     Token::OpCompare => SExpr::OpCompare,
+        //     Token::OpRange => SExpr::OpRange,
+        //     Token::KwIf => SExpr::If,
+        //     Token::DoNotCareOptim => SExpr::DoNotCareOptim,
+        //     Token::KwLog => SExpr::Log,
+        // };
 
-        atom
+        // parse a single “term” – either a Variable or the LOG keyword.
+        let term = select! {
+        Token::Variable(v) => Expr::Var(v),
+        Token::KwLog => Expr::Log,
+        }
+        .labelled("term");
+        // parse a comma-separated list of terms (the left-hand side).
+        let comma = just(Token::Comma);
+        let lhs = term.clone().separated_by(comma).collect().labelled("lhs");
+
+        // parse one of the three operators.
+        let op = select! {
+            Token::OpAssignToRight => Operator::Right,
+            Token::OpAssignToLeft => Operator::Left,
+            Token::OpCompare => Operator::Compare,
+        }
+        .labelled("operator");
+
+        // a statement is: lhs, then an operator, then a single term (the right-hand side).
+        let statement = lhs
+            .then(op)
+            .then(term)
+            .map(|((lhs, op), rhs)| Statement::Assign { lhs, op, rhs })
+            .labelled("statement");
+
+        // a rule header is a Variable enclosed in [ and ]
+        let rule_header = just(Token::RuleDefinitionOpen)
+            .ignore_then(select! { Token::Variable(v) => v }.labelled("rule name"))
+            .then_ignore(just(Token::RuleDefinitionClose))
+            .labelled("rule header");
+
+        // a complete rule: a header, then optionally some newlines, then the statement.
+        let rule = rule_header
+            .then_ignore(just(Token::NewLine).repeated())
+            .then(statement)
+            .then_ignore(just(Token::NewLine).repeated())
+            .map(|(variable, stmt)| Rule { variable, stmt })
+            .labelled("rule");
+
+        // the full SExpr contains one or more rules; make sure we consume all tokens.
+        rule.repeated()
+            .collect()
+            .then_ignore(end())
+            .map(|rules| RuleSexpr { rules })
     })
 }
 
-impl<'a> SExpr<'a> {
-    // Recursively evaluate an s-expression
-    fn eval(&self) -> Result<f64, &'static str> {
-        match self {
-            Self::Float(x) => Ok(*x),
-            Self::OpPlus => Err("Cannot evaluate operator '+'"),
-            Self::OpMinus => Err("Cannot evaluate operator '-'"),
-            _ => Ok(1.0), // Self::Mul => Err("Cannot evaluate operator '*'"),
-                          // Self::Div => Err("Cannot evaluate operator '/'"),
-                          // Self::List(list) => match &list[..] {
-                          //     [Self::Add, tail @ ..] => tail.iter().map(SExpr::eval).sum(),
-                          //     [Self::Mul, tail @ ..] => tail.iter().map(SExpr::eval).product(),
-                          //     [Self::Sub, init, tail @ ..] => {
-                          //         Ok(init.eval()? - tail.iter().map(SExpr::eval).sum::<Result<f64, _>>()?)
-                          //     }
-                          //     [Self::Div, init, tail @ ..] => {
-                          //         Ok(init.eval()? / tail.iter().map(SExpr::eval).product::<Result<f64, _>>()?)
-                          //     }
-                          //     _ => Err("Cannot evaluate list"),
-                          // },
-        }
+impl<'a> RuleSexpr<'a> {
+    fn eval(&self) -> Result<Rules, &'static str> {
+        // TODO convert the rules AST to the rules struct
+        todo!()
     }
 }
 
@@ -430,7 +466,7 @@ pub fn evaluate_rules(source_code_raw: &str) -> anyhow::Result<Rules> {
     match parser().parse(token_stream).into_result() {
         // If parsing was successful, attempt to evaluate the s-expression
         Ok(sexpr) => match sexpr.eval() {
-            Ok(out) => println!("Result = {}", out), // TODO evaluate to rules, instead. do not print, just return
+            Ok(out) => return Ok(out),
             Err(err) => println!("Runtime error: {}", err),
         },
         // If parsing was unsuccessful, generate a nice user-friendly diagnostic with ariadne. You could also use
@@ -453,8 +489,7 @@ pub fn evaluate_rules(source_code_raw: &str) -> anyhow::Result<Rules> {
         }
     }
 
-    todo!()
-    // Ok(())
+    Err(anyhow!("Could not parse"))
 }
 
 #[cfg(test)]
