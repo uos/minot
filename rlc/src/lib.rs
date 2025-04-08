@@ -12,29 +12,38 @@ use chumsky::{
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rules(std::collections::HashMap<String, Vec<VariableHuman>>);
 
+const COMPARE_NODE_NAME: &'static str = "#compare";
+
 impl Rules {
     pub fn new() -> Self {
         Self(std::collections::HashMap::new())
     }
 
     pub fn insert(&mut self, variable: String, strategies: Vec<VariableHuman>) {
-        self.0.insert(variable, strategies).unwrap();
+        match self.0.get_mut(&variable) {
+            Some(el) => {
+                el.extend(strategies);
+            }
+            None => {
+                self.0.insert(variable, strategies);
+            }
+        }
     }
 
     pub fn clear(&mut self) {
         self.0.clear();
     }
 
-    pub fn insert_strategie(&mut self, variable: String, strategie: VariableHuman) {
-        match self.0.get_mut(&variable) {
-            Some(el) => {
-                el.push(strategie);
-            }
-            None => {
-                self.0.insert(variable, vec![strategie]);
-            }
-        }
-    }
+    // pub fn insert_strategie(&mut self, variable: String, strategie: VariableHuman) {
+    //     match self.0.get_mut(&variable) {
+    //         Some(el) => {
+    //             el.push(strategie);
+    //         }
+    //         None => {
+    //             self.0.insert(variable, vec![strategie]);
+    //         }
+    //     }
+    // }
 
     pub fn raw(&self) -> &std::collections::HashMap<String, Vec<VariableHuman>> {
         &self.0
@@ -321,7 +330,7 @@ pub enum Statement<'a> {
     Assign {
         lhs: Vec<Expr<'a>>,
         op: Operator,
-        rhs: Expr<'a>,
+        rhs: Vec<Expr<'a>>,
     },
 }
 
@@ -332,7 +341,7 @@ pub enum Operator {
     Compare, // corresponds to "=="
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Expr<'a> {
     Var(&'a str),
     Log, // represents the LOG keyword.
@@ -353,38 +362,6 @@ where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
     recursive(|sexpr| {
-        // let atom = select! {
-        //     Token::FloatingNumber(x) => SExpr::Float(x),
-        //     Token::IntegerNumber(x) => SExpr::Integer(x),
-        //     Token::IntegerNumberMillimeter(x) => SExpr::IntegerMillimeter(x),
-        //     Token::IntegerNumberMillisecond(x) => SExpr::IntegerMilliseconds(x),
-        //     Token::FloatingNumberMillimeter(x) => SExpr::FloatMillimeter(x),
-        //     Token::FloatingNumberMillisecond(x) => SExpr::FloatMilliseconds(x),
-        //     Token::Variable(x) => SExpr::Variable(x),
-        //     Token::PredefVariable(x) => SExpr::PredefVariable(x),
-        //     Token::OpAssignToLeft => SExpr::AssignLeft,
-        //     Token::OpAssignToRight => SExpr::AssignRight,
-        //     Token::FnPlayFrames=> SExpr::FnPlayFrames,
-        //     Token::True => SExpr::True,
-        //     Token::False => SExpr::False,
-        //     Token::CommentLineStart=> SExpr::CommentLineStart,
-        //     Token::OpPlus => SExpr::OpPlus,
-        //     Token::OpMinus => SExpr::OpMinus,
-        //     Token::OpMinus => SExpr::OpMinus,
-        //     Token::NewLine => SExpr::NewLine,
-        //     Token::RuleDefinitionOpen => SExpr::RuleDefinitionOpen,
-        //     Token::RuleDefinitionClose => SExpr::RuleDefinitionClose,
-        //     Token::BlockStart => SExpr::BlockStart,
-        //     Token::BlockEnd => SExpr::BlockEnd,
-        //     Token::LParen => SExpr::LParen,
-        //     Token::RParen => SExpr::RParen,
-        //     Token::OpCompare => SExpr::OpCompare,
-        //     Token::OpRange => SExpr::OpRange,
-        //     Token::KwIf => SExpr::If,
-        //     Token::DoNotCareOptim => SExpr::DoNotCareOptim,
-        //     Token::KwLog => SExpr::Log,
-        // };
-
         // parse a single “term” – either a Variable or the LOG keyword.
         let term = select! {
         Token::Variable(v) => Expr::Var(v),
@@ -393,7 +370,7 @@ where
         .labelled("term");
         // parse a comma-separated list of terms (the left-hand side).
         let comma = just(Token::Comma);
-        let lhs = term.clone().separated_by(comma).collect().labelled("lhs");
+        let term = term.clone().separated_by(comma).collect().labelled("term");
 
         // parse one of the three operators.
         let op = select! {
@@ -404,7 +381,8 @@ where
         .labelled("operator");
 
         // a statement is: lhs, then an operator, then a single term (the right-hand side).
-        let statement = lhs
+        let statement = term
+            .clone()
             .then(op)
             .then(term)
             .map(|((lhs, op), rhs)| Statement::Assign { lhs, op, rhs })
@@ -425,17 +403,76 @@ where
             .labelled("rule");
 
         // the full SExpr contains one or more rules; make sure we consume all tokens.
-        rule.repeated()
+        just(Token::NewLine)
+            .repeated()
+            .ignore_then(rule)
+            .repeated()
             .collect()
             .then_ignore(end())
             .map(|rules| RuleSexpr { rules })
     })
 }
 
+impl<'a> Expr<'a> {
+    pub fn var_name(&self) -> Option<String> {
+        match self {
+            Expr::Var(variable) => Some((*variable).to_owned()),
+            Expr::Log => Some(COMPARE_NODE_NAME.to_owned()),
+            // _ => None,
+        }
+    }
+}
+
 impl<'a> RuleSexpr<'a> {
     fn eval(&self) -> Result<Rules, &'static str> {
-        // TODO convert the rules AST to the rules struct
-        todo!()
+        let mut rules = Rules::new();
+        for rule in self.rules.iter() {
+            match &rule.stmt {
+                Statement::Assign { lhs, op, rhs } => match op {
+                    Operator::Right => {
+                        let plan = ActionPlan::Shoot {
+                            target: rhs.iter().flat_map(|part| part.var_name()).collect(),
+                        };
+                        lhs.iter().flat_map(|lh| lh.var_name()).for_each(|lh| {
+                            let varh = VariableHuman {
+                                ship: lh,
+                                strategy: Some(plan.clone()),
+                            };
+                            rules.insert(rule.variable.to_owned(), vec![varh]);
+                        });
+                    }
+                    Operator::Left => {
+                        let plan = ActionPlan::Shoot {
+                            target: lhs.iter().flat_map(|part| part.var_name()).collect(),
+                        };
+                        rhs.iter().flat_map(|rh| rh.var_name()).for_each(|rh| {
+                            let varh = VariableHuman {
+                                ship: rh,
+                                strategy: Some(plan.clone()),
+                            };
+                            rules.insert(rule.variable.to_owned(), vec![varh]);
+                        });
+                    }
+                    Operator::Compare => {
+                        let plan = ActionPlan::Shoot {
+                            target: vec![COMPARE_NODE_NAME.to_owned()],
+                        };
+
+                        let mut merged: Vec<Expr<'_>> = rhs.iter().cloned().collect();
+                        merged.extend(lhs);
+
+                        merged.iter().flat_map(|ex| ex.var_name()).for_each(|ex| {
+                            let varh = VariableHuman {
+                                ship: ex,
+                                strategy: Some(plan.clone()),
+                            };
+                            rules.insert(rule.variable.to_owned(), vec![varh]);
+                        });
+                    }
+                },
+            };
+        }
+        Ok(rules)
     }
 }
 
@@ -465,10 +502,13 @@ pub fn evaluate_rules(source_code_raw: &str) -> anyhow::Result<Rules> {
     // Parse the token stream with our chumsky parser
     match parser().parse(token_stream).into_result() {
         // If parsing was successful, attempt to evaluate the s-expression
-        Ok(sexpr) => match sexpr.eval() {
-            Ok(out) => return Ok(out),
-            Err(err) => println!("Runtime error: {}", err),
-        },
+        Ok(sexpr) => {
+            let evaled = sexpr.eval();
+            match evaled {
+                Ok(out) => return Ok(out),
+                Err(err) => println!("Runtime error: {}", err),
+            }
+        }
         // If parsing was unsuccessful, generate a nice user-friendly diagnostic with ariadne. You could also use
         // codespan, or whatever other diagnostic library you care about. You could even just display-print the errors
         // with Rust's built-in `Display` trait, but it's a little crude
@@ -507,9 +547,7 @@ mod tests {
 
         [var4]
         testRat1 == testRat2
-";
-
-        const COMPARE_NODE_NAME: &'static str = "#compare";
+        ";
 
         let mut rules = Rules::new();
         rules.insert(
@@ -555,7 +593,4 @@ mod tests {
         let eval = eval.unwrap();
         assert_eq!(eval, rules);
     }
-
-    // #[test]
-    // fn test_hello_world() {}
 }

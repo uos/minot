@@ -5,8 +5,6 @@ pub mod coordinator;
 pub mod net;
 pub mod ship;
 
-use std::collections::HashMap;
-
 use nalgebra::{UnitQuaternion, Vector3};
 use net::SeaSendableBuffer;
 use rlc::{ActionPlan, VariableHuman};
