@@ -1,5 +1,6 @@
 use log::error;
-use sea::{coordinator::COMPARE_NODE_NAME, net::Packet, Action, Cannon, Ship, ShipKind};
+use rlc::COMPARE_NODE_NAME;
+use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 
 use anyhow::anyhow;
 use std::io;
@@ -11,7 +12,7 @@ pub mod handler;
 pub mod tui;
 pub mod ui;
 
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::{
     app::App,

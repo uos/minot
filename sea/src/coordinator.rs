@@ -21,8 +21,6 @@ pub struct CoordinatorImpl {
     pub rat_qs: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
 }
 
-pub const COMPARE_NODE_NAME: &'static str = "#compare";
-
 #[async_trait::async_trait]
 impl crate::Coordinator for CoordinatorImpl {
     /// Get a channel that only returns the variable from this rat
@@ -112,7 +110,7 @@ impl CoordinatorImpl {
             let rat = rats.read().await;
             for client in clients.iter() {
                 // ignore compare node for needed clients
-                if client != COMPARE_NODE_NAME && rat.get(client).is_none() {
+                if client != rlc::COMPARE_NODE_NAME && rat.get(client).is_none() {
                     all_there = false;
                     break;
                 }

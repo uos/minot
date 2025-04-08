@@ -12,7 +12,7 @@ use chumsky::{
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rules(std::collections::HashMap<String, Vec<VariableHuman>>);
 
-const COMPARE_NODE_NAME: &'static str = "#compare";
+pub const COMPARE_NODE_NAME: &'static str = "#compare";
 
 impl Rules {
     pub fn new() -> Self {
@@ -163,6 +163,63 @@ fn rm_first<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
     &slice[1..slice.len()]
 }
 
+fn parse_sensor_type(c: char) -> Option<SensorType> {
+    match c {
+        'm' | 'M' => Some(SensorType::Mixed),
+        'l' | 'L' => Some(SensorType::Lidar),
+        'i' | 'I' => Some(SensorType::Imu),
+        _ => None,
+    }
+}
+
+// TODO use Result in this callback for feedback
+fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
+    let chars = lex.slice()["play_frames ".len()..]
+        .chars()
+        .collect::<Vec<_>>();
+
+    match chars.len() {
+        1 => {
+            let sensor = parse_sensor_type(chars[0])
+                .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[0]))
+                .ok()?;
+            Some(PlayType::SensorCount { sensor })
+        }
+        2 => {
+            let sending = parse_sensor_type(chars[0])
+                .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[0]))
+                .ok()?;
+            let until_sensor = parse_sensor_type(chars[1])
+                .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[1]))
+                .ok()?;
+            Some(PlayType::UntilSensorCount {
+                sending,
+                until_sensor,
+            })
+        }
+        _ => Err("Input must be one or two characters long".to_string()).ok()?,
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
+enum SensorType {
+    Lidar,
+    Imu,
+    #[default]
+    Mixed,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum PlayType {
+    SensorCount {
+        sensor: SensorType,
+    },
+    UntilSensorCount {
+        sending: SensorType,
+        until_sensor: SensorType,
+    },
+}
+
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\f]+")]
 enum Token<'a> {
@@ -229,8 +286,11 @@ enum Token<'a> {
     DoNotCareOptim,
 
     // -- Embedded functions (Wind) --
-    #[token("play_frames")]
-    FnPlayFrames,
+    #[regex(r"play_frames [m|l|i][l|i]", play_frames_args)]
+    FnPlayFrames(PlayType),
+
+    #[token("reset")]
+    FnReset,
 
     // -- Expressions --
     #[token("true")]
@@ -277,6 +337,7 @@ enum Token<'a> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::FnReset => write!(f, "reset()"),
             Self::Comma => write!(f, ","),
             Self::KwLog => write!(f, "LOG"),
             Self::OpPlus => write!(f, "+"),
@@ -297,7 +358,7 @@ impl fmt::Display for Token<'_> {
             Self::OpRange => write!(f, ".."),
             Self::KwIf => write!(f, "if"),
             Self::DoNotCareOptim => write!(f, "~"),
-            Self::FnPlayFrames => write!(f, "play_frames"),
+            Self::FnPlayFrames(pt) => write!(f, "play_frames({:?})", pt),
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
             Self::IntegerNumber(s) => write!(f, "{}", s),
@@ -313,17 +374,64 @@ impl fmt::Display for Token<'_> {
 }
 
 #[derive(Debug)]
+pub struct Evaluated {
+    pub rules: Option<Rules>,
+    pub wind: Vec<WindSexpr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Root<'a> {
+    pub rules: Option<RuleSexpr<'a>>,
+    pub wind: Vec<WindSexpr>,
+}
+
+// --- Wind commands ---
+#[derive(Debug, Clone)]
+pub struct WindSexpr {
+    pub commands: Vec<WindCommand>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WindCommand {
+    pub stmts: Vec<WindFn>,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PlayKindUnited {
+    SensorCount {
+        sensor: SensorType,
+        count: usize,
+    },
+    UntilSensorCount {
+        sending: SensorType,
+        until_sensor: SensorType,
+        until_count: usize,
+    },
+    UntilTime {
+        sending: SensorType,
+        duration: std::time::Duration,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum WindFn {
+    Reset,
+    SendFrames(PlayKindUnited),
+}
+
+// --- Coordinator Rules ---
+#[derive(Debug, Clone)]
 pub struct RuleSexpr<'a> {
     pub rules: Vec<Rule<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Rule<'a> {
     pub variable: &'a str,
-    pub stmt: Statement<'a>,
+    pub stmts: Vec<Statement<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement<'a> {
     // A statement is a left-hand side (one or more terms)
     // an operator ("->", "<-" or "==") and a right-hand side term.
@@ -334,7 +442,7 @@ pub enum Statement<'a> {
     },
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Operator {
     Right,   // corresponds to "->"
     Left,    // corresponds to "<-"
@@ -357,11 +465,11 @@ pub enum Expr<'a> {
 //     - Has an input type of type `I`, the one we declared as a type parameter
 //     - Produces an `SExpr` as its output
 //     - Uses `Rich`, a built-in error type provided by chumsky, for error generation
-fn parser<'a, I>() -> impl Parser<'a, I, RuleSexpr<'a>, extra::Err<Rich<'a, Token<'a>>>>
+fn parser<'a, I>() -> impl Parser<'a, I, Root<'a>, extra::Err<Rich<'a, Token<'a>>>>
 where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
-    recursive(|sexpr| {
+    recursive(|_sexpr| {
         // parse a single “term” – either a Variable or the LOG keyword.
         let term = select! {
         Token::Variable(v) => Expr::Var(v),
@@ -385,8 +493,15 @@ where
             .clone()
             .then(op)
             .then(term)
+            .then_ignore(just(Token::NewLine))
             .map(|((lhs, op), rhs)| Statement::Assign { lhs, op, rhs })
             .labelled("statement");
+
+        let rule_ending = just(Token::NewLine)
+            .repeated()
+            .ignore_then(just(Token::RuleDefinitionClose))
+            .then_ignore(just(Token::RuleDefinitionOpen))
+            .labelled("explicit rule end");
 
         // a rule header is a Variable enclosed in [ and ]
         let rule_header = just(Token::RuleDefinitionOpen)
@@ -397,19 +512,30 @@ where
         // a complete rule: a header, then optionally some newlines, then the statement.
         let rule = rule_header
             .then_ignore(just(Token::NewLine).repeated())
-            .then(statement)
+            .then(statement.repeated().collect())
             .then_ignore(just(Token::NewLine).repeated())
-            .map(|(variable, stmt)| Rule { variable, stmt })
+            .then_ignore(rule_ending.or_not())
+            .map(|(variable, stmts)| Rule { variable, stmts })
             .labelled("rule");
 
         // the full SExpr contains one or more rules; make sure we consume all tokens.
-        just(Token::NewLine)
+        let rule_block = just(Token::NewLine)
             .repeated()
             .ignore_then(rule)
             .repeated()
             .collect()
             .then_ignore(end())
-            .map(|rules| RuleSexpr { rules })
+            .map(|rules| RuleSexpr { rules });
+
+        let wind_block = just(Token::NewLine)
+            .repeated()
+            .ignore_then(just(Token::FnReset))
+            .then_ignore(just(Token::NewLine).repeated())
+            .map(|wind| WindSexpr { commands: vec![] });
+
+        let one_block = rule_block.or_not().then(wind_block.repeated().collect());
+
+        one_block.map(|(rule, wind)| Root { rules: rule, wind })
     })
 }
 
@@ -424,63 +550,91 @@ impl<'a> Expr<'a> {
 }
 
 impl<'a> RuleSexpr<'a> {
-    fn eval(&self) -> Result<Rules, &'static str> {
+    fn eval(&self) -> anyhow::Result<Rules> {
         let mut rules = Rules::new();
         for rule in self.rules.iter() {
-            match &rule.stmt {
-                Statement::Assign { lhs, op, rhs } => match op {
-                    Operator::Right => {
-                        let plan = ActionPlan::Shoot {
-                            target: rhs.iter().flat_map(|part| part.var_name()).collect(),
-                        };
-                        lhs.iter().flat_map(|lh| lh.var_name()).for_each(|lh| {
-                            let varh = VariableHuman {
-                                ship: lh,
-                                strategy: Some(plan.clone()),
+            for stmt in rule.stmts.iter() {
+                match &stmt {
+                    Statement::Assign { lhs, op, rhs } => match op {
+                        Operator::Right => {
+                            let plan = ActionPlan::Shoot {
+                                target: rhs.iter().flat_map(|part| part.var_name()).collect(),
                             };
-                            rules.insert(rule.variable.to_owned(), vec![varh]);
-                        });
-                    }
-                    Operator::Left => {
-                        let plan = ActionPlan::Shoot {
-                            target: lhs.iter().flat_map(|part| part.var_name()).collect(),
-                        };
-                        rhs.iter().flat_map(|rh| rh.var_name()).for_each(|rh| {
-                            let varh = VariableHuman {
-                                ship: rh,
-                                strategy: Some(plan.clone()),
+                            lhs.iter().flat_map(|lh| lh.var_name()).for_each(|lh| {
+                                let varh = VariableHuman {
+                                    ship: lh,
+                                    strategy: Some(plan.clone()),
+                                };
+                                rules.insert(rule.variable.to_owned(), vec![varh]);
+                            });
+                        }
+                        Operator::Left => {
+                            let plan = ActionPlan::Shoot {
+                                target: lhs.iter().flat_map(|part| part.var_name()).collect(),
                             };
-                            rules.insert(rule.variable.to_owned(), vec![varh]);
-                        });
-                    }
-                    Operator::Compare => {
-                        let plan = ActionPlan::Shoot {
-                            target: vec![COMPARE_NODE_NAME.to_owned()],
-                        };
+                            rhs.iter().flat_map(|rh| rh.var_name()).for_each(|rh| {
+                                let varh = VariableHuman {
+                                    ship: rh,
+                                    strategy: Some(plan.clone()),
+                                };
+                                rules.insert(rule.variable.to_owned(), vec![varh]);
+                            });
+                        }
+                        Operator::Compare => {
+                            let plan = ActionPlan::Shoot {
+                                target: vec![COMPARE_NODE_NAME.to_owned()],
+                            };
 
-                        let mut merged: Vec<Expr<'_>> = rhs.iter().cloned().collect();
-                        merged.extend(lhs);
+                            let mut merged: Vec<Expr<'_>> = rhs.iter().cloned().collect();
+                            merged.extend(lhs);
 
-                        merged.iter().flat_map(|ex| ex.var_name()).for_each(|ex| {
-                            let varh = VariableHuman {
-                                ship: ex,
-                                strategy: Some(plan.clone()),
-                            };
-                            rules.insert(rule.variable.to_owned(), vec![varh]);
-                        });
-                    }
-                },
-            };
+                            merged.iter().flat_map(|ex| ex.var_name()).for_each(|ex| {
+                                let varh = VariableHuman {
+                                    ship: ex,
+                                    strategy: Some(plan.clone()),
+                                };
+                                rules.insert(rule.variable.to_owned(), vec![varh]);
+                            });
+                        }
+                    },
+                };
+            }
         }
         Ok(rules)
     }
 }
 
-pub fn evaluate_rules_file(path: &std::path::PathBuf) -> anyhow::Result<Rules> {
-    evaluate_rules(&std::fs::read_to_string(path)?)
+pub fn evaluate_file(
+    path: &std::path::PathBuf,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> anyhow::Result<Evaluated> {
+    let file = std::fs::read_to_string(path);
+    let file = match file {
+        Ok(file) => Ok(file),
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => Err(anyhow!("Could not find file: {}", path.display())),
+            std::io::ErrorKind::PermissionDenied => {
+                Err(anyhow!("No permission to read file: {}", path.display()))
+            }
+            std::io::ErrorKind::IsADirectory => {
+                Err(anyhow!("File is a directory: {}", path.display()))
+            }
+            _ => Err(anyhow!("Unexpected error for file: {}", path.display())),
+        },
+    }?;
+    let start_line = start_line.unwrap_or_default();
+    let lines = file.lines();
+    let end_line = end_line.unwrap_or(lines.clone().count());
+    lines
+        .skip(start_line)
+        .take(end_line - start_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    evaluate_code(&file)
 }
 
-pub fn evaluate_rules(source_code_raw: &str) -> anyhow::Result<Rules> {
+pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     // Create a logos lexer over the source code
     let token_iter = Token::lexer(source_code_raw)
         .spanned()
@@ -501,13 +655,18 @@ pub fn evaluate_rules(source_code_raw: &str) -> anyhow::Result<Rules> {
 
     // Parse the token stream with our chumsky parser
     match parser().parse(token_stream).into_result() {
-        // If parsing was successful, attempt to evaluate the s-expression
         Ok(sexpr) => {
-            let evaled = sexpr.eval();
-            match evaled {
-                Ok(out) => return Ok(out),
-                Err(err) => println!("Runtime error: {}", err),
-            }
+            let evaled = match sexpr.rules {
+                Some(rules) => Some(rules.eval()?),
+                None => None,
+            };
+
+            // TODO evaluate or directly send wind
+
+            return Ok(Evaluated {
+                rules: evaled,
+                wind: vec![],
+            });
         }
         // If parsing was unsuccessful, generate a nice user-friendly diagnostic with ariadne. You could also use
         // codespan, or whatever other diagnostic library you care about. You could even just display-print the errors
@@ -588,9 +747,11 @@ mod tests {
             ],
         );
 
-        let eval = evaluate_rules(SRC);
+        let eval = evaluate_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
+        assert!(eval.rules.is_some());
+        let eval = eval.rules.unwrap();
         assert_eq!(eval, rules);
     }
 }

@@ -13,7 +13,6 @@ use tokio::{
 
 use crate::{
     ShipKind, ShipName, VariableType,
-    coordinator::COMPARE_NODE_NAME,
     net::{
         CLIENT_HEARTBEAT_TCP_INTERVAL, CLIENT_HEARTBEAT_TCP_TIMEOUT, CLIENT_LISTEN_PORT,
         CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL, CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT,
@@ -50,9 +49,10 @@ impl Client {
             ip[3],
             port.unwrap_or(0)
         );
-        let socket = std::net::UdpSocket::bind(&bind_address).unwrap();
-        socket.set_broadcast(true).expect("could not set broadcast");
-        let udp_socket = UdpSocket::from_std(socket).expect("could not promote to tokio socket");
+        let udp_socket = UdpSocket::bind(&bind_address).await.unwrap();
+        udp_socket
+            .set_broadcast(true)
+            .expect("could not set broadcast");
         udp_socket
             .writable()
             .await
@@ -64,14 +64,14 @@ impl Client {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
         let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0);
         // TCP socket for Coordinator communication
-        let socket = std::net::TcpListener::bind(&bind_address).expect("could not bind tcp socket");
+        let tcp_listener = tokio::net::TcpListener::bind(&bind_address)
+            .await
+            .expect("could not bind tcp socket");
 
-        let tcp_port = socket
+        let tcp_port = tcp_listener
             .local_addr()
             .expect("could not get tcp listener adress")
             .port();
-        let tcp_listener =
-            TcpListener::from_std(socket).expect("could not create tokio tcp listener");
 
         let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0); // always find this dynamically
         let client_listener = tokio::net::TcpListener::bind(&bind_address)
@@ -407,7 +407,7 @@ impl Client {
 
         // only make non lh nodes wait for the coordinate since they ask for variables
         if match &self.kind {
-            ShipKind::Rat(name) => name != COMPARE_NODE_NAME,
+            ShipKind::Rat(name) => name != rlc::COMPARE_NODE_NAME,
             _ => true,
         } {
             // TODO disconnect not implemented yet, must send to disconnect_tx

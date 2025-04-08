@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use log::{debug, error, info, warn};
-use sea::coordinator::COMPARE_NODE_NAME;
 // use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
 use sea::{
     coordinator::CoordinatorImpl,
@@ -39,7 +38,7 @@ impl Network {
 // hashmap[string] => ID
 // ID => VariableRule
 
-use rlc::ActionPlan;
+use rlc::{ActionPlan, COMPARE_NODE_NAME};
 use sea::Coordinator;
 
 #[derive(Debug)]
@@ -70,8 +69,10 @@ enum LighthouseTask {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let rules_file = PathBuf::from_str("./rules.rats")?;
-    let rules = rlc::evaluate_rules_file(&rules_file)?;
+    let file = std::env::args().nth(1).unwrap_or("./rules.rat".to_owned());
+    let rules_file = PathBuf::from_str(&file)?;
+    let rats = rlc::evaluate_file(&rules_file, None, None)?; // evaluate entire file at first
+    let rules = rats.rules.unwrap(); // TODO shout at user that coord needs rules
 
     let mut clients = HashSet::new();
     for (_, inner_clients) in rules.raw().iter() {

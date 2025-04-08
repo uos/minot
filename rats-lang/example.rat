@@ -1,5 +1,4 @@
 // Example of rats (.rat -- Rats Language)
-#rats <- flio, mlio
 
 ==._print <- false
 ==._verbose <- true
@@ -17,35 +16,13 @@ if C > 10 {
 ==._print <- true
 ==._verbose <- true
 
-==
+][ # divider closing a rule explicitely to make room for other things like wind
 
-// Lexer
-[
-  bacon2
-  ->
-  $flio
-  $mlio
-]
-
-[
-  bacon1
-  <-
-  C
-  ._num_call
-  if
-  C > 10
-  {
-    $flio <- $mlio
-  }
-]
-
-
-// runs network here
-
-#dbg
-play_frames l 10
-play_frames m 10 l
-play_frames o 100
+play_frames l 10 # send 10 next lidar frames
+play_frames ml 10 # send imu+lidar frames until 10 lidar frames are sent
+play_frames i 100 # send next 100 imu frames
+play_frames i 100s # send next 100 seconds of imu frames
+play_frames il 100s # send next imu frames that come within the next 100 seconds
 
 reset
 
