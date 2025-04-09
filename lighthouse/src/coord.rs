@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = std::env::args().nth(1).unwrap_or("./rules.rat".to_owned());
     let rules_file = PathBuf::from_str(&file)?;
     let rats = rlc::evaluate_file(&rules_file, None, None)?; // evaluate entire file at first
-    let rules = rats.rules.unwrap(); // TODO shout at user that coord needs rules
+    let rules = rats.rules; // TODO shout at user that coord needs rules if empty
 
     let mut clients = HashSet::new();
     for (_, inner_clients) in rules.raw().iter() {

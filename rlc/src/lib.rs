@@ -1,6 +1,7 @@
+use core::fmt;
+
 use anyhow::anyhow;
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use core::fmt;
 use logos::{Lexer, Logos};
 use serde::{Deserialize, Serialize};
 
@@ -106,8 +107,7 @@ fn integer_meter<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<i64> {
 
 fn integer_second<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<i64> {
     let slice = lex.slice();
-    let len = if slice.ends_with('s') { 4 } else { 3 };
-    let f: i64 = slice[..slice.len() - len].parse().ok()?;
+    let f: i64 = slice[..slice.len() - 1].parse().ok()?;
     Some(f * 1000)
 }
 
@@ -133,8 +133,7 @@ fn integer_hour<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<i64> {
 
 fn floating_second<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<f64> {
     let slice = lex.slice();
-    let len = if slice.ends_with('s') { 4 } else { 3 };
-    let f: f64 = slice[..slice.len() - len].parse().ok()?;
+    let f: f64 = slice[..slice.len() - 1].parse().ok()?;
     Some(f * 1000.0)
 }
 
@@ -163,15 +162,6 @@ fn rm_first<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
     &slice[1..slice.len()]
 }
 
-fn parse_sensor_type(c: char) -> Option<SensorType> {
-    match c {
-        'm' | 'M' => Some(SensorType::Mixed),
-        'l' | 'L' => Some(SensorType::Lidar),
-        'i' | 'I' => Some(SensorType::Imu),
-        _ => None,
-    }
-}
-
 // TODO use Result in this callback for feedback
 fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
     let chars = lex.slice()["play_frames ".len()..]
@@ -180,18 +170,32 @@ fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
 
     match chars.len() {
         1 => {
-            let sensor = parse_sensor_type(chars[0])
-                .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[0]))
-                .ok()?;
+            let sensor = match chars[0] {
+                'm' | 'M' => Some(SensorType::Mixed),
+                'l' | 'L' => Some(SensorType::Lidar),
+                'i' | 'I' => Some(SensorType::Imu),
+                _ => None,
+            }
+            .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[0]))
+            .ok()?;
             Some(PlayType::SensorCount { sensor })
         }
         2 => {
-            let sending = parse_sensor_type(chars[0])
-                .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[0]))
-                .ok()?;
-            let until_sensor = parse_sensor_type(chars[1])
-                .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[1]))
-                .ok()?;
+            let sending = match chars[0] {
+                'm' | 'M' => Some(SensorType::Mixed),
+                'l' | 'L' => Some(SensorType::Lidar),
+                'i' | 'I' => Some(SensorType::Imu),
+                _ => None,
+            }
+            .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[0]))
+            .ok()?;
+            let until_sensor = match chars[1] {
+                'l' | 'L' => Some(SensorType::Lidar),
+                'i' | 'I' => Some(SensorType::Imu),
+                _ => None,
+            }
+            .ok_or_else(|| format!("Invalid sensor character: '{}'", chars[1]))
+            .ok()?;
             Some(PlayType::UntilSensorCount {
                 sending,
                 until_sensor,
@@ -202,7 +206,7 @@ fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
-enum SensorType {
+pub enum SensorType {
     Lidar,
     Imu,
     #[default]
@@ -286,7 +290,7 @@ enum Token<'a> {
     DoNotCareOptim,
 
     // -- Embedded functions (Wind) --
-    #[regex(r"play_frames [m|l|i][l|i]", play_frames_args)]
+    #[regex(r"play_frames [m|l|i][l|i]?", play_frames_args)]
     FnPlayFrames(PlayType),
 
     #[token("reset")]
@@ -375,25 +379,26 @@ impl fmt::Display for Token<'_> {
 
 #[derive(Debug)]
 pub struct Evaluated {
-    pub rules: Option<Rules>,
-    pub wind: Vec<WindSexpr>,
+    pub rules: Rules,
+    pub wind: Vec<WindFunctions>,
+}
+
+#[derive(Debug)]
+pub enum WindFunctions {
+    Reset(String),
+    SendFrames { kind: PlayKindUnited, at: String },
 }
 
 #[derive(Debug, Clone)]
 pub struct Root<'a> {
-    pub rules: Option<RuleSexpr<'a>>,
-    pub wind: Vec<WindSexpr>,
+    pub rules: RuleSexpr<'a>,
+    pub wind: Vec<StatementKind<'a>>,
 }
 
-// --- Wind commands ---
-#[derive(Debug, Clone)]
-pub struct WindSexpr {
-    pub commands: Vec<WindCommand>,
-}
-
-#[derive(Debug, Clone)]
-pub struct WindCommand {
-    pub stmts: Vec<WindFn>,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PlayKindUnit {
+    TimeMs(u64),
+    Count(u64),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -413,10 +418,11 @@ pub enum PlayKindUnited {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum WindFn {
-    Reset,
-    SendFrames(PlayKindUnited),
+#[derive(Debug, Clone)]
+pub enum StatementKind<'a> {
+    Rule(Rule<'a>),
+    Reset(&'a str),
+    SendFrames { kind: PlayKindUnited, at: &'a str },
 }
 
 // --- Coordinator Rules ---
@@ -470,17 +476,21 @@ where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
     recursive(|_sexpr| {
+        // let any_token_except_newline = any().and_is(just(Token::NewLine).not()).repeated().at_least(1);
+        // let comment = just(Token::CommentLineStart).ignore_then(any_token_except_newline).ignore_then(just(Token::NewLine).ignored());
+
+        
         // parse a single “term” – either a Variable or the LOG keyword.
         let term = select! {
-        Token::Variable(v) => Expr::Var(v),
-        Token::KwLog => Expr::Log,
+            Token::Variable(v) => Expr::Var(v),
+            Token::KwLog => Expr::Log,
         }
         .labelled("term");
+
         // parse a comma-separated list of terms (the left-hand side).
         let comma = just(Token::Comma);
         let term = term.clone().separated_by(comma).collect().labelled("term");
 
-        // parse one of the three operators.
         let op = select! {
             Token::OpAssignToRight => Operator::Right,
             Token::OpAssignToLeft => Operator::Left,
@@ -497,16 +507,10 @@ where
             .map(|((lhs, op), rhs)| Statement::Assign { lhs, op, rhs })
             .labelled("statement");
 
-        let rule_ending = just(Token::NewLine)
-            .repeated()
-            .ignore_then(just(Token::RuleDefinitionClose))
-            .then_ignore(just(Token::RuleDefinitionOpen))
-            .labelled("explicit rule end");
-
         // a rule header is a Variable enclosed in [ and ]
         let rule_header = just(Token::RuleDefinitionOpen)
             .ignore_then(select! { Token::Variable(v) => v }.labelled("rule name"))
-            .then_ignore(just(Token::RuleDefinitionClose))
+            .then_ignore(just(Token::NewLine).or_not())
             .labelled("rule header");
 
         // a complete rule: a header, then optionally some newlines, then the statement.
@@ -514,28 +518,87 @@ where
             .then_ignore(just(Token::NewLine).repeated())
             .then(statement.repeated().collect())
             .then_ignore(just(Token::NewLine).repeated())
-            .then_ignore(rule_ending.or_not())
-            .map(|(variable, stmts)| Rule { variable, stmts })
+            .then_ignore(just(Token::RuleDefinitionClose))
+            .map(|(variable, stmts)| StatementKind::Rule(Rule { variable, stmts }))
             .labelled("rule");
 
-        // the full SExpr contains one or more rules; make sure we consume all tokens.
-        let rule_block = just(Token::NewLine)
-            .repeated()
-            .ignore_then(rule)
-            .repeated()
-            .collect()
-            .then_ignore(end())
-            .map(|rules| RuleSexpr { rules });
+        let wind_reset_fn = just(Token::FnReset).ignore_then(
+        select! {
+            Token::Variable(v) => Expr::Var(v),
+        }.labelled("bagfile")).try_map(|expr, span| Ok(StatementKind::Reset(match expr {
+            Expr::Var(file) => file,
+            Expr::Log => {
+                return Err(Rich::custom(span, "Cannot reset a rat."))
+            },
+        }))).labelled("reset");
 
-        let wind_block = just(Token::NewLine)
-            .repeated()
-            .ignore_then(just(Token::FnReset))
-            .then_ignore(just(Token::NewLine).repeated())
-            .map(|wind| WindSexpr { commands: vec![] });
+    
+        let wind_play_frames_fn = select! { Token::FnPlayFrames(pt) => StatementKind::SendFrames { kind: 
+            match pt {
+                    PlayType::SensorCount { sensor } => PlayKindUnited::SensorCount { sensor: sensor, count: 0 },
+                    PlayType::UntilSensorCount { sending, until_sensor } => PlayKindUnited::UntilSensorCount { sending: sending, until_sensor: until_sensor, until_count: 0 },
+                }, at: "" }}.labelled("send_frames")
+            .then(select! {
+                Token::IntegerNumberMillisecond(ms) => PlayKindUnit::TimeMs(ms as u64),
+                Token::FloatingNumberMillisecond(ms) => PlayKindUnit::TimeMs(ms.round() as u64),
+                Token::IntegerNumber(i) => PlayKindUnit::Count(i as u64),
+            }.labelled("int number or timespan"))
+            .then(select! {
+                Token::Variable(v) => Expr::Var(v),
+            }.labelled("var as trigger"))
+            .try_map(|((f, arg), at), span| {
+                    match (f, arg) {
+                        (StatementKind::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _ }, at: _ }, PlayKindUnit::TimeMs(ms)) => {
+                            Ok(StatementKind::SendFrames{ kind: PlayKindUnited::UntilTime { sending: sensor, duration: std::time::Duration::from_millis(ms) }, at: match at {
+                                Expr::Var(var) => var,
+                                Expr::Log => return Err(Rich::custom(span, "Trigger must be a variable.")),
+                            }})
+                        },
+                        (StatementKind::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _}, at: _}, PlayKindUnit::Count(count)) => {
+                            Ok(StatementKind::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: count as usize }, at: match at {
+                                Expr::Var(var) => var,
+                                Expr::Log => return Err(Rich::custom(span, "Trigger must be a variable.")),
+                            }})
+                        },
+                        (StatementKind::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: _}, at: _ }, PlayKindUnit::Count(count)) => {
+                            Ok(StatementKind::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: count as usize }, at: match at {
+                                Expr::Var(var) => var,
+                                Expr::Log => return Err(Rich::custom(span, "Trigger must be a variable.")),
+                            }})
+                        },
+                        (StatementKind::Reset(_), _) => {
+                            Err(Rich::custom(span, "Reset does not take arguments."))
+                        },
+                        (StatementKind::Rule(_), _) => {
+                            Err(Rich::custom(span, "Rules do not take arguments."))
+                        },
+                        (StatementKind::SendFrames { kind: _, at: _}, _) => {
+                            Err(Rich::custom(span, "Unexpected arguments to send_frames function."))
+                        },
+                    }
+                }).labelled("play_frames");
 
-        let one_block = rule_block.or_not().then(wind_block.repeated().collect());
-
-        one_block.map(|(rule, wind)| Root { rules: rule, wind })
+        let one_of_wind_fns = rule.or(wind_play_frames_fn).or(wind_reset_fn);
+        let newlines = just(Token::NewLine).repeated();
+        let one_block = newlines.clone().ignore_then(
+                (one_of_wind_fns.then_ignore(newlines))
+                    .repeated()
+                    .collect(),
+            )
+            .then_ignore(end());
+        one_block.map(|stmts: Vec<StatementKind>| {
+            let mut rules = Vec::new();
+            let mut winds = Vec::new();
+            stmts.into_iter().for_each(|wf| match wf {
+                StatementKind::Rule(rule) => rules.push(rule),
+                StatementKind::Reset(_) => winds.push(wf),
+                StatementKind::SendFrames { kind:_, at:_ } => winds.push(wf),
+            });
+            Root {
+                rules: RuleSexpr { rules },
+                wind: winds,
+            }
+        })
     })
 }
 
@@ -626,17 +689,17 @@ pub fn evaluate_file(
     let start_line = start_line.unwrap_or_default();
     let lines = file.lines();
     let end_line = end_line.unwrap_or(lines.clone().count());
-    lines
+    let selected_lines = lines
         .skip(start_line)
         .take(end_line - start_line)
         .collect::<Vec<_>>()
         .join("\n");
-    evaluate_code(&file)
+    evaluate_code(&selected_lines)
 }
 
 pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     // Create a logos lexer over the source code
-    let token_iter = Token::lexer(source_code_raw)
+    let token_iter = Token::lexer(&source_code_raw)
         .spanned()
         // Convert logos errors into tokens. We want parsing to be recoverable and not fail at the lexing stage, so
         // we have a dedicated `Token::Error` variant that represents a token error that was previously encountered
@@ -656,17 +719,20 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     // Parse the token stream with our chumsky parser
     match parser().parse(token_stream).into_result() {
         Ok(sexpr) => {
-            let evaled = match sexpr.rules {
-                Some(rules) => Some(rules.eval()?),
-                None => None,
-            };
+            let rules = sexpr.rules.eval()?;
+            let wind = sexpr
+                .wind
+                .into_iter()
+                .filter_map(|f| match f {
+                    StatementKind::Reset(file) => Some(WindFunctions::Reset(file.to_owned())),
+                    StatementKind::SendFrames { kind, at } => {
+                        Some(WindFunctions::SendFrames { kind, at: at.to_owned() }) // owned to make easier to outside parser, TODO maybe passthrough lifetimes
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
 
-            // TODO evaluate or directly send wind
-
-            return Ok(Evaluated {
-                rules: evaled,
-                wind: vec![],
-            });
+            return Ok(Evaluated { rules, wind });
         }
         // If parsing was unsuccessful, generate a nice user-friendly diagnostic with ariadne. You could also use
         // codespan, or whatever other diagnostic library you care about. You could even just display-print the errors
@@ -696,16 +762,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_minimal() {
+    fn test_minimal_rules() {
         const SRC: &str = r"
-        [var1]
-        testRat1 -> testRat2
+        [var1
+            testRat1 -> testRat2
+        ]
+        
+        [var3
+            testRat1, LOG <- testRat2
+        ]
 
-        [var3]
-        testRat1, LOG <- testRat2
-
-        [var4]
-        testRat1 == testRat2
+        [var4
+            testRat1 == testRat2
+        ]
         ";
 
         let mut rules = Rules::new();
@@ -750,8 +819,66 @@ mod tests {
         let eval = evaluate_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
-        assert!(eval.rules.is_some());
-        let eval = eval.rules.unwrap();
+        assert!(!eval.rules.0.is_empty());
+        let eval = eval.rules;
         assert_eq!(eval, rules);
+    }
+
+    #[test]
+    fn test_minimal_wind() {
+        const SRC: &str = r"
+        play_frames l 10s var1
+
+        play_frames il 5 var1
+        reset bag_file_name
+        play_frames l 10 var1
+        play_frames l 10 var1
+
+        [var1
+            testRat1 -> testRat2
+        ]
+        play_frames l 10s var1
+        ";
+
+        // let mut a = Token::lexer(SRC);
+        // let b = a.next();
+        // let b = a.next();
+        // dbg!(b);
+
+        // let mut winds = Vec::new();
+        // winds.push(WindFunctions::SendFrames(()));
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        assert!(!eval.rules.raw().is_empty());
+        assert!(!eval.wind.is_empty());
+    }
+
+    // #[test]
+    fn test_comment() {
+        const SRC: &str = r"
+        play_frames l 10s var1
+
+# bla,.
+
+
+        ";
+
+        let mut a = Token::lexer(SRC);
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        let b = a.next();
+        // dbg!(b);
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+
     }
 }
