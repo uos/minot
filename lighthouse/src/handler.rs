@@ -102,7 +102,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('k') => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
             true => {
-                app.wind_cursor(Some(crate::app::VerticalDirection::Up), None);
+                app.wind_cursor(crate::app::VerticalDirection::Up);
             }
         },
         KeyCode::Tab => {
@@ -114,19 +114,19 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('j') => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
             true => {
-                app.wind_cursor(Some(crate::app::VerticalDirection::Down), None);
+                app.wind_cursor(crate::app::VerticalDirection::Down);
             }
         },
         KeyCode::Down => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
             true => {
-                app.wind_cursor(Some(crate::app::VerticalDirection::Down), None);
+                app.wind_cursor(crate::app::VerticalDirection::Down);
             }
         },
         KeyCode::Up => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
             true => {
-                app.wind_cursor(Some(crate::app::VerticalDirection::Up), None);
+                app.wind_cursor(crate::app::VerticalDirection::Up);
             }
         },
         KeyCode::Char('v') => {
@@ -135,7 +135,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             }
         }
         KeyCode::Char(' ') => {
-            app.wind_fire_at_current_cursor();
+            app.wind_fire_at_current_cursor().await;
         }
         KeyCode::PageUp => {
             app.change_diff_rat(crate::app::VerticalDirection::Up);
@@ -155,7 +155,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
 
                 match parsed {
                     Ok(p) => {
-                        app.wind_cursor(None, Some(p));
+                        app.wind_cursor(crate::app::VerticalDirection::Row(p));
                         app.wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
                         app.wind_cursor.showing_popup = false;
                         app.wind_cursor.popup_buffer.clear();

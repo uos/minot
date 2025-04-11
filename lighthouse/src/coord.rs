@@ -3,12 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use log::{debug, error, info, warn};
-// use ros_pointcloud2::{points::PointXYZ, PointCloud2Msg};
-use sea::{
-    coordinator::CoordinatorImpl,
-    net::PacketKind,
-    // ImuMsg,
-};
+use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
 struct Wind {
     pub name: String,
@@ -23,20 +18,6 @@ impl Network {
         Network { winds: Vec::new() }
     }
 }
-
-// #[derive(Debug, Copy, Clone)]
-// enum BagReaderTask {
-//     LidarFrame(u32),
-//     OdomFrame(u32),
-//     MixedWhile(f64), // Time in seconds
-//                      // More here like "mixed until n lidar" or "random out of sync" etc
-// }
-
-// All possible variables that should be acted on must be known beforehand.
-// They get an ID or get generated into a type? TODO
-// ID => VariableRule
-// hashmap[string] => ID
-// ID => VariableRule
 
 use rlc::{ActionPlan, COMPARE_NODE_NAME};
 use sea::Coordinator;
@@ -69,6 +50,7 @@ enum LighthouseTask {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
+    // TODO wait for rules to be set by lh at first
     let file = std::env::args().nth(1).unwrap_or("./rules.rat".to_owned());
     let rules_file = PathBuf::from_str(&file)?;
     let rats = rlc::evaluate_file(&rules_file, None, None)?; // evaluate entire file at first

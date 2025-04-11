@@ -35,17 +35,6 @@ impl Rules {
         self.0.clear();
     }
 
-    // pub fn insert_strategie(&mut self, variable: String, strategie: VariableHuman) {
-    //     match self.0.get_mut(&variable) {
-    //         Some(el) => {
-    //             el.push(strategie);
-    //         }
-    //         None => {
-    //             self.0.insert(variable, vec![strategie]);
-    //         }
-    //     }
-    // }
-
     pub fn raw(&self) -> &std::collections::HashMap<String, Vec<VariableHuman>> {
         &self.0
     }
@@ -230,8 +219,8 @@ enum Token<'a> {
     Error,
 
     // -- Control --
-    #[token("#")]
-    CommentLineStart,
+    #[regex(r"#.*\n", logos::skip)]
+    Comment,
 
     #[token("+")]
     OpPlus,
@@ -348,7 +337,7 @@ impl fmt::Display for Token<'_> {
             Self::Dot => write!(f, "."),
             Self::OpMinus => write!(f, "-"),
             Self::Error => write!(f, "<error>"),
-            Self::CommentLineStart => write!(f, "#"),
+            Self::Comment => write!(f, "#"),
             Self::NewLine => write!(f, "\\n"),
             Self::RuleDefinitionOpen => write!(f, "["),
             Self::RuleDefinitionClose => write!(f, "]"),
@@ -450,9 +439,9 @@ pub enum Statement<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Operator {
-    Right,   // corresponds to "->"
-    Left,    // corresponds to "<-"
-    Compare, // corresponds to "=="
+    Right,   // "->"
+    Left,    // "<-"
+    Compare, // "=="
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -476,10 +465,6 @@ where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
     recursive(|_sexpr| {
-        // let any_token_except_newline = any().and_is(just(Token::NewLine).not()).repeated().at_least(1);
-        // let comment = just(Token::CommentLineStart).ignore_then(any_token_except_newline).ignore_then(just(Token::NewLine).ignored());
-
-        
         // parse a single “term” – either a Variable or the LOG keyword.
         let term = select! {
             Token::Variable(v) => Expr::Var(v),
@@ -503,7 +488,7 @@ where
             .clone()
             .then(op)
             .then(term)
-            .then_ignore(just(Token::NewLine))
+            .then_ignore(just(Token::NewLine).or_not())
             .map(|((lhs, op), rhs)| Statement::Assign { lhs, op, rhs })
             .labelled("statement");
 
@@ -825,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn test_minimal_wind() {
+    fn minimal_wind() {
         const SRC: &str = r"
         play_frames l 10s var1
 
@@ -855,30 +840,32 @@ mod tests {
         assert!(!eval.wind.is_empty());
     }
 
-    // #[test]
-    fn test_comment() {
+    #[test]
+    fn single_line_rule() {
         const SRC: &str = r"
-        play_frames l 10s var1
-
-# bla,.
-
-
+        [var1 testRat1 -> testRat2]
         ";
-
-        let mut a = Token::lexer(SRC);
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        let b = a.next();
-        // dbg!(b);
 
         let eval = evaluate_code(SRC);
         assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        assert!(!eval.rules.raw().is_empty());
+    }
 
+
+    #[test]
+    fn comments() {
+        const SRC: &str = r"
+        # bla,.
+        # ups /// \masd
+        play_frames l 10s var1 # yo
+        
+        ";
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        assert!(eval.rules.raw().is_empty());
+        assert!(!eval.wind.is_empty());
     }
 }

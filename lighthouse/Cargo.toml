@@ -21,6 +21,7 @@ ros_pointcloud2.workspace = true
 crossterm = { version = "0.28.1", features = ["event-stream"] }
 futures = "0.3.31"
 ratatui = "0.29.0"
+rosbag2-rs = "0.2.1"
 
 [profile.release]
 lto = true          # Link Time Optimization

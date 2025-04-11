@@ -2,11 +2,12 @@ use std::{
     error::{self},
     fmt::Display,
     i8,
+    path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
 };
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use ratatui::{
     layout::Constraint,
     style::Stylize,
@@ -675,23 +676,27 @@ pub enum WindMode {
 
 #[derive(Debug)]
 pub struct WindCursor {
-    line: u32,
+    line_start: u32,
+    line_end: u32,
     pub showing_popup: bool,
     mode: WindMode,
     pub popup_title: &'static str,
     pub popup_buffer: Vec<char>,
     wind_send_state: WindSendState,
+    wind_file_path: PathBuf,
 }
 
 impl Default for WindCursor {
     fn default() -> Self {
         Self {
-            line: 0,
+            line_start: 0,
+            line_end: 0,
             wind_send_state: WindSendState::default(),
             showing_popup: false,
             popup_buffer: Vec::new(),
             popup_title: WIND_POPUP_TITLE_NOERR,
             mode: WindMode::default(),
+            wind_file_path: PathBuf::from("./lh.rat"),
         }
     }
 }
@@ -712,11 +717,29 @@ impl Display for WindCursor {
                 f.write_str("[W]")?;
             }
         }
+
+        let lines = if self.line_start == self.line_end {
+            format!("{}", self.line_start)
+        } else {
+            format!("{}-{}", self.line_start, self.line_end)
+        };
+
         match self.wind_send_state {
-            WindSendState::Acked => f.write_fmt(format_args!("{}✅", &self.line)),
-            WindSendState::Sent => f.write_fmt(format_args!("{}🔄", &self.line)),
-            WindSendState::NotRun => f.write_fmt(format_args!("{}", &self.line)),
+            WindSendState::Acked => f.write_fmt(format_args!("{}✅", lines)),
+            WindSendState::Sent => f.write_fmt(format_args!("{}🔄", lines)),
+            WindSendState::NotRun => f.write_fmt(format_args!("{}", lines)),
         }
+    }
+}
+
+impl WindCursor {
+    fn selected_lines(&self) -> Vec<u32> {
+        (self.line_start..self.line_end + 1).map(|i| i).collect()
+    }
+
+    fn with_rats(mut self, wind_file_path: PathBuf) -> Self {
+        self.wind_file_path = wind_file_path;
+        self
     }
 }
 
@@ -1525,6 +1548,7 @@ pub struct App {
     pub tolerance: Tolerance,
     pub compare: ClientCompare,
     pub send_coordinator: tokio::sync::mpsc::Sender<PacketKind>,
+    pub rats_file: Option<PathBuf>,
 }
 
 pub enum HorizontalDirection {
@@ -1540,10 +1564,10 @@ pub enum VerticalDirection {
 }
 
 impl App {
-    /// Constructs a new instance of [`App`].
     pub async fn new(
         sender: tokio::sync::mpsc::Sender<PacketKind>,
         mut receiver: tokio::sync::mpsc::Receiver<(String, String, String)>,
+        rats: Option<PathBuf>,
     ) -> Self {
         let history = Arc::new(RwLock::new(History::default()));
         let history_add = Arc::clone(&history);
@@ -1564,13 +1588,12 @@ impl App {
             tolerance: Tolerance::default(),
             compare: ClientCompare::default(),
             send_coordinator: sender,
+            rats_file: rats,
         }
     }
 
-    /// Handles the tick event of the terminal.
     pub fn tick(&self) {}
 
-    /// Set running to false to quit the application.
     pub fn quit(&mut self) {
         self.running = false;
     }
@@ -1694,11 +1717,54 @@ impl App {
         }
     }
 
-    pub fn wind_cursor(&mut self, _direction: Option<VerticalDirection>, _line: Option<usize>) {
-        // TODO add cursor and use windmode to check if needing to select
-        todo!()
+    pub fn wind_cursor(&mut self, direction: VerticalDirection) {
+        match self.wind_cursor.mode {
+            // TODO vs active mode
+            WindMode::NormalCursor => match direction {
+                VerticalDirection::Up => {
+                    self.wind_cursor.line_start += 1;
+                    self.wind_cursor.line_end = self.wind_cursor.line_start;
+                }
+                VerticalDirection::Down => {
+                    self.wind_cursor.line_start -= 1;
+                    self.wind_cursor.line_end = self.wind_cursor.line_start;
+                }
+                VerticalDirection::Row(line) => {
+                    self.wind_cursor.line_end = line
+                        .clamp(0, u32::MAX as usize)
+                        .try_into()
+                        .expect("just clamped");
+                    self.wind_cursor.line_end = self.wind_cursor.line_start;
+                }
+            },
+            WindMode::Select => match direction {
+                VerticalDirection::Up => {
+                    if self.wind_cursor.line_end == self.wind_cursor.line_start {
+                        self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_sub(1);
+                    } else {
+                        self.wind_cursor.line_end = self.wind_cursor.line_end.saturating_sub(1);
+                    }
+                }
+                VerticalDirection::Down => {
+                    self.wind_cursor.line_end = self.wind_cursor.line_end.saturating_add(1);
+                }
+                VerticalDirection::Row(line) => {
+                    self.wind_cursor.line_end = line
+                        .clamp(0, u32::MAX as usize)
+                        .try_into()
+                        .expect("just clamped");
+                }
+            },
+            _ => {}
+        };
     }
-    pub fn wind_fire_at_current_cursor(&mut self) {
+
+    pub async fn wind_fire_at_current_cursor(&mut self) {
+        // just evaluate this line, read the wind function and send to coord
+        let lines = self.wind_cursor.selected_lines();
+        // read file
+        // rlc::evaluate_file(path, start_line, end_line)
+        // TODO
         todo!()
     }
 
@@ -1732,7 +1798,7 @@ impl App {
 
     pub fn wind_mode(&mut self) -> bool {
         match self.wind_cursor.mode {
-            WindMode::Active => false,
+            WindMode::Active => false, // TODO active vs normalcursor not quite clear
             WindMode::NormalCursor => true,
             WindMode::Select => true,
             WindMode::Inactive => false,

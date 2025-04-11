@@ -1,9 +1,10 @@
+use std::{path::PathBuf, str::FromStr};
+
 use log::error;
 use rlc::COMPARE_NODE_NAME;
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 
 use anyhow::anyhow;
-use std::io;
 
 pub mod app;
 pub mod coord;
@@ -26,7 +27,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env = env_logger::Env::new().filter_or("LH_LOG", "off");
     env_logger::Builder::from_env(env).init();
 
-    // let var_data: Arc<RwLock<Vec<(String, String)>>> = Arc::new(RwLock::new(Vec::new()));
+    let file = std::env::args().nth(1).map(|f| PathBuf::from_str(&f));
+    let file = match file {
+        Some(pathres) => Some(pathres?),
+        None => None,
+    };
+
+    let rules = match &file {
+        Some(path) => {
+            let rats = rlc::evaluate_file(&path, None, None)?; // evaluate entire file at first
+            rats.rules
+        }
+        None => rlc::Rules::new(),
+    };
 
     let comparer =
         sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)
@@ -59,6 +72,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
     tokio::spawn(async move {
+        // override rules if there are some
+        if !rules.raw().is_empty() {
+            match recv
+                .send(Packet {
+                    header: sea::net::Header::default(),
+                    data: sea::net::PacketKind::RulesClear,
+                })
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Could not send RulesClear to net client: {e}");
+                }
+            }
+
+            for (var, rule) in rules.raw() {
+                match recv
+                    .send(Packet {
+                        header: sea::net::Header::default(),
+                        data: sea::net::PacketKind::RuleAppend {
+                            variable: var.clone(), // TODO avoid both clone?
+                            commands: rule.clone(),
+                        },
+                    })
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Could not send RuleAppend to net client: {e}");
+                    }
+                }
+            }
+        }
+
         while let Some(ui_received) = rx.recv().await {
             match recv
                 .send(Packet {
@@ -119,20 +166,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut app = App::new(tx, ndata_rx).await;
+    let mut app = App::new(tx, ndata_rx, file).await;
 
-    let backend = CrosstermBackend::new(io::stdout());
+    let backend = CrosstermBackend::new(std::io::stdout());
     let terminal = Terminal::new(backend)?;
     let events = EventHandler::new(250);
     let mut tui = Tui::new(terminal, events);
     tui.init()?;
 
-    // // Start the main loop.
     while app.running {
         tokio::task::yield_now().await;
-        // Render the user interface.
         tui.draw(&mut app)?;
-        // Handle events.
         match tui.events.next().await? {
             Event::Tick => app.tick(),
             Event::Key(key_event) => handle_key_events(key_event, &mut app).await?,
@@ -142,8 +186,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tui.exit()?;
-    // loop {
-    //     tokio::task::yield_now().await;
-    // }
     return Ok(());
 }
