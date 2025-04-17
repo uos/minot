@@ -258,6 +258,7 @@ impl Bagfile {
 
                                     lidar_counter += 1;
 
+                                    // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
                                     let dec = cdr::deserialize::<PointCloud2>(&msg.data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
