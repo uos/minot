@@ -18,6 +18,7 @@ rust-stable:
   stage: build
   script:
     - rustup default stable
+    - curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
     - cargo build --verbose
     - cargo test --verbose
   rules:
@@ -27,6 +28,7 @@ rust-nightly:
   stage: build
   script:
     - rustup default nightly
+    - curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
     - cargo build --verbose
     - cargo test --verbose
   allow_failure: true

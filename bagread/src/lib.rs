@@ -395,17 +395,13 @@ impl Bagfile {
 //     })
 // }
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn it_works() {
-        let path = "/Users/stelzo/projects/liolink/dlg_cut";
+    fn bag_read_simple() {
+        let path = "../dlg_cut";
         let mut bag = Bagfile::default();
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
