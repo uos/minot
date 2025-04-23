@@ -4,9 +4,9 @@ use anyhow::anyhow;
 use log::{debug, error, info};
 
 use crate::{
+    ShipKind, VariableType,
     client::Client,
     net::{PacketKind, SeaSendableBuffer},
-    ShipKind, VariableType,
 };
 
 pub struct NetworkShipImpl {

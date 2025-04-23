@@ -1,12 +1,12 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Margin},
-    style::{palette::tailwind, Modifier, Style},
+    style::{Modifier, Style, palette::tailwind},
     text::Line,
     widgets::{
         Block, BorderType, Borders, HighlightSpacing, Padding, Paragraph, Scrollbar,
         ScrollbarOrientation,
     },
-    Frame,
 };
 
 use crate::app::App;

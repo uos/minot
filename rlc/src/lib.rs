@@ -1,4 +1,5 @@
 use core::fmt;
+use std::{path::PathBuf, str::FromStr};
 
 use anyhow::anyhow;
 use ariadne::{Color, Label, Report, ReportKind, Source};
@@ -6,6 +7,7 @@ use logos::{Lexer, Logos};
 use serde::{Deserialize, Serialize};
 
 use chumsky::{
+    container::Seq,
     input::{Stream, ValueInput},
     prelude::*,
 };
@@ -151,6 +153,11 @@ fn rm_first<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
     &slice[1..slice.len()]
 }
 
+fn rm_last<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
+    let slice = lex.slice();
+    &slice[0..slice.len() - 1]
+}
+
 // TODO use Result in this callback for feedback
 fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
     let chars = lex.slice()["play_frames ".len()..]
@@ -225,6 +232,8 @@ enum Token<'a> {
     #[token("-")]
     OpMinus,
 
+    // #[token("<")]
+    // OpInclude,
     #[regex(".", priority = 1)]
     Dot,
 
@@ -256,7 +265,7 @@ enum Token<'a> {
     #[token("==")]
     OpCompare,
 
-    #[token("<-")]
+    #[regex("<-|=")]
     OpAssignToLeft,
 
     #[regex("->", priority = 1000)]
@@ -320,6 +329,9 @@ enum Token<'a> {
     #[regex(r"[+-]?(\d+hours)", integer_hour)]
     IntegerNumberMillisecond(i64),
 
+    #[regex(r"[a-zA-Z_]+\d*[a-zA-Z_\d]*\.", rm_last)]
+    VarNamespace(&'a str),
+
     #[regex(r"[a-zA-Z_]+\d*[a-zA-Z_\d]*")]
     Variable(&'a str),
 
@@ -330,8 +342,10 @@ enum Token<'a> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::VarNamespace(ns) => write!(f, "Namespace({:?})", ns),
             Self::Path(path) => write!(f, "Path({:?})", path),
             Self::FnReset => write!(f, "reset()"),
+            // Self::OpInclude => write!(f, "<include>"),
             Self::Comma => write!(f, ","),
             Self::KwLog => write!(f, "LOG"),
             Self::OpPlus => write!(f, "+"),
@@ -425,9 +439,72 @@ pub enum Rhs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Var {
-    User(String),
+    User {
+        name: String,
+        namespace: Vec<String>,
+    },
     Log,
-    Predef(String),
+    Predef {
+        name: String,
+        namespace: Vec<String>,
+    },
+}
+
+fn vec_prepend<T: Clone>(prepend: &[T], source: &[T]) -> Vec<T> {
+    let mut out = prepend.to_vec();
+    out.extend(source.iter().cloned());
+    out
+}
+
+impl Var {
+    pub fn add_namespace(self, ns: &Vec<String>) -> Self {
+        match self {
+            Var::User { name, namespace } => Var::User {
+                name,
+                namespace: vec_prepend(ns, &namespace),
+            },
+            Var::Log => Var::Log,
+            Var::Predef { name, namespace } => Var::Predef {
+                name,
+                namespace: vec_prepend(ns, &namespace),
+            },
+        }
+    }
+}
+
+impl FromStr for Var {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let splitted = s.split(".").collect::<Vec<_>>();
+
+        let l = splitted.len();
+        if l < 1 {
+            return Err(anyhow!("Nothing to parse"));
+        }
+
+        let last = splitted[l - 1];
+
+        Ok(if last == COMPARE_NODE_NAME {
+            Self::Log
+        } else {
+            let mut v: Vec<String> = vec![];
+            if l > 1 {
+                v.extend(splitted.into_iter().take(l - 1).map(String::from));
+            }
+            if let Some(predef) = last.strip_prefix("_") {
+                Self::Predef {
+                    name: predef.to_owned(),
+                    namespace: v,
+                }
+            } else {
+                Self::User {
+                    name: last.to_owned(),
+                    namespace: v,
+                }
+            }
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -445,7 +522,7 @@ pub enum WindFunctions {
 
 #[derive(Debug, Clone)]
 pub struct Root<'a> {
-    pub rules: RuleSexpr<'a>,
+    pub rules: RuleSexpr,
     pub wind: Vec<StatementKind<'a>>,
     pub vardefs: Vec<Statement>,
 }
@@ -479,6 +556,39 @@ pub enum StatementKind<'a> {
     VariableDef(Statement),
     Reset(String),
     SendFrames { kind: PlayKindUnited, at: String },
+    VariableNamespaceBlock(Vec<Statement>),
+}
+
+#[derive(Debug, Clone)]
+pub enum StatementKindPass1<'a> {
+    Rule(Rule<'a>),
+    VariableDef(Statement),
+    Reset(String),
+    Include {
+        namespace: Vec<String>,
+        path: String,
+    },
+    SendFrames {
+        kind: PlayKindUnited,
+        at: String,
+    },
+    VariableNamespaceBlock(Vec<StatementPass1>),
+}
+
+#[derive(Debug, Clone)]
+pub enum StatementKindOwnedPass1 {
+    Rule(RuleOwned),
+    Include {
+        namespace: Vec<String>,
+        path: String,
+    },
+    VariableDef(Statement),
+    VariableNamespaceBlock(Vec<StatementPass1>),
+    Reset(String),
+    SendFrames {
+        kind: PlayKindUnited,
+        at: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -489,21 +599,132 @@ pub enum StatementKindOwned {
     SendFrames { kind: PlayKindUnited, at: String },
 }
 
-impl<'a> From<StatementKind<'a>> for StatementKindOwned {
-    fn from(value: StatementKind<'a>) -> Self {
+fn do_pass1(pass1: Vec<StatementKindOwnedPass1>) -> anyhow::Result<Vec<StatementKindOwned>> {
+    let mut out = vec![];
+
+    for stmt in pass1 {
+        match stmt {
+            StatementKindOwnedPass1::Rule(rule_owned) => {
+                out.push(StatementKindOwned::Rule(rule_owned));
+            }
+            StatementKindOwnedPass1::VariableDef(statement) => {
+                out.push(StatementKindOwned::VariableDef(statement));
+            }
+            StatementKindOwnedPass1::VariableNamespaceBlock(statements) => {
+                for bstmt in statements {
+                    let translated = match bstmt {
+                        StatementPass1::AssignLeft { lhs, rhs } => {
+                            Statement::AssignLeft { lhs, rhs }
+                        }
+                        StatementPass1::AssignRight { lhs, rhs } => {
+                            Statement::AssignRight { lhs, rhs }
+                        }
+                        StatementPass1::Compare { rhs, lhs } => Statement::Compare { rhs, lhs },
+                        StatementPass1::Include { namespace, path } => {
+                            let nast = parse_to_ast(&PathBuf::from_str(&path)?)?;
+                            let nast = ast_add_namespace(&namespace, nast);
+                            out.extend(nast);
+                            continue;
+                        }
+                    };
+                    out.push(StatementKindOwned::VariableDef(translated));
+                }
+            }
+            StatementKindOwnedPass1::Reset(rs) => {
+                out.push(StatementKindOwned::Reset(rs));
+            }
+            StatementKindOwnedPass1::SendFrames { kind, at } => {
+                out.push(StatementKindOwned::SendFrames { kind, at });
+            }
+            StatementKindOwnedPass1::Include { namespace, path } => {
+                let nast = parse_to_ast(&PathBuf::from_str(&path)?)?;
+                let nast = ast_add_namespace(&namespace, nast);
+                out.extend(nast);
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+fn parse_to_ast(path: &std::path::PathBuf) -> anyhow::Result<Vec<StatementKindOwned>> {
+    let file = std::fs::read_to_string(path);
+    let file = match file {
+        Ok(file) => Ok(file),
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => Err(anyhow!("Could not find file: {}", path.display())),
+            std::io::ErrorKind::PermissionDenied => {
+                Err(anyhow!("No permission to read file: {}", path.display()))
+            }
+            std::io::ErrorKind::IsADirectory => {
+                Err(anyhow!("File is a directory: {}", path.display()))
+            }
+            _ => Err(anyhow!("Unexpected error for file: {}", path.display())),
+        },
+    }?;
+
+    // parse file to be included recursively
+    let token_iter = Token::lexer(&file).spanned().map(|(tok, span)| match tok {
+        Ok(tok) => (tok, span.into()),
+        Err(()) => (Token::Error, span.into()),
+    });
+    let token_stream =
+        Stream::from_iter(token_iter).map((0..file.len()).into(), |(t, s): (_, _)| (t, s));
+    match parser().parse(token_stream).into_result() {
+        Ok(sexpr) => {
+            let mut ast: Vec<StatementKindOwnedPass1> = Vec::new();
+            for expr in sexpr {
+                ast.push(expr.into());
+            }
+
+            let ast = do_pass1(ast)?; // recursive call
+            return Ok(ast);
+        }
+        Err(errs) => {
+            for err in errs {
+                Report::build(ReportKind::Error, (), err.span().start)
+                    .with_code(3)
+                    .with_message(err.to_string())
+                    .with_label(
+                        Label::new(err.span().into_range())
+                            .with_message(err.reason().to_string())
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .eprint(Source::from(&file))
+                    .unwrap();
+            }
+        }
+    }
+
+    return Err(anyhow!("Could not parse"));
+}
+
+impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
+    fn from(value: StatementKindPass1<'a>) -> Self {
         match value {
-            StatementKind::Rule(rule) => StatementKindOwned::Rule(RuleOwned::from(rule)),
-            StatementKind::VariableDef(statement) => StatementKindOwned::VariableDef(statement),
-            StatementKind::Reset(path) => StatementKindOwned::Reset(path),
-            StatementKind::SendFrames { kind, at } => StatementKindOwned::SendFrames { kind, at },
+            StatementKindPass1::Rule(rule) => StatementKindOwnedPass1::Rule(RuleOwned::from(rule)),
+            StatementKindPass1::VariableDef(statement) => {
+                StatementKindOwnedPass1::VariableDef(statement)
+            }
+            StatementKindPass1::Reset(path) => StatementKindOwnedPass1::Reset(path),
+            StatementKindPass1::SendFrames { kind, at } => {
+                StatementKindOwnedPass1::SendFrames { kind, at }
+            }
+            StatementKindPass1::VariableNamespaceBlock(statements) => {
+                StatementKindOwnedPass1::VariableNamespaceBlock(statements)
+            }
+            StatementKindPass1::Include { namespace, path } => {
+                StatementKindOwnedPass1::Include { namespace, path }
+            }
         }
     }
 }
 
 // --- Coordinator Rules ---
 #[derive(Debug, Clone)]
-pub struct RuleSexpr<'a> {
-    pub rules: Vec<Rule<'a>>,
+pub struct RuleSexpr {
+    pub rules: Vec<RuleOwned>,
 }
 
 #[derive(Debug, Clone)]
@@ -528,12 +749,63 @@ impl<'a> From<Rule<'a>> for RuleOwned {
 }
 
 #[derive(Debug, Clone)]
+pub enum StatementPass1 {
+    AssignLeft {
+        lhs: Vec<Var>,
+        rhs: Rhs,
+    },
+    AssignRight {
+        lhs: Rhs,
+        rhs: Vec<Var>,
+    },
+    Compare {
+        rhs: Vec<Var>,
+        lhs: Vec<Var>,
+    },
+    Include {
+        namespace: Vec<String>,
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub enum Statement {
-    // A statement is a left-hand side (one or more terms)
-    // an operator ("->", "<-" or "==") and a right-hand side term.
     AssignLeft { lhs: Vec<Var>, rhs: Rhs },
     AssignRight { lhs: Rhs, rhs: Vec<Var> },
     Compare { rhs: Vec<Var>, lhs: Vec<Var> },
+}
+
+impl Statement {
+    fn add_namespace(self, ns: &Vec<String>) -> Self {
+        match self {
+            Statement::AssignLeft { lhs, rhs } => {
+                let nlhs = lhs
+                    .into_iter()
+                    .map(|v| v.add_namespace(&ns))
+                    .collect::<Vec<_>>();
+                Statement::AssignLeft { lhs: nlhs, rhs }
+            }
+            Statement::AssignRight { lhs, rhs } => {
+                let nrhs = rhs
+                    .into_iter()
+                    .map(|v| v.add_namespace(&ns))
+                    .collect::<Vec<_>>();
+                Statement::AssignRight { lhs, rhs: nrhs }
+            }
+            Statement::Compare { rhs, lhs } => Statement::Compare { rhs, lhs },
+        }
+    }
+}
+
+fn ast_add_namespace(ns: &Vec<String>, ast: Vec<StatementKindOwned>) -> Vec<StatementKindOwned> {
+    ast.into_iter()
+        .map(|stmt| match stmt {
+            StatementKindOwned::VariableDef(statement) => {
+                StatementKindOwned::VariableDef(statement.add_namespace(ns))
+            }
+            _ => stmt,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -562,309 +834,336 @@ pub enum Operator {
 //     - Has an input type of type `I`, the one we declared as a type parameter
 //     - Produces an `SExpr` as its output
 //     - Uses `Rich`, a built-in error type provided by chumsky, for error generation
-fn parser<'a, I>() -> impl Parser<'a, I, Vec<StatementKind<'a>>, extra::Err<Rich<'a, Token<'a>>>>
+fn parser<'a, I>()
+-> impl Parser<'a, I, Vec<StatementKindPass1<'a>>, extra::Err<Rich<'a, Token<'a>>>>
 where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
-    recursive(|_sexpr| {
-        let time = select! {
-            Token::IntegerNumberMillisecond(ms) => NumVal::Integer(ms as i64),
-            Token::FloatingNumberMillisecond(ms) => NumVal::Floating(ms).integerize_unit_val(),
+    let time = select! {
+        Token::IntegerNumberMillisecond(ms) => NumVal::Integer(ms as i64),
+        Token::FloatingNumberMillisecond(ms) => NumVal::Floating(ms).integerize_unit_val(),
+    }
+    .labelled("time");
+
+    let way = select! {
+        Token::IntegerNumberMillimeter(millis) => NumVal::Integer(millis as i64),
+        Token::FloatingNumberMillimeter(millis) => NumVal::Floating(millis).integerize_unit_val(),
+    }
+    .labelled("way");
+
+    let timerange = time
+        .then_ignore(just(Token::OpRange))
+        .then(time)
+        .try_map(|(from, to), span| {
+            Ok(Rhs::Range {
+                from: Val::UnitedVal(UnitVal {
+                    val: match from {
+                        NumVal::Floating(_) => unreachable!("integerised before"),
+                        NumVal::Integer(i) => {
+                            if i < 0 {
+                                return Err(Rich::custom(
+                                    span,
+                                    "Negative Integer Number for Timespan.",
+                                ));
+                            } else {
+                                i as u64
+                            }
+                        }
+                    },
+                    unit: Unit::Time,
+                }),
+                to: Val::UnitedVal(UnitVal {
+                    val: match to {
+                        NumVal::Floating(_) => unreachable!("integerised before"),
+                        NumVal::Integer(i) => {
+                            if i < 0 {
+                                return Err(Rich::custom(
+                                    span,
+                                    "Negative Integer Number for Timespan.",
+                                ));
+                            } else {
+                                i as u64
+                            }
+                        }
+                    },
+                    unit: Unit::Time,
+                }),
+            })
+        })
+        .labelled("time range");
+
+    let wayrange = way
+        .then_ignore(just(Token::OpRange))
+        .then(way)
+        .try_map(|(from, to), span| {
+            Ok(Rhs::Range {
+                from: Val::UnitedVal(UnitVal {
+                    val: match from {
+                        NumVal::Floating(_) => unreachable!("integerised before"),
+                        NumVal::Integer(i) => {
+                            if i < 0 {
+                                return Err(Rich::custom(
+                                    span,
+                                    "Negative Integer Number for Wayspan.",
+                                ));
+                            } else {
+                                i as u64
+                            }
+                        }
+                    },
+                    unit: Unit::Way,
+                }),
+                to: Val::UnitedVal(UnitVal {
+                    val: match to {
+                        NumVal::Floating(_) => unreachable!("integerised before"),
+                        NumVal::Integer(i) => {
+                            if i < 0 {
+                                return Err(Rich::custom(
+                                    span,
+                                    "Negative Integer Number for Wayspan.",
+                                ));
+                            } else {
+                                i as u64
+                            }
+                        }
+                    },
+                    unit: Unit::Way,
+                }),
+            })
+        })
+        .labelled("way range");
+
+    let value = select! {
+            Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i))),
+            Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
+    }
+    .labelled("number value");
+
+    let numberrange = value
+        .then_ignore(just(Token::OpRange))
+        .then(value)
+        .try_map(|(from, to), span| match (&from, &to) {
+            (
+                Rhs::Val(Val::NumVal(NumVal::Floating(_))),
+                Rhs::Val(Val::NumVal(NumVal::Integer(_))),
+            )
+            | (
+                Rhs::Val(Val::NumVal(NumVal::Integer(_))),
+                Rhs::Val(Val::NumVal(NumVal::Floating(_))),
+            ) => {
+                return Err(Rich::custom(span, "Cannot span between float and integer."));
+            }
+            (_, _) => Ok((from, to)),
+        })
+        .map(|(from, to)| {
+            let from = match from {
+                Rhs::Val(Val::NumVal(nv)) => nv,
+                _ => unreachable!(),
+            };
+            let to = match to {
+                Rhs::Val(Val::NumVal(nv)) => nv,
+                _ => unreachable!(),
+            };
+
+            Rhs::Range {
+                from: Val::NumVal(from),
+                to: Val::NumVal(to),
+            }
+        })
+        .labelled("number range");
+
+    let variable = select! {
+            Token::VarNamespace(ns) => ns.to_owned(),
         }
-        .labelled("time");
-
-        let way = select! {
-            Token::IntegerNumberMillimeter(millis) => NumVal::Integer(millis as i64),
-            Token::FloatingNumberMillimeter(millis) => NumVal::Floating(millis).integerize_unit_val(),
-        }.labelled("way");
-
-        let timerange = time
-            .then_ignore(just(Token::OpRange))
-            .then(time)
-            .try_map(|(from, to), span| {
-                Ok(Rhs::Range {
-                    from: Val::UnitedVal(UnitVal {
-                        val: match from {
-                            NumVal::Floating(_) => unreachable!("integerised before"),
-                            NumVal::Integer(i) => {
-                                if i < 0 {
-                                    return Err(Rich::custom(
-                                        span,
-                                        "Negative Integer Number for Timespan.",
-                                    ));
-                                } else {
-                                    i as u64
-                                }
-                            }
-                        },
-                        unit: Unit::Time,
-                    }),
-                    to: Val::UnitedVal(UnitVal {
-                        val: match to {
-                            NumVal::Floating(_) => unreachable!("integerised before"),
-                            NumVal::Integer(i) => {
-                                if i < 0 {
-                                    return Err(Rich::custom(
-                                        span,
-                                        "Negative Integer Number for Timespan.",
-                                    ));
-                                } else {
-                                    i as u64
-                                }
-                            }
-                        },
-                        unit: Unit::Time,
-                    }),
-                })
+        .repeated()
+        .collect::<Vec<_>>()
+        .then(select! {
+                Token::Variable(var) => Rhs::Var(Var::User { name: var.to_owned(), namespace: vec![] }),
+                Token::PredefVariable(var) => Rhs::Var(Var::Predef { name: var.to_owned(), namespace: vec![] }),
             })
-            .labelled("time range");
-
-        let wayrange = way
-            .then_ignore(just(Token::OpRange))
-            .then(way)
-            .try_map(|(from, to), span| {
-                Ok(Rhs::Range {
-                    from: Val::UnitedVal(UnitVal {
-                        val: match from {
-                            NumVal::Floating(_) => unreachable!("integerised before"),
-                            NumVal::Integer(i) => {
-                                if i < 0 {
-                                    return Err(Rich::custom(
-                                        span,
-                                        "Negative Integer Number for Wayspan.",
-                                    ));
-                                } else {
-                                    i as u64
-                                }
-                            }
+        .map(|(ns, var)| {
+                let var = match var {
+                    Rhs::Var(var) => match var {
+                        Var::User { name, namespace: _} => {
+                            Var::User { name, namespace: ns }
                         },
-                        unit: Unit::Way,
-                    }),
-                    to: Val::UnitedVal(UnitVal {
-                        val: match to {
-                            NumVal::Floating(_) => unreachable!("integerised before"),
-                            NumVal::Integer(i) => {
-                                if i < 0 {
-                                    return Err(Rich::custom(
-                                        span,
-                                        "Negative Integer Number for Wayspan.",
-                                    ));
-                                } else {
-                                    i as u64
-                                }
-                            }
+                        Var::Predef { name, namespace: _ } => {
+                            Var::Predef { name, namespace: ns }
                         },
-                        unit: Unit::Way,
-                    }),
-                })
-            })
-            .labelled("way range");
-
-        let value = select! {
-                Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i))),
-                Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
-        }
-        .labelled("number value");
-
-        let numberrange = value
-            .then_ignore(just(Token::OpRange))
-            .then(value)
-            .try_map(|(from, to), span| match (&from, &to) {
-                (
-                    Rhs::Val(Val::NumVal(NumVal::Floating(_))),
-                    Rhs::Val(Val::NumVal(NumVal::Integer(_))),
-                )
-                | (
-                    Rhs::Val(Val::NumVal(NumVal::Integer(_))),
-                    Rhs::Val(Val::NumVal(NumVal::Floating(_))),
-                ) => {
-                    return Err(Rich::custom(span, "Cannot span between float and integer."));
-                }
-                (_, _) => Ok((from, to)),
-            })
-            .map(|(from, to)| {
-                let from = match from {
-                    Rhs::Val(Val::NumVal(nv)) => nv,
+                        _ => unreachable!(),
+                    },
                     _ => unreachable!(),
                 };
-                let to = match to {
-                    Rhs::Val(Val::NumVal(nv)) => nv,
-                    _ => unreachable!(),
-                };
 
-                Rhs::Range {
-                    from: Val::NumVal(from),
-                    to: Val::NumVal(to),
-                }
-            })
-            .labelled("number range");
+                Rhs::Var(var)
+            });
 
-        // TODO parse recursive of other variable that can hold a value
-        let term = select! {
-            Token::Variable(v) => Rhs::Var(Var::User(v.to_owned())),
-            Token::KwLog => Rhs::Var(Var::Log), // TODO maybe not rhs that can be assigned
-            Token::Path(p) => Rhs::Path(p.to_owned()),
-            Token::PredefVariable(pd) => Rhs::Var(Var::Predef(pd.to_owned())),
-        }
-        .labelled("term");
+    // TODO parse recursive of other variable that can hold a value
+    let term = select! {
+        Token::KwLog => Rhs::Var(Var::Log), // TODO maybe not rhs that can be assigned
+        Token::Path(p) => Rhs::Path(p.to_owned()),
+    }
+    .or(variable)
+    .labelled("term");
 
-        let range = choice((numberrange, timerange, wayrange));
-        let rhs = choice((term, range, value));
+    let range = choice((numberrange, timerange, wayrange));
+    let rhs = choice((term, range, value));
 
-        // parse a comma-separated list of terms (the left-hand side).
-        let comma = just(Token::Comma);
-        let multi_rhs = rhs
-            .clone()
-            .separated_by(comma)
-            .collect::<Vec<_>>()
-            .labelled("rule term");
+    // parse a comma-separated list of terms (the left-hand side).
+    let comma = just(Token::Comma);
+    let multi_rhs = rhs
+        .clone()
+        .separated_by(comma)
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .labelled("rule term");
 
-        let op = select! {
-            Token::OpAssignToRight => Operator::Right,
-            Token::OpAssignToLeft => Operator::Left,
-            Token::OpCompare => Operator::Compare,
-        }
-        .labelled("operator");
+    let op = select! {
+        Token::OpAssignToRight => Operator::Right,
+        Token::OpAssignToLeft => Operator::Left,
+        Token::OpCompare => Operator::Compare,
+    }
+    .labelled("operator");
 
-        // a statement is: lhs, then an operator, then a single term (the right-hand side).
-        let statement = multi_rhs
-            .clone()
-            .then(op)
-            .then(multi_rhs)
-            .then_ignore(just(Token::NewLine).or_not())
-            .try_map(|((lhs, op), rhs), span| {
-                Ok(StatementKind::VariableDef(match op {
-                    Operator::Right => {
-                        if lhs.len() > 1 {
-                            return Err(Rich::custom(
-                                span,
-                                "Can only assign one term but to multiple variables.",
-                            ));
-                        }
-                        if let Some(lhs) = lhs.first() {
-                            let mut vars: Vec<Var> = Vec::new();
-                            for r in rhs.iter() {
-                                match r {
-                                    Rhs::Var(var) => {
-                                        vars.push(var.clone());
-                                    }
-                                    _ => {
-                                        return Err(Rich::custom(
-                                            span,
-                                            "Can only assign to variables.",
-                                        ));
-                                    }
-                                }
-                            }
-
-                            Statement::AssignRight {
-                                lhs: lhs.clone(),
-                                rhs: vars,
-                            }
-                        } else {
-                            return Err(Rich::custom(span, "Missing left operand."));
-                        }
+    // a statement is: lhs, then an operator, then a single term (the right-hand side).
+    let statement = multi_rhs
+        .clone()
+        .then(op)
+        .then(multi_rhs)
+        .then_ignore(just(Token::NewLine).repeated())
+        .try_map(|((lhs, op), rhs), span| {
+            Ok(StatementKindPass1::VariableDef(match op {
+                Operator::Right => {
+                    if lhs.len() > 1 {
+                        return Err(Rich::custom(
+                            span,
+                            "Can only assign one term but to multiple variables.",
+                        ));
                     }
-                    Operator::Left => {
-                        if rhs.len() > 1 {
-                            return Err(Rich::custom(
-                                span,
-                                "Can only assign one term but to multiple variables.",
-                            ));
-                        }
-                        if let Some(rhs) = rhs.first() {
-                            let mut vars: Vec<Var> = Vec::new();
-                            for l in lhs.iter() {
-                                match l {
-                                    Rhs::Var(var) => {
-                                        vars.push(var.clone());
-                                    }
-                                    _ => {
-                                        return Err(Rich::custom(
-                                            span,
-                                            "Can only assign to variables.",
-                                        ));
-                                    }
-                                }
-                            }
-
-                            Statement::AssignLeft {
-                                lhs: vars,
-                                rhs: rhs.clone(),
-                            }
-                        } else {
-                            return Err(Rich::custom(span, "Missing right operand."));
-                        }
-                    }
-                    Operator::Compare => {
-                        let mut lvars: Vec<Var> = Vec::new();
-                        for l in lhs.iter() {
-                            match l {
-                                Rhs::Var(var) => {
-                                    lvars.push(var.clone());
-                                }
-                                _ => {
-                                    return Err(Rich::custom(span, "Can only compare variables."));
-                                }
-                            }
-                        }
-                        let mut rvars: Vec<Var> = Vec::new();
+                    if let Some(lhs) = lhs.first() {
+                        let mut vars: Vec<Var> = Vec::new();
                         for r in rhs.iter() {
                             match r {
                                 Rhs::Var(var) => {
-                                    rvars.push(var.clone());
+                                    vars.push(var.clone());
                                 }
                                 _ => {
-                                    return Err(Rich::custom(span, "Can only compare variables."));
+                                    return Err(Rich::custom(
+                                        span,
+                                        "Can only assign to variables.",
+                                    ));
                                 }
                             }
                         }
 
-                        Statement::Compare {
-                            rhs: rvars,
-                            lhs: lvars,
+                        Statement::AssignRight {
+                            lhs: lhs.clone(),
+                            rhs: vars,
+                        }
+                    } else {
+                        return Err(Rich::custom(span, "Missing left operand."));
+                    }
+                }
+                Operator::Left => {
+                    if rhs.len() > 1 {
+                        return Err(Rich::custom(
+                            span,
+                            "Can only assign one term but to multiple variables.",
+                        ));
+                    }
+                    if let Some(rhs) = rhs.first() {
+                        let mut vars: Vec<Var> = Vec::new();
+                        for l in lhs.iter() {
+                            match l {
+                                Rhs::Var(var) => {
+                                    vars.push(var.clone());
+                                }
+                                _ => {
+                                    return Err(Rich::custom(
+                                        span,
+                                        "Can only assign to variables.",
+                                    ));
+                                }
+                            }
+                        }
+
+                        Statement::AssignLeft {
+                            lhs: vars,
+                            rhs: rhs.clone(),
+                        }
+                    } else {
+                        return Err(Rich::custom(span, "Missing right operand."));
+                    }
+                }
+                Operator::Compare => {
+                    let mut lvars: Vec<Var> = Vec::new();
+                    for l in lhs.iter() {
+                        match l {
+                            Rhs::Var(var) => {
+                                lvars.push(var.clone());
+                            }
+                            _ => {
+                                return Err(Rich::custom(span, "Can only compare variables."));
+                            }
                         }
                     }
-                }))
-            })
-            .labelled("statement");
+                    let mut rvars: Vec<Var> = Vec::new();
+                    for r in rhs.iter() {
+                        match r {
+                            Rhs::Var(var) => {
+                                rvars.push(var.clone());
+                            }
+                            _ => {
+                                return Err(Rich::custom(span, "Can only compare variables."));
+                            }
+                        }
+                    }
 
-        // a rule header is a Variable enclosed in [ and ]
-        let rule_header = just(Token::RuleDefinitionOpen)
-            .ignore_then(select! { Token::Variable(v) => v }.labelled("rule name"))
-            .then_ignore(just(Token::NewLine).or_not())
-            .labelled("rule header");
-
-        // a complete rule: a header, then optionally some newlines, then the statement.
-        let rule = rule_header
-            .then_ignore(just(Token::NewLine).repeated())
-            .then(statement.clone().repeated().collect())
-            .then_ignore(just(Token::NewLine).repeated())
-            .then_ignore(just(Token::RuleDefinitionClose))
-            .map(|(variable, stmts): (&str, Vec<StatementKind>)| {
-                let stmts = stmts
-                    .into_iter()
-                    .map(|stmtk| match stmtk {
-                        StatementKind::VariableDef(var) => var,
-                        _ => unreachable!(),
-                    })
-                    .collect::<Vec<_>>();
-                StatementKind::Rule(Rule { variable, stmts })
-            })
-            .labelled("rule");
-
-        let wind_reset_fn = just(Token::FnReset)
-            .ignore_then(
-                select! {
-                    Token::Path(p) => p, // prefixed with /, resolve
-                    Token::Variable(v) =>  v, // not prefixed, so implicit ./
+                    Statement::Compare {
+                        rhs: rvars,
+                        lhs: lvars,
+                    }
                 }
-                .labelled("bagfile"),
-            )
-            .map(|expr| StatementKind::Reset(expr.to_owned()))
-            .labelled("reset");
+            }))
+        })
+        .labelled("statement");
 
-        let wind_play_frames_fn = select! { Token::FnPlayFrames(pt) => StatementKind::SendFrames { kind: match pt {
+    // a rule header is a Variable enclosed in [ and ]
+    let rule_header = just(Token::RuleDefinitionOpen)
+        .ignore_then(select! { Token::Variable(v) => v }.labelled("rule name"))
+        .then_ignore(just(Token::NewLine).or_not())
+        .labelled("rule header");
+
+    // a complete rule: a header, then optionally some newlines, then the statement.
+    let rule = rule_header
+        .then_ignore(just(Token::NewLine).repeated())
+        .then(statement.clone().repeated().collect())
+        .then_ignore(just(Token::NewLine).repeated())
+        .then_ignore(just(Token::RuleDefinitionClose))
+        .map(|(variable, stmts): (&str, Vec<StatementKindPass1>)| {
+            let stmts = stmts
+                .into_iter()
+                .map(|stmtk| match stmtk {
+                    StatementKindPass1::VariableDef(var) => var,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            StatementKindPass1::Rule(Rule { variable, stmts })
+        })
+        .labelled("rule");
+
+    let wind_reset_fn = just(Token::FnReset)
+        .ignore_then(
+            select! {
+                Token::Path(p) => p, // prefixed with /, resolve
+                Token::Variable(v) =>  v, // not prefixed, so implicit ./
+            }
+            .labelled("bagfile"),
+        )
+        .map(|expr| StatementKindPass1::Reset(expr.to_owned()))
+        .labelled("reset");
+
+    let wind_play_frames_fn = select! { Token::FnPlayFrames(pt) => StatementKindPass1::SendFrames { kind: match pt {
                     PlayType::SensorCount { sensor } => PlayKindUnited::SensorCount { sensor: sensor, count: 0 },
                     PlayType::UntilSensorCount { sending, until_sensor } => PlayKindUnited::UntilSensorCount { sending: sending, until_sensor: until_sensor, until_count: 0 },
                 }, at: "".to_owned() }}.labelled("send_frames")
@@ -873,64 +1172,251 @@ where
                 Token::FloatingNumberMillisecond(ms) => PlayKindUnit::TimeMs(ms.round() as u64),
                 Token::IntegerNumber(i) => PlayKindUnit::Count(i as u64),
             }.labelled("int number or timespan"))
-            .then(select! {
-                Token::Variable(v) => Var::User(v.to_owned()),
-            }.labelled("var as trigger"))
+            .then(variable.labelled("var as trigger"))
             .try_map(|((f, arg), at), span| {
                     match (f, arg) {
-                        (StatementKind::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _ }, at: _ }, PlayKindUnit::TimeMs(ms)) => {
-                            Ok(StatementKind::SendFrames{ kind: PlayKindUnited::UntilTime { sending: sensor, duration: std::time::Duration::from_millis(ms) }, at: match at {
-                                Var::User(v) => v,
+                        (StatementKindPass1::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _ }, at: _ }, PlayKindUnit::TimeMs(ms)) => {
+                            Ok(StatementKindPass1::SendFrames{ kind: PlayKindUnited::UntilTime { sending: sensor, duration: std::time::Duration::from_millis(ms) }, at: match at {
+                                Rhs::Var(Var::User { name, namespace }) => {
+                                    if !namespace.is_empty() {
+                                        return Err(Rich::custom(span, "Rats can not have namespaces."))
+                                    } else {
+                                        name
+                                    }
+                                },
                                 _ => unreachable!(),
                             }})
                         },
-                        (StatementKind::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _}, at: _}, PlayKindUnit::Count(count)) => {
-                            Ok(StatementKind::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: count as usize }, at: match at {
-                                Var::User(v) => v,
-                                _ => unreachable!(),
+                        (StatementKindPass1::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _}, at: _}, PlayKindUnit::Count(count)) => {
+                            Ok(StatementKindPass1::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: count as usize }, at: match at {
+                                Rhs::Var(Var::User { name, namespace }) => {
+                                    if !namespace.is_empty() {
+                                        return Err(Rich::custom(span, "Rats can not have namespaces."))
+                                    } else {
+                                        name
+                                    }
+                                },                                _ => unreachable!(),
                             }})
                         },
-                        (StatementKind::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: _}, at: _ }, PlayKindUnit::Count(count)) => {
-                            Ok(StatementKind::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: count as usize }, at: match at {
-                                Var::User(v) => v,
-                                _ => unreachable!(),
+                        (StatementKindPass1::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: _}, at: _ }, PlayKindUnit::Count(count)) => {
+                            Ok(StatementKindPass1::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: count as usize }, at: match at {
+                                Rhs::Var(Var::User { name, namespace }) => {
+                                    if !namespace.is_empty() {
+                                        return Err(Rich::custom(span, "Rats can not have namespaces."))
+                                    } else {
+                                        name
+                                    }
+                                },
+                                                                _ => unreachable!(),
                             }})
                         },
-                        (StatementKind::Reset(_), _) => {
+                        (StatementKindPass1::Reset(_), _) => {
                             Err(Rich::custom(span, "Reset does not take arguments."))
                         },
-                        (StatementKind::Rule(_), _) => {
+                        (StatementKindPass1::Rule(_), _) => {
                             Err(Rich::custom(span, "Rules do not take arguments."))
                         },
-                        (StatementKind::SendFrames { kind: _, at: _}, _) => {
+                        (StatementKindPass1::SendFrames { kind: _, at: _}, _) => {
                             Err(Rich::custom(span, "Unexpected arguments to send_frames function."))
                         },
-                        (StatementKind::VariableDef(_), _) => unreachable!("parsed variable definition"),
+                        (StatementKindPass1::VariableDef(_), _) => unreachable!("parsed variable definition"),
+                        (StatementKindPass1::VariableNamespaceBlock(_), _) => unreachable!("parsed namespace block"),
+                        (StatementKindPass1::Include { namespace:_, path: _}, _) => unreachable!("parsed include"),
                     }
                 }).labelled("play_frames");
 
-        let one_of_wind_fns = choice((statement, wind_play_frames_fn, wind_reset_fn, rule));
-        let newlines = just(Token::NewLine).repeated();
-        let one_block = newlines
-            .clone()
-            .ignore_then((one_of_wind_fns.then_ignore(newlines)).repeated().collect())
-            .then_ignore(end());
-        one_block
-    })
+    let include = just(Token::OpAssignToLeft)
+        .ignore_then(select! {
+            Token::Path(p) => p.to_owned(),
+        })
+        .then_ignore(just(Token::NewLine))
+        .map(|path| StatementKindPass1::Include {
+            namespace: vec![],
+            path,
+        });
+
+    let namespace_block = recursive(|nsb| {
+        select! {
+            Token::VarNamespace(ns) => ns.to_owned(),
+        }
+        .repeated()
+        .collect()
+        .then_ignore(just(Token::BlockStart))
+        .then_ignore(just(Token::NewLine).repeated())
+        .then(
+            choice((statement.clone(), include.clone()))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(just(Token::NewLine).repeated())
+        .then(nsb.repeated().collect::<Vec<_>>())
+        .then_ignore(just(Token::NewLine).repeated())
+        .then(statement.clone().repeated().collect::<Vec<_>>())
+        .then_ignore(just(Token::NewLine).repeated())
+        .then_ignore(just(Token::BlockEnd))
+        .try_map(
+            |(((ns, stmts1), onsb), stmts2): (
+                (
+                    (Vec<String>, Vec<StatementKindPass1>),
+                    Vec<StatementKindPass1>,
+                ),
+                Vec<StatementKindPass1>,
+            ),
+             span| {
+                // add all statements before nested namespaces
+                let mut stmts_before = stmts1
+                    .into_iter()
+                    .map(|stmt| match stmt {
+                        StatementKindPass1::Rule(_) => {
+                            Err(Rich::custom(span, "Rules in namespace not supported."))
+                        }
+                        StatementKindPass1::VariableDef(statement) => {
+                            let stmt = statement.add_namespace(&ns);
+                            let stmt = match stmt {
+                                Statement::AssignLeft { lhs, rhs } => {
+                                    StatementPass1::AssignLeft { lhs, rhs }
+                                }
+                                Statement::AssignRight { lhs, rhs } => {
+                                    StatementPass1::AssignRight { lhs, rhs }
+                                }
+                                Statement::Compare { rhs, lhs } => {
+                                    StatementPass1::Compare { rhs, lhs }
+                                }
+                            };
+                            Ok(stmt)
+                        }
+                        StatementKindPass1::Reset(_) => {
+                            Err(Rich::custom(span, "Reset in namespace not supported."))
+                        }
+                        StatementKindPass1::SendFrames { kind: _, at: _ } => {
+                            Err(Rich::custom(span, "SendFrames in namespace not supported."))
+                        }
+                        StatementKindPass1::VariableNamespaceBlock(_) => {
+                            unreachable!("should be parsed recursively")
+                        }
+                        StatementKindPass1::Include { namespace: _, path } => {
+                            Ok(StatementPass1::Include {
+                                namespace: ns.clone(),
+                                path,
+                            })
+                        }
+                    })
+                    .try_fold(Vec::new(), |mut acc, res| match res {
+                        Ok(ok) => {
+                            acc.push(ok);
+                            Ok(acc)
+                        }
+                        Err(e) => Err(e),
+                    })?;
+
+                // add the statements from all deeper namespaces
+                for rnsb in onsb {
+                    match rnsb {
+                        StatementKindPass1::VariableNamespaceBlock(statements) => {
+                            let out = statements
+                                .into_iter()
+                                .map(|stmt| match stmt {
+                                    StatementPass1::AssignLeft { lhs, rhs } => {
+                                        let nlhs = lhs
+                                            .into_iter()
+                                            .map(|v| v.add_namespace(&ns))
+                                            .collect::<Vec<_>>();
+                                        StatementPass1::AssignLeft { lhs: nlhs, rhs }
+                                    }
+                                    StatementPass1::AssignRight { lhs, rhs } => {
+                                        let nrhs = rhs
+                                            .into_iter()
+                                            .map(|v| v.add_namespace(&ns))
+                                            .collect::<Vec<_>>();
+                                        StatementPass1::AssignRight { lhs, rhs: nrhs }
+                                    }
+                                    StatementPass1::Compare { rhs, lhs } => {
+                                        StatementPass1::Compare { rhs, lhs }
+                                    }
+                                    StatementPass1::Include { namespace, path } => {
+                                        StatementPass1::Include {
+                                            namespace: vec_prepend(&ns, &namespace),
+                                            path,
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            stmts_before.extend(out);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+
+                // add all statements after nested namespaces
+                let stmts_after = stmts2
+                    .into_iter()
+                    .map(|stmt| match stmt {
+                        StatementKindPass1::Rule(_) => {
+                            Err(Rich::custom(span, "Rules in namespace not supported."))
+                        }
+                        StatementKindPass1::VariableDef(statement) => {
+                            let stmt = statement.add_namespace(&ns);
+                            let stmt = match stmt {
+                                Statement::AssignLeft { lhs, rhs } => {
+                                    StatementPass1::AssignLeft { lhs, rhs }
+                                }
+                                Statement::AssignRight { lhs, rhs } => {
+                                    StatementPass1::AssignRight { lhs, rhs }
+                                }
+                                Statement::Compare { rhs, lhs } => {
+                                    StatementPass1::Compare { rhs, lhs }
+                                }
+                            };
+                            Ok(stmt)
+                        }
+                        StatementKindPass1::Reset(_) => {
+                            Err(Rich::custom(span, "Reset in namespace not supported."))
+                        }
+                        StatementKindPass1::SendFrames { kind: _, at: _ } => {
+                            Err(Rich::custom(span, "SendFrames in namespace not supported."))
+                        }
+                        StatementKindPass1::VariableNamespaceBlock(_) => {
+                            unreachable!("should be parsed recursively")
+                        }
+                        StatementKindPass1::Include { namespace: _, path } => {
+                            Ok(StatementPass1::Include {
+                                namespace: ns.clone(),
+                                path,
+                            })
+                        }
+                    })
+                    .try_fold(Vec::new(), |mut acc, res| match res {
+                        Ok(ok) => {
+                            acc.push(ok);
+                            Ok(acc)
+                        }
+                        Err(e) => Err(e),
+                    })?;
+
+                stmts_before.extend(stmts_after);
+
+                Ok(StatementKindPass1::VariableNamespaceBlock(stmts_before))
+            },
+        )
+    });
+
+    let one_of_wind_fns = choice((
+        statement,
+        wind_play_frames_fn,
+        wind_reset_fn,
+        rule,
+        namespace_block,
+        include,
+    ));
+    let newlines = just(Token::NewLine).repeated();
+    let one_block = newlines
+        .clone()
+        .ignore_then((one_of_wind_fns.then_ignore(newlines)).repeated().collect())
+        .then_ignore(end());
+    one_block
 }
 
-// impl<'a> Expr<'a> {
-//     pub fn var_name(&self) -> Option<String> {
-//         match self {
-//             Expr::Var(variable) => Some((*variable).to_owned()),
-//             Expr::Log => Some(COMPARE_NODE_NAME.to_owned()),
-//             Expr::Predef(variable) => Some((*variable).to_owned()),
-//             Expr::Path(_) => None,
-//         }
-//     }
-// }
-
-impl<'a> RuleSexpr<'a> {
+impl RuleSexpr {
     fn eval(&self) -> anyhow::Result<Rules> {
         let mut rules = Rules::new();
         for rule in self.rules.iter() {
@@ -941,22 +1427,29 @@ impl<'a> RuleSexpr<'a> {
                             target: lhs
                                 .iter()
                                 .map(|part| match part {
-                                    Var::User(v) => v.clone(),
+                                    Var::User { name, namespace: _ } => name.clone(),
                                     Var::Log => COMPARE_NODE_NAME.to_owned(),
-                                    Var::Predef(_) => unreachable!(),
+                                    Var::Predef {
+                                        name: _,
+                                        namespace: _,
+                                    } => unreachable!(),
                                 })
                                 .collect(),
                         };
 
-                        let varh = VariableHuman {
-                            ship: match rhs {
-                                Rhs::Var(var) => match var {
-                                    Var::User(v) => v.clone(),
-                                    Var::Log => COMPARE_NODE_NAME.to_owned(),
-                                    Var::Predef(_) => unreachable!(),
-                                },
-                                _ => unreachable!(),
+                        let ship = match rhs {
+                            Rhs::Var(var) => match var {
+                                Var::User { name, namespace: _ } => name.clone(),
+                                Var::Log => COMPARE_NODE_NAME.to_owned(),
+                                Var::Predef {
+                                    name: _,
+                                    namespace: _,
+                                } => unreachable!(),
                             },
+                            _ => continue,
+                        };
+                        let varh = VariableHuman {
+                            ship,
                             strategy: Some(plan.clone()),
                         };
                         rules.insert(rule.variable.to_owned(), vec![varh]);
@@ -966,22 +1459,29 @@ impl<'a> RuleSexpr<'a> {
                             target: rhs
                                 .iter()
                                 .map(|part| match part {
-                                    Var::User(v) => v.clone(),
+                                    Var::User { name, namespace: _ } => name.clone(),
                                     Var::Log => COMPARE_NODE_NAME.to_owned(),
-                                    Var::Predef(_) => unreachable!(),
+                                    Var::Predef {
+                                        name: _,
+                                        namespace: _,
+                                    } => unreachable!(),
                                 })
                                 .collect(),
                         };
 
-                        let varh = VariableHuman {
-                            ship: match lhs {
-                                Rhs::Var(var) => match var {
-                                    Var::User(v) => v.clone(),
-                                    Var::Log => COMPARE_NODE_NAME.to_owned(),
-                                    Var::Predef(_) => unreachable!(),
-                                },
-                                _ => unreachable!(),
+                        let ship = match lhs {
+                            Rhs::Var(var) => match var {
+                                Var::User { name, namespace: _ } => name.clone(),
+                                Var::Log => COMPARE_NODE_NAME.to_owned(),
+                                Var::Predef {
+                                    name: _,
+                                    namespace: _,
+                                } => unreachable!(),
                             },
+                            _ => continue,
+                        };
+                        let varh = VariableHuman {
+                            ship,
                             strategy: Some(plan.clone()),
                         };
                         rules.insert(rule.variable.to_owned(), vec![varh]);
@@ -994,14 +1494,14 @@ impl<'a> RuleSexpr<'a> {
                         let mut merged: Vec<String> = rhs
                             .iter()
                             .map(|var| match var {
-                                Var::User(v) => v.clone(),
+                                Var::User { name, namespace: _ } => name.clone(),
                                 Var::Log => COMPARE_NODE_NAME.to_owned(),
                                 _ => unreachable!(),
                             })
                             .collect();
 
                         merged.extend(lhs.iter().map(|var| match var {
-                            Var::User(v) => v.clone(),
+                            Var::User { name, namespace: _ } => name.clone(),
                             Var::Log => COMPARE_NODE_NAME.to_owned(),
                             _ => unreachable!(),
                         }));
@@ -1056,9 +1556,200 @@ pub struct VariableHistory {
     ast: Vec<StatementKindOwned>,
 }
 
+fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
+    if sub.len() > super_namespace.len() {
+        return false;
+    }
+
+    if sub.len() == 0 {
+        return false; // Empty is not a sub-namespace
+    }
+
+    if super_namespace.len() == 0 {
+        return false;
+    }
+
+    for i in 0..sub.len() {
+        if sub[i] != super_namespace[i] {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn truncate_namespace_var(ns: &[String], var: &Var) -> Var {
+    match var {
+        Var::User { name, namespace } => Var::User {
+            name: name.clone(),
+            namespace: {
+                ns.iter()
+                    .zip(namespace.iter())
+                    .filter(|(orig, filter)| orig != filter)
+                    .map(|(_, o)| o.clone())
+                    .collect::<Vec<_>>()
+            },
+        },
+        Var::Log => Var::Log,
+        Var::Predef { name, namespace } => Var::User {
+            name: name.clone(),
+            namespace: {
+                ns.iter()
+                    .zip(namespace.iter())
+                    .filter(|(orig, filter)| orig != filter)
+                    .map(|(_, o)| o.clone())
+                    .collect::<Vec<_>>()
+            },
+        },
+    }
+}
+
+fn truncate_namespace_rhs(ns: &[String], rhs: &Rhs) -> Rhs {
+    Rhs::Var(match rhs {
+        Rhs::Range { from: _, to: _ } => return rhs.clone(),
+        Rhs::Var(var) => truncate_namespace_var(ns, var),
+        Rhs::Path(_) => return rhs.clone(),
+        Rhs::Val(_) => return rhs.clone(),
+    })
+}
+
+fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
+    match stmt {
+        Statement::AssignLeft { lhs, rhs } => {
+            let l = lhs
+                .iter()
+                .map(|l| truncate_namespace_var(ns, l))
+                .collect::<Vec<_>>();
+            let r = truncate_namespace_rhs(ns, rhs);
+
+            Statement::AssignLeft { lhs: l, rhs: r }
+        }
+        Statement::AssignRight { lhs, rhs } => {
+            let r = rhs
+                .iter()
+                .map(|l| truncate_namespace_var(ns, l))
+                .collect::<Vec<_>>();
+            let l = truncate_namespace_rhs(ns, lhs);
+
+            Statement::AssignRight { lhs: l, rhs: r }
+        }
+        Statement::Compare { rhs, lhs } => Statement::Compare {
+            rhs: rhs.to_vec(),
+            lhs: lhs.to_vec(),
+        },
+    }
+}
+
+fn truncate_namespace_rule(ns: &[String], rule: &RuleOwned) -> RuleOwned {
+    let stmts = rule
+        .stmts
+        .iter()
+        .map(|stmt| truncate_namespace_stmt(ns, stmt))
+        .collect::<Vec<_>>();
+    RuleOwned {
+        variable: rule.variable.clone(),
+        stmts,
+    }
+}
+
+fn truncate_namespace(ns: &[String], stmt: &StatementKindOwned) -> StatementKindOwned {
+    match stmt {
+        StatementKindOwned::Rule(rule_owned) => {
+            StatementKindOwned::Rule(truncate_namespace_rule(ns, rule_owned))
+        }
+        StatementKindOwned::VariableDef(statement) => {
+            StatementKindOwned::VariableDef(truncate_namespace_stmt(ns, statement))
+        }
+        StatementKindOwned::Reset(path) => StatementKindOwned::Reset(path.clone()),
+        StatementKindOwned::SendFrames { kind, at } => StatementKindOwned::SendFrames {
+            kind: kind.clone(),
+            at: at.clone(),
+        },
+    }
+}
+
+fn stmt_in_ns(namespace: &[String], stmt: &Statement) -> bool {
+    match stmt {
+        Statement::AssignLeft { lhs: _, rhs } => match rhs {
+            Rhs::Var(var) => match &var {
+                Var::User {
+                    name: _,
+                    namespace: other_ns,
+                } => is_sub_namespace(other_ns, namespace),
+                Var::Log => true,
+                Var::Predef {
+                    name: _,
+                    namespace: other_ns,
+                } => is_sub_namespace(other_ns, namespace),
+            },
+            _ => true,
+        },
+        Statement::AssignRight { lhs, rhs: _ } => match lhs {
+            Rhs::Var(var) => match &var {
+                Var::User {
+                    name: _,
+                    namespace: other_ns,
+                } => is_sub_namespace(other_ns, namespace),
+                Var::Log => true,
+                Var::Predef {
+                    name: _,
+                    namespace: other_ns,
+                } => is_sub_namespace(other_ns, namespace),
+            },
+            _ => true,
+        },
+        Statement::Compare { rhs: _, lhs: _ } => true,
+    }
+}
+
 impl VariableHistory {
     pub fn new(ast: Vec<StatementKindOwned>) -> Self {
         VariableHistory { ast }
+    }
+
+    fn filter_by_namespace(
+        &self,
+        namespace: &[String],
+        up_to: Option<usize>,
+        trunc_ns: bool,
+    ) -> Vec<StatementKindOwned> {
+        let mut vars_in_ns = vec![];
+        for stmt in self.ast.iter().take(up_to.unwrap_or(usize::MAX)) {
+            match &stmt {
+                StatementKindOwned::Rule(rule_owned) => {
+                    let filtered_rules = rule_owned
+                        .stmts
+                        .iter()
+                        .filter(|stmt| stmt_in_ns(namespace, stmt))
+                        .map(|s| {
+                            trunc_ns
+                                .then_some(truncate_namespace_stmt(namespace, s))
+                                .unwrap_or(s.clone())
+                        })
+                        .collect::<Vec<_>>();
+
+                    if !filtered_rules.is_empty() {
+                        let rule = RuleOwned {
+                            variable: rule_owned.variable.clone(),
+                            stmts: filtered_rules,
+                        };
+                        vars_in_ns.push(StatementKindOwned::Rule(rule));
+                    }
+                }
+                StatementKindOwned::VariableDef(rstmt) => {
+                    if stmt_in_ns(namespace, rstmt) {
+                        let rhs = trunc_ns
+                            .then_some(truncate_namespace(namespace, stmt))
+                            .unwrap_or(stmt.clone());
+                        vars_in_ns.push(rhs);
+                    }
+                }
+                StatementKindOwned::Reset(_) => {}
+                StatementKindOwned::SendFrames { kind: _, at: _ } => {}
+            }
+        }
+
+        vars_in_ns
     }
 
     fn resolve_recursive(&self, var: &Var, up_to: Option<usize>) -> anyhow::Result<Option<Rhs>> {
@@ -1147,13 +1838,68 @@ impl VariableHistory {
         Ok(val)
     }
 
-    pub fn resolve(&self, var: &Var) -> anyhow::Result<Option<Rhs>> {
+    pub fn resolve_ns(&self, namespace: &[&str]) -> anyhow::Result<Vec<(Var, Rhs)>> {
+        let owned_ns = namespace
+            .into_iter()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>();
+        self.filter_by_namespace(&owned_ns, None, false)
+            .iter()
+            .flat_map(|stmt| match stmt {
+                StatementKindOwned::Rule(rule_owned) => rule_owned
+                    .stmts
+                    .iter()
+                    .flat_map(|st| match st {
+                        Statement::AssignLeft { lhs, rhs: _ } => Some(
+                            lhs.iter()
+                                .map(|lh| (lh, self.resolve_var(lh)))
+                                .collect::<Vec<_>>(),
+                        ),
+                        Statement::AssignRight { lhs: _, rhs } => Some(
+                            rhs.iter()
+                                .map(|lh| (lh, self.resolve_var(lh)))
+                                .collect::<Vec<_>>(),
+                        ),
+                        Statement::Compare { rhs: _, lhs: _ } => None,
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>(),
+                StatementKindOwned::VariableDef(statement) => match statement {
+                    Statement::AssignLeft { lhs, rhs: _ } => lhs
+                        .iter()
+                        .map(|lh| (lh, self.resolve_var(lh)))
+                        .collect::<Vec<_>>(),
+
+                    Statement::AssignRight { lhs: _, rhs } => rhs
+                        .iter()
+                        .map(|lh| (lh, self.resolve_var(lh)))
+                        .collect::<Vec<_>>(),
+
+                    Statement::Compare { rhs: _, lhs: _ } => vec![],
+                },
+                StatementKindOwned::Reset(_) => vec![],
+                StatementKindOwned::SendFrames { kind: _, at: _ } => vec![],
+            })
+            .try_fold(Vec::new(), |mut acc, res| match res {
+                (var, Ok(Some(rhs))) => {
+                    acc.push((truncate_namespace_var(&owned_ns, var), rhs));
+                    Ok(acc)
+                }
+                (_, Err(e)) => Err(e),
+                (_, Ok(None)) => Ok(acc), // skip if not set to anything
+            })
+    }
+
+    pub fn resolve(&self, var: &str) -> anyhow::Result<Option<Rhs>> {
+        self.resolve_var(&Var::from_str(var)?)
+    }
+
+    fn resolve_var(&self, var: &Var) -> anyhow::Result<Option<Rhs>> {
         self.resolve_recursive(var, None)
     }
 }
 
 pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
-    // Create a logos lexer over the source code
     let token_iter = Token::lexer(&source_code_raw)
         .spanned()
         // Convert logos errors into tokens. We want parsing to be recoverable and not fail at the lexing stage, so
@@ -1174,28 +1920,36 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     // Parse the token stream with our chumsky parser
     match parser().parse(token_stream).into_result() {
         Ok(sexpr) => {
+            let owned = sexpr
+                .into_iter()
+                .map(|kind| kind.into())
+                .collect::<Vec<StatementKindOwnedPass1>>();
+
+            // Pass 1
+            let ast = do_pass1(owned)?; // could print parse errors from included files
+
             let mut rules = Vec::new();
             let mut winds = Vec::new();
-            let mut ast: Vec<StatementKindOwned> = Vec::new();
-            for expr in sexpr {
+            // let mut ast: Vec<StatementKindOwnedPass1> = Vec::new();
+            for expr in &ast {
                 // clone for ease of use, but normally just use AST
                 match &expr {
-                    StatementKind::Rule(rule) => {
+                    &StatementKindOwned::Rule(rule) => {
                         rules.push(rule.clone());
                     }
-                    StatementKind::Reset(_) => winds.push(expr.clone()),
-                    StatementKind::SendFrames { kind: _, at: _ } => winds.push(expr.clone()),
-                    StatementKind::VariableDef(_) => {}
+                    &StatementKindOwned::Reset(_) => winds.push(expr.clone()),
+                    &StatementKindOwned::SendFrames { kind: _, at: _ } => winds.push(expr.clone()),
+                    &StatementKindOwned::VariableDef(_) => {}
                 }
-                ast.push(expr.into());
+                // ast.push(expr.into());
             }
             let rules = RuleSexpr { rules };
             let rules = rules.eval()?;
             let wind = winds
                 .into_iter()
                 .filter_map(|f| match f {
-                    StatementKind::Reset(file) => Some(WindFunctions::Reset(file.to_owned())),
-                    StatementKind::SendFrames { kind, at } => {
+                    StatementKindOwned::Reset(file) => Some(WindFunctions::Reset(file.to_owned())),
+                    StatementKindOwned::SendFrames { kind, at } => {
                         Some(WindFunctions::SendFrames {
                             kind,
                             at: at.to_owned(),
@@ -1368,33 +2122,192 @@ mod tests {
         // // let b = a.next();
         // dbg!(b);
 
-        // let mut winds = Vec::new();
-        // winds.push(WindFunctions::SendFrames(()));
-
         let eval = evaluate_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
 
-        let res = eval.vars.resolve(&Var::Predef("l".to_owned()));
+        let res = eval.vars.resolve("_l");
         assert!(res.is_ok());
         let res = res.unwrap();
         assert!(res.is_some());
         let res = res.unwrap();
         assert_eq!(res, Rhs::Path("/cloud".to_owned()));
 
-        let res = eval.vars.resolve(&Var::User("a".to_owned()));
+        let res = eval.vars.resolve("a");
         assert!(res.is_ok());
         let res = res.unwrap();
         assert!(res.is_some());
         let res = res.unwrap();
         assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(6))));
 
-        let res = eval.vars.resolve(&Var::User("b".to_owned()));
+        let res = eval.vars.resolve("b");
         assert!(res.is_ok());
         let res = res.unwrap();
         assert!(res.is_some());
         let res = res.unwrap();
         assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(7))));
+    }
+
+    #[test]
+    fn var_declare_nested() {
+        const SRC: &str = r"
+         a.b.c = 7
+         a.b = a.b.c
+         a.b.c = 6
+         wind._l = /cloud
+        ";
+
+        // let mut a = Token::lexer(SRC);
+        // let b = a.next();
+        // let b = a.next();
+        // let b = a.next();
+        // let b = a.next();
+        // let b = a.next();
+        // dbg!(b);
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+
+        let res = eval.vars.resolve("wind._l");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Path("/cloud".to_owned()));
+
+        let res = eval.vars.resolve("a.b.c");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(6))));
+
+        let res = eval.vars.resolve("a.b");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(7))));
+    }
+
+    #[test]
+    fn include() {
+        const SRC: &str = r"
+        # like assigning a file to the current namespace
+        <- ./../rats-lang/test.rl
+
+        # including in namespace blocks will prepend the namespaces to the included AST
+        # (excluding rules, they are always global)
+        c.{
+            <- ./../rats-lang/test.rl
+        }
+        ";
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+
+        let res = eval.vars.resolve("test");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(4))));
+
+        let res = eval.vars.resolve("c.test");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(4))));
+    }
+
+    #[test]
+    fn var_declare_blocks() {
+        const SRC: &str = r"
+        a.{
+            b = 7
+        }
+
+        c.{
+            # top
+            t = 5
+
+            # mid
+            d.{
+                1 -> o
+            }
+
+            # bottom
+            i = 95
+        }
+        ";
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+
+        let res = eval.vars.resolve("a.b");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(7))));
+
+        let res = eval.vars.resolve("c.t");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
+
+        let res = eval.vars.resolve("c.d.o");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(1))));
+
+        let res = eval.vars.resolve("c.i");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        let res = res.unwrap();
+        assert_eq!(res, Rhs::Val(Val::NumVal(NumVal::Integer(95))));
+    }
+
+    #[test]
+    fn in_ns() {
+        // other, me
+        let res = is_sub_namespace(&["a".to_owned()], &["a".to_owned()]); // true
+        assert!(res);
+        let res = is_sub_namespace(&["a".to_owned(), "b".to_owned()], &["a".to_owned()]); // a.b is deeper than a, so a.b can not be a sub namespace. false
+        assert!(!res);
+        let res = is_sub_namespace(&["a".to_owned()], &["a".to_owned(), "b".to_owned()]); // a is in a.b, true
+        assert!(res);
+        let res = is_sub_namespace(&[], &["a".to_owned(), "b".to_owned()]); // empty is not in a.b, false
+        assert!(!res);
+    }
+
+    #[test]
+    fn resolve_ns() {
+        const SRC: &str = r"
+        (var1
+            testRat1 -> testRat2
+            a.b <- 5
+        )
+        ";
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        let e = eval.vars.resolve_ns(&["a"]);
+        let e = e.unwrap();
+        assert_eq!(e.len(), 1);
+        let (var, rhs) = &e[0];
+        assert_eq!(*var, Var::from_str("b").unwrap());
+        assert_eq!(*rhs, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
     }
 
     // // TODO impl
@@ -1405,35 +2318,6 @@ mod tests {
 
     //     mat = [ [3, 1, 1]
     //             [3, 2, 4] ]
-    //     ";
-
-    //     // let eval = evaluate_code(SRC);
-    //     // assert!(eval.is_ok());
-    //     // let eval = eval.unwrap();
-    //     // assert!(eval.rules.raw().is_empty());
-    //     // assert!(!eval.wind.is_empty());
-    // }
-
-    // // TODO impl
-    // // #[test]
-    // fn configuration_blocks() {
-    //     const SRC: &str = r"
-    //     # simple
-    //     foo.{
-    //         blub <- 5cm..1.8m  # foo.blub <- 5cm..1cm
-    //         2s -> foo       # 2s -> foo.foo
-    //         bar = 3         # foo.bar <- 3
-    //     }
-
-    //     # recursive, nested
-    //     preprocess.{
-
-    //         res = 5cm
-
-    //         prep.{
-    //             bla = 32.345
-    //         }
-    //     }
     //     ";
 
     //     // let eval = evaluate_code(SRC);
