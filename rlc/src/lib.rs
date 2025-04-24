@@ -285,6 +285,9 @@ enum Token<'a> {
     #[regex(r#""[^"]+""#, rm_first_and_last)]
     String(&'a str),
 
+    // #[token("::")]
+    // EnumDivider,
+
     // -- Keywords --
     #[token("if")]
     KwIf,
@@ -337,13 +340,13 @@ enum Token<'a> {
     #[regex(r"[+-]?(\d+hours)", integer_hour)]
     IntegerNumberMillisecond(i64),
 
-    #[regex(r"[a-zA-Z_]+\d*[a-zA-Z_\d]*\.", rm_last)]
+    #[regex(r"[a-zA-Z_:]+\d*[a-zA-Z_:\d]*\.", rm_last)]
     VarNamespace(&'a str),
 
-    #[regex(r"[a-zA-Z_]+\d*[a-zA-Z_\d]*")]
+    #[regex(r"[a-zA-Z_:]+\d*[a-zA-Z_:\d]*")]
     Variable(&'a str),
 
-    #[regex(r"_[a-zA-Z_]+\d*[a-zA-Z_\d]*", rm_first)]
+    #[regex(r"_[a-zA-Z_:]+\d*[a-zA-Z_:\d]*", rm_first)]
     PredefVariable(&'a str),
 }
 
@@ -353,8 +356,8 @@ impl fmt::Display for Token<'_> {
             Self::VarNamespace(ns) => write!(f, "Namespace({:?})", ns),
             Self::Path(path) => write!(f, "Path({:?})", path),
             Self::String(string) => write!(f, "String({:?})", string),
+            // Self::EnumDivider => write!(f, "::"),
             Self::FnReset => write!(f, "reset()"),
-            // Self::OpInclude => write!(f, "<include>"),
             Self::Comma => write!(f, ","),
             Self::KwLog => write!(f, "LOG"),
             Self::OpPlus => write!(f, "+"),
@@ -1786,11 +1789,24 @@ impl VariableHistory {
                                     val = Some(match rhs {
                                         Rhs::Var(var) => {
                                             match self.resolve_recursive(var, Some(i))? {
-                                                None => {
-                                                    return Err(anyhow!(
-                                                        "Assigned variable undefined."
-                                                    ));
-                                                }
+                                                None => Rhs::Val(Val::StringVal(match var {
+                                                    Var::User { name, namespace: _ } => {
+                                                        name.clone()
+                                                    }
+                                                    Var::Log => {
+                                                        return Err(anyhow!(
+                                                            "Log can not be assigned."
+                                                        ));
+                                                    }
+                                                    Var::Predef {
+                                                        name: _,
+                                                        namespace: _,
+                                                    } => {
+                                                        return Err(anyhow!(
+                                                            "Predef variables can not be assigned."
+                                                        ));
+                                                    }
+                                                })),
                                                 Some(rhs) => rhs,
                                             }
                                         }
@@ -1803,11 +1819,24 @@ impl VariableHistory {
                                     val = Some(match lhs {
                                         Rhs::Var(var) => {
                                             match self.resolve_recursive(var, Some(i))? {
-                                                None => {
-                                                    return Err(anyhow!(
-                                                        "Assigned variable undefined."
-                                                    ));
-                                                }
+                                                None => Rhs::Val(Val::StringVal(match var {
+                                                    Var::User { name, namespace: _ } => {
+                                                        name.clone()
+                                                    }
+                                                    Var::Log => {
+                                                        return Err(anyhow!(
+                                                            "Log can not be assigned."
+                                                        ));
+                                                    }
+                                                    Var::Predef {
+                                                        name: _,
+                                                        namespace: _,
+                                                    } => {
+                                                        return Err(anyhow!(
+                                                            "Predef variables can not be assigned."
+                                                        ));
+                                                    }
+                                                })),
                                                 Some(lhs) => lhs,
                                             }
                                         }
@@ -1824,9 +1853,20 @@ impl VariableHistory {
                         if lhs.contains(var) {
                             val = Some(match rhs {
                                 Rhs::Var(var) => match self.resolve_recursive(&var, Some(i))? {
-                                    None => {
-                                        return Err(anyhow!("Assigned variable undefined."));
-                                    }
+                                    None => Rhs::Val(Val::StringVal(match var {
+                                        Var::User { name, namespace: _ } => name.clone(),
+                                        Var::Log => {
+                                            return Err(anyhow!("Log can not be assigned."));
+                                        }
+                                        Var::Predef {
+                                            name: _,
+                                            namespace: _,
+                                        } => {
+                                            return Err(anyhow!(
+                                                "Predef variables can not be assigned."
+                                            ));
+                                        }
+                                    })),
                                     Some(rhs) => rhs,
                                 },
                                 _ => rhs.clone(),
@@ -1837,9 +1877,20 @@ impl VariableHistory {
                         if rhs.contains(var) {
                             val = Some(match lhs {
                                 Rhs::Var(var) => match self.resolve_recursive(&var, Some(i))? {
-                                    None => {
-                                        return Err(anyhow!("Assigned variable undefined."));
-                                    }
+                                    None => Rhs::Val(Val::StringVal(match var {
+                                        Var::User { name, namespace: _ } => name.clone(),
+                                        Var::Log => {
+                                            return Err(anyhow!("Log can not be assigned."));
+                                        }
+                                        Var::Predef {
+                                            name: _,
+                                            namespace: _,
+                                        } => {
+                                            return Err(anyhow!(
+                                                "Predef variables can not be assigned."
+                                            ));
+                                        }
+                                    })),
                                     Some(lhs) => lhs,
                                 },
                                 _ => lhs.clone(),
@@ -2005,6 +2056,22 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     Err(anyhow!("Could not parse"))
 }
 
+// fn convert_to_path(input: &str) -> String {
+//     if input.is_empty() {
+//         return String::new();
+//     }
+
+//     let replaced_open = input.replace('(', "::");
+
+//     let removed_close = replaced_open.replace(')', "");
+
+//     if let Some(stripped) = removed_close.strip_suffix("::") {
+//         stripped.to_string()
+//     } else {
+//         removed_close
+//     }
+// }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2075,11 +2142,10 @@ mod tests {
     #[test]
     fn minimal_wind() {
         const SRC: &str = r"
-        play_frames l 10s var1
+        reset ./bag_file_name
 
+        play_frames l 10s var1
         play_frames il 5 var1
-        reset bag_file_name
-        play_frames l 10 var1
         play_frames l 10 var1
 
         (var1
@@ -2329,22 +2395,64 @@ mod tests {
 
     #[test]
     fn strings() {
-        const SRC: &str = r#"a = "bla""#;
+        const SRC: &str = r#"
+        a = "bla with space"
+        b = Blub
+        c = Lidar::Ouster
+            
+        "#;
 
         let eval = evaluate_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
+
         let e = eval.vars.resolve("a");
         assert!(e.is_ok());
         let e = e.unwrap();
         assert!(e.is_some());
         let rhs = e.unwrap();
-        assert_eq!(rhs, Rhs::Val(Val::StringVal("bla".to_owned())));
+        assert_eq!(rhs, Rhs::Val(Val::StringVal("bla with space".to_owned())));
+
+        let e = eval.vars.resolve("b");
+        assert!(e.is_ok());
+        let e = e.unwrap();
+        assert!(e.is_some());
+        let rhs = e.unwrap();
+        assert_eq!(rhs, Rhs::Val(Val::StringVal("Blub".to_owned())));
+
+        let e = eval.vars.resolve("c");
+        assert!(e.is_ok());
+        let e = e.unwrap();
+        assert!(e.is_some());
+        let rhs = e.unwrap();
+        assert_eq!(rhs, Rhs::Val(Val::StringVal("Lidar::Ouster".to_owned())));
     }
 
     // #[test]
     // fn enums() {
-    //     const SRC: &str = r#""a: Sensor = "bla"""#;
+    //     // in your code
+    //     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+    //     enum Lidar {
+    //         Ouster,
+    //         Sick,
+    //     }
+
+    //     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+    //     enum Sensor {
+    //         Lidar(Lidar),
+    //         Imu,
+    //     }
+
+    //     // for rl
+    //     #[derive(Debug)]
+    //     enum Enums {
+    //         Sensor(Sensor),
+    //     }
+    //     let a = Enums::Sensor(Sensor::Lidar(Lidar::Ouster));
+    //     let b = format!("{:?}", a);
+    //     let r = convert_to_path(&b);
+    //     println!("{:?}", r);
+    //     const SRC: &str = "a = Sensor::Lidar";
 
     // TODO Give Enum to parser function that has all possible variants as trait. so fn variants(self--impl display) -> [impl FromStr]. Then call that in parser and pass type through to AST. If parser finds Sensor type, that has the same name as one of the enums in display. so it calls the parse function on that variant.
     // let eval = evaluate_code(SRC);
