@@ -158,6 +158,11 @@ fn rm_last<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
     &slice[0..slice.len() - 1]
 }
 
+fn rm_first_and_last<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
+    let slice = lex.slice();
+    &slice[1..slice.len() - 1]
+}
+
 // TODO use Result in this callback for feedback
 fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
     let chars = lex.slice()["play_frames ".len()..]
@@ -277,6 +282,9 @@ enum Token<'a> {
     #[regex(r"\.?\/+[^ \n]*")]
     Path(&'a str),
 
+    #[regex(r#""[^"]+""#, rm_first_and_last)]
+    String(&'a str),
+
     // -- Keywords --
     #[token("if")]
     KwIf,
@@ -344,6 +352,7 @@ impl fmt::Display for Token<'_> {
         match self {
             Self::VarNamespace(ns) => write!(f, "Namespace({:?})", ns),
             Self::Path(path) => write!(f, "Path({:?})", path),
+            Self::String(string) => write!(f, "String({:?})", string),
             Self::FnReset => write!(f, "reset()"),
             // Self::OpInclude => write!(f, "<include>"),
             Self::Comma => write!(f, ","),
@@ -416,10 +425,11 @@ pub enum Unit {
     Way,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Val {
     UnitedVal(UnitVal),
     NumVal(NumVal),
+    StringVal(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -933,13 +943,20 @@ where
         })
         .labelled("way range");
 
-    let value = select! {
+    let numvalue = select! {
             Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i))),
             Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
     }
     .labelled("number value");
 
-    let numberrange = value
+    let value = select! {
+            Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i))),
+            Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
+            Token::String(s) => Rhs::Val(Val::StringVal(s.to_owned())),
+    }
+    .labelled("value");
+
+    let numberrange = numvalue
         .then_ignore(just(Token::OpRange))
         .then(value)
         .try_map(|(from, to), span| match (&from, &to) {
@@ -2309,6 +2326,37 @@ mod tests {
         assert_eq!(*var, Var::from_str("b").unwrap());
         assert_eq!(*rhs, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
     }
+
+    #[test]
+    fn strings() {
+        const SRC: &str = r#"a = "bla""#;
+
+        let eval = evaluate_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        let e = eval.vars.resolve("a");
+        assert!(e.is_ok());
+        let e = e.unwrap();
+        assert!(e.is_some());
+        let rhs = e.unwrap();
+        assert_eq!(rhs, Rhs::Val(Val::StringVal("bla".to_owned())));
+    }
+
+    // #[test]
+    // fn enums() {
+    //     const SRC: &str = r#""a: Sensor = "bla"""#;
+
+    // TODO Give Enum to parser function that has all possible variants as trait. so fn variants(self--impl display) -> [impl FromStr]. Then call that in parser and pass type through to AST. If parser finds Sensor type, that has the same name as one of the enums in display. so it calls the parse function on that variant.
+    // let eval = evaluate_code(SRC);
+    // assert!(eval.is_ok());
+    // let eval = eval.unwrap();
+    // let e = eval.vars.resolve_ns(&["a"]);
+    // let e = e.unwrap();
+    // assert_eq!(e.len(), 1);
+    // let (var, rhs) = &e[0];
+    // assert_eq!(*var, Var::from_str("b").unwrap());
+    // assert_eq!(*rhs, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
+    // }
 
     // // TODO impl
     // // #[test]
