@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     // TODO wait for rules to be set by lh at first
-    let file = std::env::args().nth(1).unwrap_or("./rules.rat".to_owned());
+    let file = std::env::args().nth(1).unwrap_or("./rules.rl".to_owned());
     let rules_file = PathBuf::from_str(&file)?;
     let rats = rlc::evaluate_file(&rules_file, None, None)?; // evaluate entire file at first
     let rules = rats.rules; // TODO shout at user that coord needs rules if empty

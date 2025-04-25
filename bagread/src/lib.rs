@@ -1,13 +1,12 @@
-use std::time::Duration;
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, anyhow};
-use camino::Utf8Path;
-use cdr::{CdrLe, Infinite};
+// use camino::Utf8Path;
+use mcap::{McapError, Message};
 use memmap2::Mmap;
 use nalgebra::{UnitQuaternion, Vector3};
 pub use ros_pointcloud2::PointCloud2Msg;
-use ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2;
+use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
@@ -35,6 +34,46 @@ pub struct ImuMsg {
     pub angular_velocity_covariance: [f64; 9],
     pub linear_acceleration: Vector3<f64>,
     pub linear_acceleration_covariance: [f64; 9],
+}
+
+impl From<Imu> for ImuMsg {
+    fn from(value: Imu) -> Self {
+        Self {
+            header: Header {
+                seq: 0,
+                stamp: TimeMsg {
+                    sec: value.header.stamp.sec,
+                    nanosec: value.header.stamp.nanosec,
+                },
+                frame_id: value.header.frame_id,
+            },
+            timestamp_sec: TimeMsg {
+                sec: value.header.stamp.sec,
+                nanosec: value.header.stamp.nanosec,
+            },
+            orientation: nalgebra::Unit::from_quaternion(nalgebra::Quaternion::from_vector(
+                nalgebra::Vector4::new(
+                    value.orientation.x,
+                    value.orientation.y,
+                    value.orientation.z,
+                    value.orientation.w,
+                ),
+            )),
+            orientation_covariance: value.orientation_covariance,
+            angular_velocity: nalgebra::Vector3::new(
+                value.angular_velocity.x,
+                value.angular_velocity.y,
+                value.angular_velocity.z,
+            ),
+            angular_velocity_covariance: value.angular_velocity_covariance,
+            linear_acceleration: nalgebra::Vector3::new(
+                value.linear_acceleration.x,
+                value.linear_acceleration.y,
+                value.linear_acceleration.z,
+            ),
+            linear_acceleration_covariance: value.linear_acceleration_covariance,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -226,8 +265,185 @@ pub enum SensorType {
 }
 
 pub enum BagMsg {
-    Cloud(ros_pointcloud2::PointCloud2Msg),
+    Cloud(PointCloud2Msg),
     Imu(ImuMsg),
+}
+
+fn collect_until_count(
+    iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
+    metadata: &Metadata,
+    send_sensor: SensorType,
+    until_sensor: Option<SensorType>,
+    until_count: usize,
+) -> anyhow::Result<Vec<BagMsg>> {
+    let mut counter = 0;
+    let mut msgs = Vec::new();
+
+    let stop_topics = until_sensor.map(|st| match st {
+        SensorType::Lidar { topic } => vec![topic],
+        SensorType::Imu { topic } => vec![topic],
+        SensorType::Mixed { topics } => topics,
+    });
+
+    let mut iter = iter.peekable();
+
+    loop {
+        match iter.peek() {
+            Some(msg) => {
+                let msg = msg
+                    .as_ref()
+                    .map_err(|e| anyhow!("Could not read mcap: {e}"))?;
+
+                match &stop_topics {
+                    Some(stop_topics) => {
+                        if stop_topics.contains(&msg.channel.topic) {
+                            counter += 1;
+                            if counter >= until_count {
+                                return Ok(msgs);
+                            }
+                        }
+                    }
+                    None => {}
+                };
+
+                let msgtype = metadata
+                    .get_topic_meta(&msg.channel.topic)
+                    .ok_or(anyhow!("Topic does not exist."))?;
+
+                let send_topics = match &send_sensor {
+                    SensorType::Lidar { topic } => vec![topic.clone()],
+                    SensorType::Imu { topic } => vec![topic.clone()],
+                    SensorType::Mixed { topics } => topics.clone(),
+                };
+
+                if send_topics.contains(&msgtype.name) {
+                    // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
+                    let len_before = msgs.len();
+                    match send_sensor {
+                        SensorType::Lidar { topic: _ } => {
+                            let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            msgs.push(BagMsg::Cloud(dec.into()));
+                        }
+                        SensorType::Imu { topic: _ } => {
+                            let dec = cdr::deserialize::<Imu>(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                            msgs.push(BagMsg::Imu(dec.into()));
+                        }
+                        SensorType::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
+                            "sensor_msgs/msg/Imu" => {
+                                let dec = cdr::deserialize::<Imu>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                                msgs.push(BagMsg::Imu(dec.into()));
+                            }
+                            "sensor_msgs/msg/PointCloud2" => {
+                                let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                                msgs.push(BagMsg::Cloud(dec.into()));
+                            }
+                            _ => {}
+                        },
+                    }
+
+                    if stop_topics.is_none() && len_before != msgs.len() {
+                        counter += 1;
+                    }
+
+                    if counter >= until_count {
+                        return Ok(msgs);
+                    }
+                }
+            }
+            None => break,
+        }
+
+        let _ = iter.next(); // consume
+    }
+
+    return Ok(msgs);
+}
+
+// collect from a specific type until a time has passed inside the bagfile time span
+// TODO if not given variable but a time, use that time as frequency and just publish it without waiting for a variable
+fn collect_until_time(
+    iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
+    metadata: &Metadata,
+    send_sensor: SensorType,
+    until_time: std::time::Duration,
+) -> anyhow::Result<Vec<BagMsg>> {
+    let dur = until_time.as_nanos();
+    let mut start_time = None;
+    let mut msgs = Vec::new();
+
+    let mut iter = iter.peekable();
+
+    loop {
+        match iter.peek() {
+            Some(msg) => {
+                let msg = msg
+                    .as_ref()
+                    .map_err(|e| anyhow!("Could not read mcap: {e}"))?;
+                if let Some(tstart) = start_time {
+                    if tstart + dur < msg.publish_time as u128 {
+                        return Ok(msgs);
+                    }
+                } else {
+                    start_time.replace(msg.publish_time as u128);
+                }
+
+                let msgtype = metadata
+                    .get_topic_meta(&msg.channel.topic)
+                    .ok_or(anyhow!("Topic does not exist."))?;
+
+                let send_topics = match &send_sensor {
+                    SensorType::Lidar { topic } => vec![topic.clone()],
+                    SensorType::Imu { topic } => vec![topic.clone()],
+                    SensorType::Mixed { topics } => topics.clone(),
+                };
+
+                if send_topics.contains(&msgtype.name) {
+                    // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
+                    match send_sensor {
+                        SensorType::Lidar { topic: _ } => {
+                            let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                            msgs.push(BagMsg::Cloud(dec.into()));
+                        }
+                        SensorType::Imu { topic: _ } => {
+                            let dec = cdr::deserialize::<Imu>(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                            msgs.push(BagMsg::Imu(dec.into()));
+                        }
+                        SensorType::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
+                            "sensor_msgs/msg/Imu" => {
+                                let dec = cdr::deserialize::<Imu>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                                msgs.push(BagMsg::Imu(dec.into()));
+                            }
+                            "sensor_msgs/msg/PointCloud2" => {
+                                let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                                msgs.push(BagMsg::Cloud(dec.into()));
+                            }
+                            _ => {}
+                        },
+                    }
+                }
+            }
+            None => break,
+        }
+
+        let _ = iter.next(); // consume
+    }
+
+    return Ok(msgs);
 }
 
 impl Bagfile {
@@ -237,48 +453,26 @@ impl Bagfile {
                 let stream = mcap::MessageStream::new(buffer)?;
                 let iter = stream.skip(self.cursor);
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
-                Ok(match kind {
-                    PlayKindUnited::SensorCount { sensor, count } => match sensor {
-                        SensorType::Lidar { topic } => {
-                            let mut lidar_counter = 0;
-                            let mut msgs = Vec::new();
-
-                            for msg in iter {
-                                if lidar_counter >= count {
-                                    return Ok(msgs);
-                                }
-                                let msg = msg?;
-                                if msg.channel.topic == topic {
-                                    let msgtype = metadata
-                                        .get_topic_meta(&msg.channel.topic)
-                                        .ok_or(anyhow!("Topic does not exist."))?;
-                                    if msgtype.topic_type != "sensor_msgs/msg/PointCloud2" {
-                                        return Err(anyhow!("Lidar topic must be PointCloud2"));
-                                    }
-
-                                    lidar_counter += 1;
-
-                                    // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
-                                    let dec = cdr::deserialize::<PointCloud2>(&msg.data)
-                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-
-                                    msgs.push(BagMsg::Cloud(dec.into()));
-                                }
-                            }
-
-                            return Ok(msgs);
-                        }
-                        _ => {
-                            vec![]
-                        }
-                    },
+                match kind {
+                    PlayKindUnited::SensorCount { sensor, count } => {
+                        collect_until_count(iter, metadata, sensor, None, count)
+                    }
                     PlayKindUnited::UntilSensorCount {
                         sending,
                         until_sensor,
                         until_count,
-                    } => todo!(),
-                    PlayKindUnited::UntilTime { sending, duration } => todo!(),
-                })
+                    } => collect_until_count(
+                        iter,
+                        metadata,
+                        sending,
+                        Some(until_sensor),
+                        until_count,
+                    ),
+
+                    PlayKindUnited::UntilTime { sending, duration } => {
+                        collect_until_time(iter, metadata, sending, duration)
+                    }
+                }
             }
             None => Err(anyhow!("Not yet initialized.")),
         }
@@ -406,18 +600,34 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag
-            .next(PlayKindUnited::SensorCount {
-                sensor: SensorType::Lidar {
-                    topic: "/ouster/points".to_owned(),
-                },
-                count: 1,
-            })
-            .unwrap();
+        let clouds = bag.next(PlayKindUnited::SensorCount {
+            sensor: SensorType::Lidar {
+                topic: "/ouster/points".to_owned(),
+            },
+            count: 1,
+        });
 
-        // assert!(clouds.is_ok());
-        // let clouds = clouds.unwrap();
+        assert!(clouds.is_ok());
+        let clouds = clouds.unwrap();
+        assert_eq!(clouds.len(), 1);
+    }
 
-        // assert_eq!(clouds.len(), 1);
+    #[test]
+    fn bag_read_time() {
+        let path = "../dlg_cut";
+        let mut bag = Bagfile::default();
+        let res = bag.reset(Some(path));
+        assert!(res.is_ok());
+
+        let clouds = bag.next(PlayKindUnited::UntilTime {
+            sending: SensorType::Lidar {
+                topic: "/ouster/points".to_owned(),
+            },
+            duration: std::time::Duration::from_millis(50),
+        });
+
+        assert!(clouds.is_ok());
+        let clouds = clouds.unwrap();
+        assert_eq!(clouds.len(), 1);
     }
 }
