@@ -339,13 +339,13 @@ impl Sea {
                                     socket2::Socket::from(client_stream.into_std().unwrap());
                                 socket.set_keepalive(true).unwrap();
 
-                                socket
-                                    .set_tcp_keepalive(
-                                        &socket2::TcpKeepalive::new()
-                                            .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
-                                            .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
-                                    )
-                                    .unwrap();
+                                // socket
+                                //     .set_tcp_keepalive(
+                                //         &socket2::TcpKeepalive::new()
+                                //             .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
+                                //             .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
+                                //     )
+                                //     .unwrap();
                                 socket
                                     .set_linger(Some(std::time::Duration::from_secs(30)))
                                     .unwrap();

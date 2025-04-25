@@ -6,7 +6,7 @@ use pnet::datalink::{self, NetworkInterface};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
-        TcpListener, UdpSocket,
+        UdpSocket,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
     },
 };
@@ -14,10 +14,9 @@ use tokio::{
 use crate::{
     ShipKind, ShipName, VariableType,
     net::{
-        CLIENT_HEARTBEAT_TCP_INTERVAL, CLIENT_HEARTBEAT_TCP_TIMEOUT, CLIENT_LISTEN_PORT,
-        CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL, CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT,
-        CLIENT_TO_CLIENT_TIMEOUT, CONTROLLER_CLIENT_ID, Header, PROTO_IDENTIFIER, Packet,
-        PacketKind, Sea,
+        CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
+        CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT, CLIENT_TO_CLIENT_TIMEOUT, CONTROLLER_CLIENT_ID,
+        Header, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
     },
 };
 
@@ -111,13 +110,13 @@ impl Client {
 
                         let socket = socket2::Socket::from(stream.into_std().unwrap());
                         socket.set_keepalive(true).unwrap();
-                        socket
-                            .set_tcp_keepalive(
-                                &socket2::TcpKeepalive::new()
-                                    .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
-                                    .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
-                            )
-                            .unwrap();
+                        // socket
+                        //     .set_tcp_keepalive(
+                        //         &socket2::TcpKeepalive::new()
+                        //             .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
+                        //             .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
+                        //     )
+                        //     .unwrap();
                         socket
                             .set_linger(Some(std::time::Duration::from_secs(30)))
                             .unwrap();
