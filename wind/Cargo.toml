@@ -15,6 +15,7 @@ nalgebra.workspace = true
 tokio.workspace = true
 serde.workspace = true
 bincode.workspace = true
+rlc.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 async-trait.workspace = true

@@ -15,6 +15,7 @@ nalgebra.workspace = true
 tokio.workspace = true
 serde.workspace = true
 rlc.workspace = true
+bagread.workspace = true
 bincode.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
@@ -22,6 +23,7 @@ crossterm = { version = "0.28.1", features = ["event-stream"] }
 futures = "0.3.31"
 ratatui = "0.29.0"
 rosbag2-rs = "0.2.1"
+chrono = "0.4.40"
 
 [profile.release]
 lto = true          # Link Time Optimization

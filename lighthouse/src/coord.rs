@@ -19,7 +19,7 @@ impl Network {
     }
 }
 
-use rlc::{ActionPlan, COMPARE_NODE_NAME};
+use rlc::{ActionPlan, COMPARE_NODE_NAME, Evaluated, Rules, VariableHistory};
 use sea::Coordinator;
 
 #[derive(Debug)]
@@ -50,18 +50,29 @@ enum LighthouseTask {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    // TODO wait for rules to be set by lh at first
-    let file = std::env::args().nth(1).unwrap_or("./rules.rl".to_owned());
-    let rules_file = PathBuf::from_str(&file)?;
-    let rats = rlc::evaluate_file(&rules_file, None, None)?; // evaluate entire file at first
-    let rules = rats.rules; // TODO shout at user that coord needs rules if empty
+    // rules optional at startup. if no rules, still can handle wind
 
+    let eval = if let Some(file) = std::env::args().nth(1) {
+        let rules_file = PathBuf::from_str(&file)?;
+        rlc::compile_file(&rules_file, None, None)? // evaluate entire file at first
+    // rats.rules // TODO shout at user that coord needs rules if empty
+    } else {
+        Evaluated {
+            rules: Rules::new(),
+            wind: vec![],
+            vars: VariableHistory::new(vec![]),
+        }
+    };
+
+    let rules = eval.rules;
     let mut clients = HashSet::new();
     for (_, inner_clients) in rules.raw().iter() {
         inner_clients.iter().for_each(|client| {
             clients.insert(client.ship.clone());
         });
     }
+
+    // find all winds using variables
 
     // TODO On exit: disconnect all members of the network.
     // only use the rats that are mentioned. filter out the rest.
@@ -190,6 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             sea::ShipKind::Wind(_name) => {
                                 // TODO WIND... needs to send to every wind that is added here via name, so we need a channel that awaits all expected winds (or currently connected but then its race condition) and this needs to be managed here. in the main code the wind can only be blown after all are connected
                                 while let Some(data) = wind_rx.recv().await {
+                                    info!("received wind");
                                     for wind in network.winds.iter() {
                                         coord_tx_new_client
                                             .send(LighthouseTask::SendWind {

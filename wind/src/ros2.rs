@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+use std::str::FromStr;
+
 use ros2_client::ros2;
 use ros2_client::{NodeName, NodeOptions};
 use ros2_interfaces_jazzy::geometry_msgs::msg::Vector3;
@@ -76,18 +79,79 @@ impl From<crate::Qos> for ros2::QosPolicies {
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let wind_name = get_env_or_default("wind_name", "turbine-ros1")?;
+    let wind_name = get_env_or_default("wind_name", "turbine_ros2")?;
+    let rlc_file = if let Some(file) = std::env::args().nth(1) {
+        file
+    } else {
+        get_env_or_default("CONFIG_PATH", "./wind_ros2.rl")?
+    };
 
-    let cloud_topic = get_env_or_default("CLOUD_TOPIC", "/wind_cloud")?;
-    let cloud_qos = get_env_or_default("CLOUD_QOS", "sensor")?;
-    let cloud_qos = Qos::try_from(cloud_qos)?;
+    let eval = rlc::compile_file(&PathBuf::from_str(&rlc_file)?, None, None)?;
 
-    let imu_topic = get_env_or_default("IMU_TOPIC", "/wind_imu")?;
-    let imu_qos = get_env_or_default("IMU_QOS", "sensor")?;
-    let imu_qos = Qos::try_from(imu_qos)?;
+    let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
+
+    let imu_topic =
+        rlc_wind_ns
+            .resolve("_imu.topic")?
+            .map_or(Ok("wind_imu".to_owned()), |rhs| {
+                Ok(match rhs {
+                    rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
+                    _ => {
+                        return Err(anyhow!("Unexpected type for _imu.topic"));
+                    }
+                })
+            })?;
+
+    let imu_qos = Qos::try_from(rlc_wind_ns.resolve("_imu.qos")?.map_or(
+        Ok("sensor".to_owned()),
+        |rhs| {
+            Ok(match rhs {
+                rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
+                _ => {
+                    return Err(anyhow!("Unexpected type for _imu.qos"));
+                }
+            })
+        },
+    )?)?;
+
+    let cloud_topic =
+        rlc_wind_ns
+            .resolve("_lidar.topic")?
+            .map_or(Ok("wind_lidar".to_owned()), |rhs| {
+                Ok(match rhs {
+                    rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
+                    _ => {
+                        return Err(anyhow!(
+                            "Unexpected type for _lidar.topic, expected String."
+                        ));
+                    }
+                })
+            })?;
+
+    let cloud_qos = Qos::try_from(rlc_wind_ns.resolve("_lidar.qos")?.map_or(
+        Ok("sensor".to_owned()),
+        |rhs| {
+            Ok(match rhs {
+                rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
+                _ => {
+                    return Err(anyhow!("Unexpected type for _lidar.qos, expected String."));
+                }
+            })
+        },
+    )?)?;
+
+    let namespace = rlc_wind_ns
+        .resolve("namespace")?
+        .map_or(Ok("/wind".to_owned()), |rhs| {
+            Ok(match rhs {
+                rlc::Rhs::Path(topic) => topic,
+                _ => {
+                    return Err(anyhow!("Unexpected type for _lidar.topic, expected Path."));
+                }
+            })
+        })?;
 
     let ctx = ros2_client::Context::new()?;
-    let namespace = wind_name.clone();
     let node_name = wind_name + "_node";
     let mut node = ctx.new_node(
         NodeName::new(&namespace, &node_name)?,

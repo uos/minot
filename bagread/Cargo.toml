@@ -10,6 +10,7 @@ include.workspace = true
 [dependencies]
 mcap = "0.17.0"
 anyhow.workspace = true
+rlc.workspace = true
 camino = "1.0"
 memmap2 = "0.9.5"
 tempfile = "3.3"

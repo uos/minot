@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rules = match &file {
         Some(path) => {
-            let rats = rlc::evaluate_file(&path, None, None)?; // evaluate entire file at first
+            let rats = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
             rats.rules
         }
         None => rlc::Rules::new(),

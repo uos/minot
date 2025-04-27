@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     error::{self},
     fmt::Display,
     i8,
@@ -8,12 +9,15 @@ use std::{
 };
 
 use anyhow::{Error, anyhow};
+use bagread::PlayKindUnitedRich;
+use chrono::{DateTime, Local};
 use ratatui::{
     layout::Constraint,
     style::Stylize,
     widgets::{Cell, Row, ScrollbarState, Table, TableState},
 };
-use sea::net::PacketKind;
+use rlc::Rhs;
+use sea::{WindData, net::PacketKind};
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -668,10 +672,10 @@ pub const COMPARE_POPUP_TITLE_NOERR: &'static str = "CompareCursor to row[:col]"
 #[derive(Debug, Default)]
 pub enum WindMode {
     #[default]
-    Inactive, // only if no wind connected. TODO get this info from coordinator. Set automatically to Active as soon as some wind is connected
+    // Inactive, // only if no wind connected. TODO get this info from coordinator. Set automatically to Active as soon as some wind is connected
+    Inactive, // shown but not changable
     Active,
-    NormalCursor,
-    Select,
+    ActiveSelect,
 }
 
 #[derive(Debug)]
@@ -684,19 +688,23 @@ pub struct WindCursor {
     pub popup_buffer: Vec<char>,
     wind_send_state: WindSendState,
     wind_file_path: PathBuf,
+    bagfile: bagread::Bagfile,
+    variable_cache: HashMap<String, rlc::Rhs>,
 }
 
 impl Default for WindCursor {
     fn default() -> Self {
         Self {
-            line_start: 0,
-            line_end: 0,
+            line_start: 1,
+            line_end: 1,
             wind_send_state: WindSendState::default(),
             showing_popup: false,
             popup_buffer: Vec::new(),
             popup_title: WIND_POPUP_TITLE_NOERR,
             mode: WindMode::default(),
-            wind_file_path: PathBuf::from("./lh.rat"),
+            wind_file_path: PathBuf::from("./wind.rl"),
+            bagfile: bagread::Bagfile::default(),
+            variable_cache: HashMap::new(),
         }
     }
 }
@@ -705,15 +713,12 @@ impl Display for WindCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.mode {
             WindMode::Inactive => {
-                f.write_str("")?;
-            }
-            WindMode::Active => {
                 f.write_str("W")?;
             }
-            WindMode::NormalCursor => {
+            WindMode::Active => {
                 f.write_str("|W")?;
             }
-            WindMode::Select => {
+            WindMode::ActiveSelect => {
                 f.write_str("[W]")?;
             }
         }
@@ -740,6 +745,14 @@ impl WindCursor {
     fn with_rats(mut self, wind_file_path: PathBuf) -> Self {
         self.wind_file_path = wind_file_path;
         self
+    }
+
+    fn get_var_from_cache(&self, var: &str) -> Option<&rlc::Rhs> {
+        self.variable_cache.get(var)
+    }
+
+    fn add_var_to_cache(&mut self, var: String, val: rlc::Rhs) {
+        self.variable_cache.insert(var, val);
     }
 }
 
@@ -1537,10 +1550,63 @@ impl Default for ClientCompare {
     }
 }
 
-/// Application.
+#[derive(Debug, Default)]
+pub struct InfoView {
+    pub shown: bool,
+    pub log: Vec<String>,
+}
+
+fn get_current_time() -> String {
+    let now: DateTime<Local> = Local::now();
+    let formatted_time = now.format("%H:%M:%S").to_string();
+    formatted_time
+}
+
+pub(crate) const INFO_LINES: usize = 8;
+
+// TODO fix text not rendered coloured because info is lost with String. Needs "Line" from ratatui
+impl InfoView {
+    pub fn log_info(&mut self, log: &str) {
+        let txt = "INFO".blue();
+        self.log
+            .push(format!("[{txt}] {} -- {log}", get_current_time()));
+
+        if self.log.len() > INFO_LINES {
+            self.log.remove(1);
+        }
+    }
+    pub fn log_error(&mut self, log: &str) {
+        let txt = "ERROR".red();
+        self.log
+            .push(format!("[{txt}] {} - {log}", get_current_time()));
+
+        if self.log.len() > INFO_LINES {
+            self.log.remove(1);
+        }
+    }
+    pub fn log_debug(&mut self, log: &str) {
+        let txt = "DEBUG";
+        self.log
+            .push(format!("[{txt}] {} -- {log}", get_current_time()));
+
+        if self.log.len() > INFO_LINES {
+            self.log.remove(1);
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        self.shown = !self.shown;
+    }
+
+    pub fn render(&self) -> String {
+        self.log.join("\n")
+    }
+}
+
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
+    pub info_view: InfoView,
     pub coordinator: Coordinator,
     pub history: Arc<RwLock<History>>, // 0 var1; -1 var2 etc.
     pub wind_cursor: WindCursor,
@@ -1589,6 +1655,7 @@ impl App {
             compare: ClientCompare::default(),
             send_coordinator: sender,
             rats_file: rats,
+            info_view: InfoView::default(),
         }
     }
 
@@ -1620,6 +1687,10 @@ impl App {
 
     pub fn render_wind_cursor(&self) -> String {
         format!("{}", self.wind_cursor)
+    }
+
+    pub fn toggle_info_window(&mut self) {
+        self.info_view.toggle();
     }
 
     pub fn focus_right_rat(&mut self) {
@@ -1719,14 +1790,16 @@ impl App {
 
     pub fn wind_cursor(&mut self, direction: VerticalDirection) {
         match self.wind_cursor.mode {
-            // TODO vs active mode
-            WindMode::NormalCursor => match direction {
+            WindMode::Active => match direction {
                 VerticalDirection::Up => {
-                    self.wind_cursor.line_start += 1;
+                    self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_sub(1);
+                    if self.wind_cursor.line_start == 0 {
+                        self.wind_cursor.line_start = 1;
+                    }
                     self.wind_cursor.line_end = self.wind_cursor.line_start;
                 }
                 VerticalDirection::Down => {
-                    self.wind_cursor.line_start -= 1;
+                    self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_add(1);
                     self.wind_cursor.line_end = self.wind_cursor.line_start;
                 }
                 VerticalDirection::Row(line) => {
@@ -1737,12 +1810,18 @@ impl App {
                     self.wind_cursor.line_end = self.wind_cursor.line_start;
                 }
             },
-            WindMode::Select => match direction {
+            WindMode::ActiveSelect => match direction {
                 VerticalDirection::Up => {
                     if self.wind_cursor.line_end == self.wind_cursor.line_start {
                         self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_sub(1);
+                        if self.wind_cursor.line_start == 0 {
+                            self.wind_cursor.line_start = 1;
+                        }
                     } else {
                         self.wind_cursor.line_end = self.wind_cursor.line_end.saturating_sub(1);
+                        if self.wind_cursor.line_end == 0 {
+                            self.wind_cursor.line_end = 1;
+                        }
                     }
                 }
                 VerticalDirection::Down => {
@@ -1750,7 +1829,7 @@ impl App {
                 }
                 VerticalDirection::Row(line) => {
                     self.wind_cursor.line_end = line
-                        .clamp(0, u32::MAX as usize)
+                        .clamp(1, u32::MAX as usize)
                         .try_into()
                         .expect("just clamped");
                 }
@@ -1759,22 +1838,151 @@ impl App {
         };
     }
 
+    fn topic_from_eval_or_default(
+        eval: &rlc::Evaluated,
+        path: &str,
+        default: &str,
+    ) -> anyhow::Result<String> {
+        let topic = eval.vars.resolve(path)?;
+        if let Some(topic) = topic {
+            match topic {
+                Rhs::Path(topic) | Rhs::Val(rlc::Val::StringVal(topic)) => Ok(topic),
+                _ => {
+                    return Err(anyhow!("Expected String or Path for sending lidar topic"));
+                }
+            }
+        } else {
+            Ok(default.to_owned())
+        }
+    }
+
     pub async fn wind_fire_at_current_cursor(&mut self) {
-        // just evaluate this line, read the wind function and send to coord
         let lines = self.wind_cursor.selected_lines();
-        // read file
-        // rlc::evaluate_file(path, start_line, end_line)
-        // TODO
-        todo!()
+        let start_line = lines.first().map(|l| *l as usize);
+        let end_line = lines.last().map(|l| *l as usize);
+        let rats_file = self.wind_cursor.wind_file_path.clone();
+
+        // TODO to thread and wait for end
+        // TODO set wind indicators while processing
+        let eval = rlc::compile_file(&rats_file, start_line, end_line);
+        let eval = match eval {
+            Ok(eval) => eval,
+            Err(e) => {
+                self.info_view.log_error(&format!(
+                    "Could not compile ratslang file {rats_file:?}: {e}"
+                ));
+                return;
+            }
+        };
+        self.info_view
+            .log_info(&format!("compiled {start_line:?}-{end_line:?}"));
+
+        self.info_view.log_info(&format!("{:?}", eval));
+
+        for windfn in eval.wind.iter() {
+            match windfn {
+                rlc::WindFunction::Reset(path) => {
+                    match self.wind_cursor.bagfile.reset(Some(path)) {
+                        Err(e) => {
+                            self.info_view
+                                .log_error(&format!("Could not reset bagfile path {path:?}: {e}"));
+                            return;
+                        }
+                        Ok(_) => {
+                            self.info_view.log_info(&format!("read bag {path}"));
+                        }
+                    }
+                }
+                // TODO add "at" to logic
+                rlc::WindFunction::SendFrames { kind, at } => {
+                    let sending_lidar_topic =
+                        match Self::topic_from_eval_or_default(&eval, "_bag.lidar.topic", "/cloud")
+                        {
+                            Ok(topic) => topic,
+                            Err(e) => {
+                                self.info_view.log_error(&format!("{e}"));
+                                return;
+                            }
+                        };
+                    self.info_view
+                        .log_info(&format!("lidar topic: {sending_lidar_topic}"));
+                    let sending_imu_topic =
+                        match Self::topic_from_eval_or_default(&eval, "_bag.imu.topic", "/imu") {
+                            Ok(topic) => topic,
+                            Err(e) => {
+                                self.info_view.log_error(&format!("{e}"));
+                                return;
+                            }
+                        };
+
+                    self.info_view
+                        .log_info(&format!("imu topic: {sending_imu_topic}"));
+                    let bagmsgs = self
+                        .wind_cursor
+                        .bagfile
+                        .next(&PlayKindUnitedRich::with_topic(
+                            kind,
+                            &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
+                        ));
+
+                    let bagmsgs = match bagmsgs {
+                        Ok(msgs) => msgs,
+                        Err(e) => {
+                            self.info_view.log_error(&format!("{e}"));
+                            return;
+                        }
+                    };
+
+                    for msg in bagmsgs {
+                        let wind = match msg {
+                            bagread::BagMsg::Cloud(point_cloud2_msg) => {
+                                WindData::Pointcloud(point_cloud2_msg)
+                            }
+                            bagread::BagMsg::Imu(imu_msg) => WindData::Imu(sea::ImuMsg {
+                                header: sea::Header {
+                                    seq: imu_msg.header.seq,
+                                    stamp: sea::TimeMsg {
+                                        sec: imu_msg.header.stamp.sec,
+                                        nanosec: imu_msg.header.stamp.nanosec,
+                                    },
+                                    frame_id: imu_msg.header.frame_id,
+                                },
+                                timestamp_sec: sea::TimeMsg {
+                                    sec: imu_msg.timestamp_sec.sec,
+                                    nanosec: imu_msg.timestamp_sec.nanosec,
+                                },
+                                orientation: imu_msg.orientation,
+                                orientation_covariance: imu_msg.orientation_covariance,
+                                angular_velocity: imu_msg.angular_velocity,
+                                angular_velocity_covariance: imu_msg.angular_velocity_covariance,
+                                linear_acceleration: imu_msg.linear_acceleration,
+                                linear_acceleration_covariance: imu_msg
+                                    .linear_acceleration_covariance,
+                            }),
+                        };
+
+                        let send = self.send_coordinator.send(PacketKind::Wind(wind)).await;
+                        match send {
+                            Ok(_) => {}
+                            Err(e) => {
+                                self.info_view
+                                    .log_error(&format!("Could not send Wind to coordinator: {e}"));
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // TODO change display to show what is selected and that mode is active
     pub fn wind_toggle_select(&mut self) {
         self.wind_cursor.mode = match self.wind_cursor.mode {
-            WindMode::Active => WindMode::Active,
-            WindMode::NormalCursor => WindMode::Select,
-            WindMode::Select => WindMode::NormalCursor,
             WindMode::Inactive => WindMode::Inactive,
+            WindMode::Active => WindMode::ActiveSelect,
+            WindMode::ActiveSelect => WindMode::Active,
+            // WindMode::Inactive => WindMode::Inactive,
         };
     }
 
@@ -1784,24 +1992,25 @@ impl App {
 
     pub fn wind_toggle_mode(&mut self) {
         self.wind_cursor.mode = match self.wind_cursor.mode {
-            WindMode::Active => WindMode::NormalCursor,
-            WindMode::NormalCursor => WindMode::Active,
-            WindMode::Select => {
+            WindMode::Inactive => WindMode::Active,
+            WindMode::Active => WindMode::Inactive,
+            WindMode::ActiveSelect => {
                 self.wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
                 self.wind_cursor.popup_buffer.clear();
                 self.wind_cursor.showing_popup = false;
-                WindMode::Active
-            }
-            WindMode::Inactive => WindMode::Inactive,
+                WindMode::Inactive
+            } // WindMode::Inactive => WindMode::Inactive,
         };
+        self.info_view
+            .log_info(&format!("{:?}", self.wind_cursor.mode));
     }
 
     pub fn wind_mode(&mut self) -> bool {
         match self.wind_cursor.mode {
-            WindMode::Active => false, // TODO active vs normalcursor not quite clear
-            WindMode::NormalCursor => true,
-            WindMode::Select => true,
             WindMode::Inactive => false,
+            WindMode::Active => true,
+            WindMode::ActiveSelect => true,
+            // WindMode::Inactive => false,
         }
     }
 

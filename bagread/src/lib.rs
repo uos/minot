@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use mcap::{McapError, Message};
 use memmap2::Mmap;
 use nalgebra::{UnitQuaternion, Vector3};
+use rlc::{PlayKindUnited, SensorType};
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
@@ -231,7 +232,7 @@ fn validate_support(data: &Metadata) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Bagfile {
     bagfile_name: Option<std::path::PathBuf>,
     cursor: usize,
@@ -240,49 +241,116 @@ pub struct Bagfile {
 }
 
 // TODO change in rlc lib.rs to use this here?
-#[derive(Debug, PartialEq, Clone)]
-pub enum PlayKindUnited {
-    SensorCount {
-        sensor: SensorType,
-        count: usize,
-    },
-    UntilSensorCount {
-        sending: SensorType,
-        until_sensor: SensorType,
-        until_count: usize,
-    },
-    UntilTime {
-        sending: SensorType,
-        duration: std::time::Duration,
-    },
-}
+// #[derive(Debug, PartialEq, Clone)]
+// pub enum PlayKindUnited {
+//     SensorCount {
+//         sensor: SensorType,
+//         count: usize,
+//     },
+//     UntilSensorCount {
+//         sending: SensorType,
+//         until_sensor: SensorType,
+//         until_count: usize,
+//     },
+//     UntilTime {
+//         sending: SensorType,
+//         duration: std::time::Duration,
+//     },
+// }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum SensorType {
-    Lidar { topic: String },
-    Imu { topic: String },
-    Mixed { topics: Vec<String> },
-}
+// #[derive(Debug, PartialEq, Clone)]
+// pub enum SensorType {
+//     Lidar { topic: String },
+//     Imu { topic: String },
+//     Mixed { topics: Vec<String> },
+// }
 
 pub enum BagMsg {
     Cloud(PointCloud2Msg),
     Imu(ImuMsg),
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum PlayKindUnitedRich {
+    SensorCount {
+        sensor: SensorTypeRich,
+        count: usize,
+    },
+    UntilSensorCount {
+        sending: SensorTypeRich,
+        until_sensor: SensorTypeRich,
+        until_count: usize,
+    },
+    UntilTime {
+        sending: SensorTypeRich,
+        duration: std::time::Duration,
+    },
+}
+
+impl PlayKindUnitedRich {
+    pub fn with_topic(src: &PlayKindUnited, topics: &[&str]) -> Self {
+        match src {
+            PlayKindUnited::SensorCount { sensor, count } => PlayKindUnitedRich::SensorCount {
+                sensor: SensorTypeRich::with_topic(sensor, topics),
+                count: *count,
+            },
+            PlayKindUnited::UntilSensorCount {
+                sending,
+                until_sensor,
+                until_count,
+            } => PlayKindUnitedRich::UntilSensorCount {
+                sending: SensorTypeRich::with_topic(sending, topics),
+                until_sensor: SensorTypeRich::with_topic(until_sensor, topics),
+                until_count: *until_count,
+            },
+            PlayKindUnited::UntilTime { sending, duration } => PlayKindUnitedRich::UntilTime {
+                sending: SensorTypeRich::with_topic(sending, topics),
+                duration: *duration,
+            },
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum SensorTypeRich {
+    Lidar { topic: String },
+    Imu { topic: String },
+    Mixed { topics: Vec<String> },
+}
+
+impl SensorTypeRich {
+    pub fn with_topic(src: &SensorType, topics: &[&str]) -> Self {
+        match src {
+            SensorType::Lidar => SensorTypeRich::Lidar {
+                topic: (*topics[0]).to_owned(),
+            },
+            SensorType::Imu => SensorTypeRich::Imu {
+                topic: (*topics[1]).to_owned(),
+            },
+            SensorType::Mixed => SensorTypeRich::Mixed {
+                topics: topics
+                    .into_iter()
+                    .map(|a| (*a).to_owned())
+                    .collect::<Vec<_>>(),
+            },
+        }
+    }
+}
+
 fn collect_until_count(
     iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
     metadata: &Metadata,
-    send_sensor: SensorType,
-    until_sensor: Option<SensorType>,
+    send_sensor: &SensorTypeRich,
+    until_sensor: Option<&SensorTypeRich>,
     until_count: usize,
 ) -> anyhow::Result<Vec<BagMsg>> {
     let mut counter = 0;
     let mut msgs = Vec::new();
 
     let stop_topics = until_sensor.map(|st| match st {
-        SensorType::Lidar { topic } => vec![topic],
-        SensorType::Imu { topic } => vec![topic],
-        SensorType::Mixed { topics } => topics,
+        SensorTypeRich::Lidar { topic } => vec![topic.clone()],
+        SensorTypeRich::Imu { topic } => vec![topic.clone()],
+        SensorTypeRich::Mixed { topics } => topics.clone(),
     });
 
     let mut iter = iter.peekable();
@@ -311,27 +379,27 @@ fn collect_until_count(
                     .ok_or(anyhow!("Topic does not exist."))?;
 
                 let send_topics = match &send_sensor {
-                    SensorType::Lidar { topic } => vec![topic.clone()],
-                    SensorType::Imu { topic } => vec![topic.clone()],
-                    SensorType::Mixed { topics } => topics.clone(),
+                    SensorTypeRich::Lidar { topic } => vec![topic.clone()],
+                    SensorTypeRich::Imu { topic } => vec![topic.clone()],
+                    SensorTypeRich::Mixed { topics } => topics.clone(),
                 };
 
                 if send_topics.contains(&msgtype.name) {
                     // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
                     let len_before = msgs.len();
                     match send_sensor {
-                        SensorType::Lidar { topic: _ } => {
+                        SensorTypeRich::Lidar { topic: _ } => {
                             let dec = cdr::deserialize::<PointCloud2>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             msgs.push(BagMsg::Cloud(dec.into()));
                         }
-                        SensorType::Imu { topic: _ } => {
+                        SensorTypeRich::Imu { topic: _ } => {
                             let dec = cdr::deserialize::<Imu>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                             msgs.push(BagMsg::Imu(dec.into()));
                         }
-                        SensorType::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
+                        SensorTypeRich::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
                             "sensor_msgs/msg/Imu" => {
                                 let dec = cdr::deserialize::<Imu>(&msg.data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
@@ -371,8 +439,8 @@ fn collect_until_count(
 fn collect_until_time(
     iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
     metadata: &Metadata,
-    send_sensor: SensorType,
-    until_time: std::time::Duration,
+    send_sensor: &SensorTypeRich,
+    until_time: &std::time::Duration,
 ) -> anyhow::Result<Vec<BagMsg>> {
     let dur = until_time.as_nanos();
     let mut start_time = None;
@@ -399,27 +467,27 @@ fn collect_until_time(
                     .ok_or(anyhow!("Topic does not exist."))?;
 
                 let send_topics = match &send_sensor {
-                    SensorType::Lidar { topic } => vec![topic.clone()],
-                    SensorType::Imu { topic } => vec![topic.clone()],
-                    SensorType::Mixed { topics } => topics.clone(),
+                    SensorTypeRich::Lidar { topic } => vec![topic.clone()],
+                    SensorTypeRich::Imu { topic } => vec![topic.clone()],
+                    SensorTypeRich::Mixed { topics } => topics.clone(),
                 };
 
                 if send_topics.contains(&msgtype.name) {
                     // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
                     match send_sensor {
-                        SensorType::Lidar { topic: _ } => {
+                        SensorTypeRich::Lidar { topic: _ } => {
                             let dec = cdr::deserialize::<PointCloud2>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                             msgs.push(BagMsg::Cloud(dec.into()));
                         }
-                        SensorType::Imu { topic: _ } => {
+                        SensorTypeRich::Imu { topic: _ } => {
                             let dec = cdr::deserialize::<Imu>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                             msgs.push(BagMsg::Imu(dec.into()));
                         }
-                        SensorType::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
+                        SensorTypeRich::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
                             "sensor_msgs/msg/Imu" => {
                                 let dec = cdr::deserialize::<Imu>(&msg.data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
@@ -447,17 +515,17 @@ fn collect_until_time(
 }
 
 impl Bagfile {
-    pub fn next(&mut self, kind: PlayKindUnited) -> anyhow::Result<Vec<BagMsg>> {
+    pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<BagMsg>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
                 let stream = mcap::MessageStream::new(buffer)?;
                 let iter = stream.skip(self.cursor);
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
                 match kind {
-                    PlayKindUnited::SensorCount { sensor, count } => {
-                        collect_until_count(iter, metadata, sensor, None, count)
+                    PlayKindUnitedRich::SensorCount { sensor, count } => {
+                        collect_until_count(iter, metadata, sensor, None, *count)
                     }
-                    PlayKindUnited::UntilSensorCount {
+                    PlayKindUnitedRich::UntilSensorCount {
                         sending,
                         until_sensor,
                         until_count,
@@ -466,10 +534,10 @@ impl Bagfile {
                         metadata,
                         sending,
                         Some(until_sensor),
-                        until_count,
+                        *until_count,
                     ),
 
-                    PlayKindUnited::UntilTime { sending, duration } => {
+                    PlayKindUnitedRich::UntilTime { sending, duration } => {
                         collect_until_time(iter, metadata, sending, duration)
                     }
                 }
@@ -600,8 +668,8 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(PlayKindUnited::SensorCount {
-            sensor: SensorType::Lidar {
+        let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
+            sensor: SensorTypeRich::Lidar {
                 topic: "/ouster/points".to_owned(),
             },
             count: 1,
@@ -619,8 +687,8 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(PlayKindUnited::UntilTime {
-            sending: SensorType::Lidar {
+        let clouds = bag.next(&PlayKindUnitedRich::UntilTime {
+            sending: SensorTypeRich::Lidar {
                 topic: "/ouster/points".to_owned(),
             },
             duration: std::time::Duration::from_millis(50),

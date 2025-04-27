@@ -23,7 +23,7 @@ fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let wind_name = get_env_or_default("wind_name", "turbine-ros1")?;
+    let wind_name = get_env_or_default("wind_name", "turbine_ros1")?;
     let node_uri = get_env_or_default("NODE_URI", "http://localhost:11311")?;
     let cloud_topic = get_env_or_default("CLOUD_TOPIC", "/wind_cloud")?;
     let imu_topic = get_env_or_default("IMU_TOPIC", "/wind_imu")?;

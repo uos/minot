@@ -28,6 +28,9 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
                 app.quit();
             }
         }
+        KeyCode::Char('?') => {
+            app.toggle_info_window();
+        }
         KeyCode::Char('F') => {
             app.focus_right_rat();
         }

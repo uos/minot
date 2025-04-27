@@ -209,6 +209,7 @@ dependencies = [
  "mcap",
  "memmap2",
  "nalgebra",
+ "rlc",
  "ros2-interfaces-jazzy",
  "ros_pointcloud2",
  "serde",
@@ -1468,7 +1469,9 @@ name = "lighthouse"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bagread",
  "bincode",
+ "chrono",
  "crossterm",
  "env_logger",
  "futures",
@@ -3685,6 +3688,7 @@ dependencies = [
  "env_logger",
  "log",
  "nalgebra",
+ "rlc",
  "ros2-client",
  "ros2-interfaces-jazzy",
  "ros_pointcloud2",

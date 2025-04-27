@@ -194,6 +194,15 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
         frame.render_widget(content, area);
     }
+
+    if app.info_view.shown {
+        let block = Block::bordered().title("Info");
+        let area = popup_area(frame.area(), 60, 2 * crate::app::INFO_LINES as u16);
+        let buffer = app.info_view.render();
+        let content = Paragraph::new(buffer).block(block);
+        frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
+        frame.render_widget(content, area);
+    }
 }
 
 fn popup_area(area: ratatui::layout::Rect, x: u16, y: u16) -> ratatui::layout::Rect {

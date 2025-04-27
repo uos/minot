@@ -19,6 +19,7 @@ log = "0.4.25"
 nalgebra = { version = "0.33.2", features = ["serde-serialize"] }
 ros_pointcloud2 = { version = "0.5.3", git = "https://github.com/stelzo/ros_pointcloud2.git", features = ["serde", "ros2-interfaces-jazzy"] }
 sea = { path = "sea"}
+bagread = { path = "bagread"}
 rlc = { path = "rlc"}
 wind = { path = "wind"}
 serde = { version = "1.0", features = ["derive"] }

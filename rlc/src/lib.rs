@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{path::PathBuf, str::FromStr};
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use anyhow::anyhow;
 use ariadne::{Color, Label, Report, ReportKind, Source};
@@ -206,11 +206,10 @@ fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy, Default)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SensorType {
     Lidar,
     Imu,
-    #[default]
     Mixed,
 }
 
@@ -424,8 +423,8 @@ impl NumVal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit {
-    Time,
-    Way,
+    TimeMilliseconds,
+    WayMillimeter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -448,16 +447,17 @@ pub enum Rhs {
     Path(String),
     // Expr() TODO evaluate so in the end it becomes atomic Rhs
     Val(Val),
+    Array(Vec<Box<Self>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Var {
-    User {
+    Log,
+    Predef {
         name: String,
         namespace: Vec<String>,
     },
-    Log,
-    Predef {
+    User {
         name: String,
         namespace: Vec<String>,
     },
@@ -523,12 +523,12 @@ impl FromStr for Var {
 #[derive(Debug)]
 pub struct Evaluated {
     pub rules: Rules,
-    pub wind: Vec<WindFunctions>,
+    pub wind: Vec<WindFunction>,
     pub vars: VariableHistory,
 }
 
 #[derive(Debug)]
-pub enum WindFunctions {
+pub enum WindFunction {
     Reset(String),
     SendFrames { kind: PlayKindUnited, at: String },
 }
@@ -585,7 +585,10 @@ pub enum StatementKindPass1<'a> {
         kind: PlayKindUnited,
         at: String,
     },
-    VariableNamespaceBlock(Vec<StatementPass1>),
+    VariableNamespaceBlock {
+        ns: Vec<&'a str>,
+        stmts: Vec<Box<StatementKindPass1<'a>>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -596,7 +599,10 @@ pub enum StatementKindOwnedPass1 {
         path: String,
     },
     VariableDef(Statement),
-    VariableNamespaceBlock(Vec<StatementPass1>),
+    VariableNamespaceBlock {
+        ns: Vec<String>,
+        stmts: Vec<Box<StatementKindOwnedPass1>>,
+    },
     Reset(String),
     SendFrames {
         kind: PlayKindUnited,
@@ -612,7 +618,10 @@ pub enum StatementKindOwned {
     SendFrames { kind: PlayKindUnited, at: String },
 }
 
-fn do_pass1(pass1: Vec<StatementKindOwnedPass1>) -> anyhow::Result<Vec<StatementKindOwned>> {
+fn do_pass1(
+    pass1: Vec<StatementKindOwnedPass1>,
+    current_parent: &std::path::Path,
+) -> anyhow::Result<Vec<StatementKindOwned>> {
     let mut out = vec![];
 
     for stmt in pass1 {
@@ -623,25 +632,29 @@ fn do_pass1(pass1: Vec<StatementKindOwnedPass1>) -> anyhow::Result<Vec<Statement
             StatementKindOwnedPass1::VariableDef(statement) => {
                 out.push(StatementKindOwned::VariableDef(statement));
             }
-            StatementKindOwnedPass1::VariableNamespaceBlock(statements) => {
-                for bstmt in statements {
-                    let translated = match bstmt {
-                        StatementPass1::AssignLeft { lhs, rhs } => {
-                            Statement::AssignLeft { lhs, rhs }
-                        }
-                        StatementPass1::AssignRight { lhs, rhs } => {
-                            Statement::AssignRight { lhs, rhs }
-                        }
-                        StatementPass1::Compare { rhs, lhs } => Statement::Compare { rhs, lhs },
-                        StatementPass1::Include { namespace, path } => {
-                            let nast = parse_to_ast(&PathBuf::from_str(&path)?)?;
-                            let nast = ast_add_namespace(&namespace, nast);
-                            out.extend(nast);
-                            continue;
-                        }
-                    };
-                    out.push(StatementKindOwned::VariableDef(translated));
-                }
+            StatementKindOwnedPass1::VariableNamespaceBlock { ns, stmts } => {
+                let v = stmts.into_iter().map(|f| *f).collect::<Vec<_>>();
+
+                let passed = do_pass1(v, current_parent)?;
+                out.extend(
+                    passed
+                        .into_iter()
+                        .map(|t| match t {
+                            StatementKindOwned::VariableDef(statement) => Ok(
+                                StatementKindOwned::VariableDef(statement.add_namespace(&ns)),
+                            ),
+                            _ => Err(anyhow!(
+                                "Only variable statements allowed inside a namespace block."
+                            )),
+                        })
+                        .try_fold(Vec::new(), |mut acc, res| match res {
+                            Ok(ok) => {
+                                acc.push(ok);
+                                Ok(acc)
+                            }
+                            Err(e) => Err(e),
+                        })?,
+                );
             }
             StatementKindOwnedPass1::Reset(rs) => {
                 out.push(StatementKindOwned::Reset(rs));
@@ -650,7 +663,17 @@ fn do_pass1(pass1: Vec<StatementKindOwnedPass1>) -> anyhow::Result<Vec<Statement
                 out.push(StatementKindOwned::SendFrames { kind, at });
             }
             StatementKindOwnedPass1::Include { namespace, path } => {
-                let nast = parse_to_ast(&PathBuf::from_str(&path)?)?;
+                let to_parse = PathBuf::from_str(&path)?;
+                let to_parse = if to_parse.is_relative() {
+                    if to_parse.is_dir() {
+                        return Err(anyhow!("File is a directory: {}", to_parse.display()));
+                    } else {
+                        current_parent.join(path).to_owned()
+                    }
+                } else {
+                    to_parse
+                };
+                let nast = parse_to_ast(&to_parse)?;
                 let nast = ast_add_namespace(&namespace, nast);
                 out.extend(nast);
             }
@@ -660,7 +683,7 @@ fn do_pass1(pass1: Vec<StatementKindOwnedPass1>) -> anyhow::Result<Vec<Statement
     Ok(out)
 }
 
-fn parse_to_ast(path: &std::path::PathBuf) -> anyhow::Result<Vec<StatementKindOwned>> {
+fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned>> {
     let file = std::fs::read_to_string(path);
     let file = match file {
         Ok(file) => Ok(file),
@@ -690,7 +713,11 @@ fn parse_to_ast(path: &std::path::PathBuf) -> anyhow::Result<Vec<StatementKindOw
                 ast.push(expr.into());
             }
 
-            let ast = do_pass1(ast)?; // recursive call
+            let ast = do_pass1(
+                ast,
+                path.parent()
+                    .ok_or(anyhow!("Can not get parent directory of file."))?,
+            )?; // recursive call
             return Ok(ast);
         }
         Err(errs) => {
@@ -716,6 +743,15 @@ fn parse_to_ast(path: &std::path::PathBuf) -> anyhow::Result<Vec<StatementKindOw
 impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
     fn from(value: StatementKindPass1<'a>) -> Self {
         match value {
+            StatementKindPass1::VariableNamespaceBlock { ns, stmts } => {
+                StatementKindOwnedPass1::VariableNamespaceBlock {
+                    ns: ns.into_iter().map(String::from).collect::<Vec<_>>(),
+                    stmts: stmts
+                        .into_iter()
+                        .map(|bstmt| Box::new(StatementKindOwnedPass1::from(*bstmt)))
+                        .collect::<Vec<_>>(),
+                }
+            }
             StatementKindPass1::Rule(rule) => StatementKindOwnedPass1::Rule(RuleOwned::from(rule)),
             StatementKindPass1::VariableDef(statement) => {
                 StatementKindOwnedPass1::VariableDef(statement)
@@ -723,9 +759,6 @@ impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
             StatementKindPass1::Reset(path) => StatementKindOwnedPass1::Reset(path),
             StatementKindPass1::SendFrames { kind, at } => {
                 StatementKindOwnedPass1::SendFrames { kind, at }
-            }
-            StatementKindPass1::VariableNamespaceBlock(statements) => {
-                StatementKindOwnedPass1::VariableNamespaceBlock(statements)
             }
             StatementKindPass1::Include { namespace, path } => {
                 StatementKindOwnedPass1::Include { namespace, path }
@@ -883,7 +916,7 @@ where
                             }
                         }
                     },
-                    unit: Unit::Time,
+                    unit: Unit::TimeMilliseconds,
                 }),
                 to: Val::UnitedVal(UnitVal {
                     val: match to {
@@ -899,7 +932,7 @@ where
                             }
                         }
                     },
-                    unit: Unit::Time,
+                    unit: Unit::TimeMilliseconds,
                 }),
             })
         })
@@ -924,7 +957,7 @@ where
                             }
                         }
                     },
-                    unit: Unit::Way,
+                    unit: Unit::WayMillimeter,
                 }),
                 to: Val::UnitedVal(UnitVal {
                     val: match to {
@@ -940,7 +973,7 @@ where
                             }
                         }
                     },
-                    unit: Unit::Way,
+                    unit: Unit::WayMillimeter,
                 }),
             })
         })
@@ -1018,7 +1051,6 @@ where
                 Rhs::Var(var)
             });
 
-    // TODO parse recursive of other variable that can hold a value
     let term = select! {
         Token::KwLog => Rhs::Var(Var::Log), // TODO maybe not rhs that can be assigned
         Token::Path(p) => Rhs::Path(p.to_owned()),
@@ -1027,10 +1059,22 @@ where
     .labelled("term");
 
     let range = choice((numberrange, timerange, wayrange));
-    let rhs = choice((term, range, value));
+
+    let rhs_array = recursive(|rhs_array| {
+        choice((term.clone(), range.clone(), value.clone(), rhs_array))
+            .separated_by(just(Token::Comma).then_ignore(just(Token::NewLine).repeated()))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|arr: Vec<Rhs>| {
+                Rhs::Array(arr.into_iter().map(|r| Box::new(r)).collect::<Vec<_>>())
+            })
+    });
+
+    let rhs = choice((term, range, value, rhs_array));
 
     // parse a comma-separated list of terms (the left-hand side).
-    let comma = just(Token::Comma);
+    let comma = just(Token::Comma).then_ignore(just(Token::NewLine).repeated());
     let multi_rhs = rhs
         .clone()
         .separated_by(comma)
@@ -1148,13 +1192,11 @@ where
         })
         .labelled("statement");
 
-    // a rule header is a Variable enclosed in [ and ]
     let rule_header = just(Token::RuleDefinitionOpen)
         .ignore_then(select! { Token::Variable(v) => v }.labelled("rule name"))
         .then_ignore(just(Token::NewLine).or_not())
         .labelled("rule header");
 
-    // a complete rule: a header, then optionally some newlines, then the statement.
     let rule = rule_header
         .then_ignore(just(Token::NewLine).repeated())
         .then(statement.clone().repeated().collect())
@@ -1240,7 +1282,7 @@ where
                             Err(Rich::custom(span, "Unexpected arguments to send_frames function."))
                         },
                         (StatementKindPass1::VariableDef(_), _) => unreachable!("parsed variable definition"),
-                        (StatementKindPass1::VariableNamespaceBlock(_), _) => unreachable!("parsed namespace block"),
+                        (StatementKindPass1::VariableNamespaceBlock { ns: _, stmts: _ }, _) => unreachable!("parsed namespace block"),
                         (StatementKindPass1::Include { namespace:_, path: _}, _) => unreachable!("parsed include"),
                     }
                 }).labelled("play_frames");
@@ -1257,167 +1299,29 @@ where
 
     let namespace_block = recursive(|nsb| {
         select! {
-            Token::VarNamespace(ns) => ns.to_owned(),
+            Token::VarNamespace(ns) => ns,
         }
         .repeated()
+        .at_least(1)
         .collect()
-        .then_ignore(just(Token::BlockStart))
-        .then_ignore(just(Token::NewLine).repeated())
         .then(
-            choice((statement.clone(), include.clone()))
+            choice((statement.clone(), include.clone(), nsb))
                 .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then_ignore(just(Token::NewLine).repeated())
-        .then(nsb.repeated().collect::<Vec<_>>())
-        .then_ignore(just(Token::NewLine).repeated())
-        .then(statement.clone().repeated().collect::<Vec<_>>())
-        .then_ignore(just(Token::NewLine).repeated())
-        .then_ignore(just(Token::BlockEnd))
-        .try_map(
-            |(((ns, stmts1), onsb), stmts2): (
-                (
-                    (Vec<String>, Vec<StatementKindPass1>),
-                    Vec<StatementKindPass1>,
+                .collect::<Vec<_>>()
+                .delimited_by(
+                    just(Token::BlockStart).then_ignore(just(Token::NewLine).repeated()),
+                    just(Token::BlockEnd).then_ignore(just(Token::NewLine).repeated()),
                 ),
-                Vec<StatementKindPass1>,
-            ),
-             span| {
-                // add all statements before nested namespaces
-                let mut stmts_before = stmts1
-                    .into_iter()
-                    .map(|stmt| match stmt {
-                        StatementKindPass1::Rule(_) => {
-                            Err(Rich::custom(span, "Rules in namespace not supported."))
-                        }
-                        StatementKindPass1::VariableDef(statement) => {
-                            let stmt = statement.add_namespace(&ns);
-                            let stmt = match stmt {
-                                Statement::AssignLeft { lhs, rhs } => {
-                                    StatementPass1::AssignLeft { lhs, rhs }
-                                }
-                                Statement::AssignRight { lhs, rhs } => {
-                                    StatementPass1::AssignRight { lhs, rhs }
-                                }
-                                Statement::Compare { rhs, lhs } => {
-                                    StatementPass1::Compare { rhs, lhs }
-                                }
-                            };
-                            Ok(stmt)
-                        }
-                        StatementKindPass1::Reset(_) => {
-                            Err(Rich::custom(span, "Reset in namespace not supported."))
-                        }
-                        StatementKindPass1::SendFrames { kind: _, at: _ } => {
-                            Err(Rich::custom(span, "SendFrames in namespace not supported."))
-                        }
-                        StatementKindPass1::VariableNamespaceBlock(_) => {
-                            unreachable!("should be parsed recursively")
-                        }
-                        StatementKindPass1::Include { namespace: _, path } => {
-                            Ok(StatementPass1::Include {
-                                namespace: ns.clone(),
-                                path,
-                            })
-                        }
-                    })
-                    .try_fold(Vec::new(), |mut acc, res| match res {
-                        Ok(ok) => {
-                            acc.push(ok);
-                            Ok(acc)
-                        }
-                        Err(e) => Err(e),
-                    })?;
-
-                // add the statements from all deeper namespaces
-                for rnsb in onsb {
-                    match rnsb {
-                        StatementKindPass1::VariableNamespaceBlock(statements) => {
-                            let out = statements
-                                .into_iter()
-                                .map(|stmt| match stmt {
-                                    StatementPass1::AssignLeft { lhs, rhs } => {
-                                        let nlhs = lhs
-                                            .into_iter()
-                                            .map(|v| v.add_namespace(&ns))
-                                            .collect::<Vec<_>>();
-                                        StatementPass1::AssignLeft { lhs: nlhs, rhs }
-                                    }
-                                    StatementPass1::AssignRight { lhs, rhs } => {
-                                        let nrhs = rhs
-                                            .into_iter()
-                                            .map(|v| v.add_namespace(&ns))
-                                            .collect::<Vec<_>>();
-                                        StatementPass1::AssignRight { lhs, rhs: nrhs }
-                                    }
-                                    StatementPass1::Compare { rhs, lhs } => {
-                                        StatementPass1::Compare { rhs, lhs }
-                                    }
-                                    StatementPass1::Include { namespace, path } => {
-                                        StatementPass1::Include {
-                                            namespace: vec_prepend(&ns, &namespace),
-                                            path,
-                                        }
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            stmts_before.extend(out);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-
-                // add all statements after nested namespaces
-                let stmts_after = stmts2
-                    .into_iter()
-                    .map(|stmt| match stmt {
-                        StatementKindPass1::Rule(_) => {
-                            Err(Rich::custom(span, "Rules in namespace not supported."))
-                        }
-                        StatementKindPass1::VariableDef(statement) => {
-                            let stmt = statement.add_namespace(&ns);
-                            let stmt = match stmt {
-                                Statement::AssignLeft { lhs, rhs } => {
-                                    StatementPass1::AssignLeft { lhs, rhs }
-                                }
-                                Statement::AssignRight { lhs, rhs } => {
-                                    StatementPass1::AssignRight { lhs, rhs }
-                                }
-                                Statement::Compare { rhs, lhs } => {
-                                    StatementPass1::Compare { rhs, lhs }
-                                }
-                            };
-                            Ok(stmt)
-                        }
-                        StatementKindPass1::Reset(_) => {
-                            Err(Rich::custom(span, "Reset in namespace not supported."))
-                        }
-                        StatementKindPass1::SendFrames { kind: _, at: _ } => {
-                            Err(Rich::custom(span, "SendFrames in namespace not supported."))
-                        }
-                        StatementKindPass1::VariableNamespaceBlock(_) => {
-                            unreachable!("should be parsed recursively")
-                        }
-                        StatementKindPass1::Include { namespace: _, path } => {
-                            Ok(StatementPass1::Include {
-                                namespace: ns.clone(),
-                                path,
-                            })
-                        }
-                    })
-                    .try_fold(Vec::new(), |mut acc, res| match res {
-                        Ok(ok) => {
-                            acc.push(ok);
-                            Ok(acc)
-                        }
-                        Err(e) => Err(e),
-                    })?;
-
-                stmts_before.extend(stmts_after);
-
-                Ok(StatementKindPass1::VariableNamespaceBlock(stmts_before))
-            },
         )
+        .map(|(ns, stmts): (Vec<&'_ str>, Vec<StatementKindPass1>)| {
+            StatementKindPass1::VariableNamespaceBlock {
+                ns,
+                stmts: stmts
+                    .into_iter()
+                    .map(|stmtk| Box::new(stmtk))
+                    .collect::<Vec<_>>(),
+            }
+        })
     });
 
     let one_of_wind_fns = choice((
@@ -1541,12 +1445,21 @@ impl RuleSexpr {
     }
 }
 
-pub fn evaluate_file(
+pub fn compile_file(
     path: &std::path::PathBuf,
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) -> anyhow::Result<Evaluated> {
-    let file = std::fs::read_to_string(path);
+    compile_file_with_state(path, start_line, end_line, None)
+}
+
+pub fn compile_file_with_state(
+    path: &std::path::PathBuf,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    var_state: Option<HashMap<Var, Rhs>>,
+) -> anyhow::Result<Evaluated> {
+    let file = std::fs::read_to_string(path.clone());
     let file = match file {
         Ok(file) => Ok(file),
         Err(e) => match e.kind() {
@@ -1560,20 +1473,25 @@ pub fn evaluate_file(
             _ => Err(anyhow!("Unexpected error for file: {}", path.display())),
         },
     }?;
-    let start_line = start_line.unwrap_or_default();
+    let start_line = start_line.map(|l| l.saturating_sub(1)).unwrap_or_default();
     let lines = file.lines();
-    let end_line = end_line.unwrap_or(lines.clone().count());
+    let end_line = end_line.unwrap_or(lines.clone().count()).saturating_sub(1);
     let selected_lines = lines
         .skip(start_line)
-        .take(end_line - start_line)
+        .take(end_line + 1 - start_line)
         .collect::<Vec<_>>()
         .join("\n");
-    evaluate_code(&selected_lines)
+
+    let dir = path.parent().ok_or(anyhow!(
+        "Could not get parent directory of source code file."
+    ))?;
+    compile_code_with_state(&selected_lines, dir, var_state)
 }
 
 #[derive(Debug)]
 pub struct VariableHistory {
     ast: Vec<StatementKindOwned>,
+    var_cache: HashMap<Var, Rhs>,
 }
 
 fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
@@ -1598,39 +1516,50 @@ fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
     true
 }
 
+fn remove_prefix_from_target(prefix_definer: &[String], target_vec: &Vec<String>) -> Vec<String> {
+    let prefix_len = prefix_definer.len();
+    let target_len = target_vec.len();
+    let compare_len = std::cmp::min(prefix_len, target_len);
+
+    let mut common_prefix_len = 0;
+    for i in 0..compare_len {
+        if prefix_definer[i] == target_vec[i] {
+            common_prefix_len += 1;
+        } else {
+            break;
+        }
+    }
+
+    target_vec[common_prefix_len..].to_vec()
+}
+
 fn truncate_namespace_var(ns: &[String], var: &Var) -> Var {
     match var {
         Var::User { name, namespace } => Var::User {
             name: name.clone(),
-            namespace: {
-                ns.iter()
-                    .zip(namespace.iter())
-                    .filter(|(orig, filter)| orig != filter)
-                    .map(|(_, o)| o.clone())
-                    .collect::<Vec<_>>()
-            },
+            namespace: { remove_prefix_from_target(ns, namespace) },
         },
         Var::Log => Var::Log,
         Var::Predef { name, namespace } => Var::User {
             name: name.clone(),
-            namespace: {
-                ns.iter()
-                    .zip(namespace.iter())
-                    .filter(|(orig, filter)| orig != filter)
-                    .map(|(_, o)| o.clone())
-                    .collect::<Vec<_>>()
-            },
+            namespace: { remove_prefix_from_target(ns, namespace) },
         },
     }
 }
 
 fn truncate_namespace_rhs(ns: &[String], rhs: &Rhs) -> Rhs {
-    Rhs::Var(match rhs {
-        Rhs::Range { from: _, to: _ } => return rhs.clone(),
-        Rhs::Var(var) => truncate_namespace_var(ns, var),
-        Rhs::Path(_) => return rhs.clone(),
-        Rhs::Val(_) => return rhs.clone(),
-    })
+    match rhs {
+        Rhs::Array(items) => Rhs::Array(
+            items
+                .iter()
+                .map(|arr_item| Box::new(truncate_namespace_rhs(ns, arr_item)))
+                .collect::<Vec<_>>(),
+        ),
+        Rhs::Range { from: _, to: _ } => rhs.clone(),
+        Rhs::Var(var) => Rhs::Var(truncate_namespace_var(ns, var)),
+        Rhs::Path(_) => rhs.clone(),
+        Rhs::Val(_) => rhs.clone(),
+    }
 }
 
 fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
@@ -1638,6 +1567,17 @@ fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
         Statement::AssignLeft { lhs, rhs } => {
             let l = lhs
                 .iter()
+                .filter(|v| match v {
+                    Var::Log => false,
+                    Var::Predef {
+                        name: _,
+                        namespace: var_ns,
+                    } => is_sub_namespace(ns, &var_ns),
+                    Var::User {
+                        name: _,
+                        namespace: var_ns,
+                    } => is_sub_namespace(ns, &var_ns),
+                })
                 .map(|l| truncate_namespace_var(ns, l))
                 .collect::<Vec<_>>();
             let r = truncate_namespace_rhs(ns, rhs);
@@ -1647,6 +1587,17 @@ fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
         Statement::AssignRight { lhs, rhs } => {
             let r = rhs
                 .iter()
+                .filter(|v| match v {
+                    Var::Log => false,
+                    Var::Predef {
+                        name: _,
+                        namespace: var_ns,
+                    } => is_sub_namespace(ns, &var_ns),
+                    Var::User {
+                        name: _,
+                        namespace: var_ns,
+                    } => is_sub_namespace(ns, &var_ns),
+                })
                 .map(|l| truncate_namespace_var(ns, l))
                 .collect::<Vec<_>>();
             let l = truncate_namespace_rhs(ns, lhs);
@@ -1690,41 +1641,44 @@ fn truncate_namespace(ns: &[String], stmt: &StatementKindOwned) -> StatementKind
 
 fn stmt_in_ns(namespace: &[String], stmt: &Statement) -> bool {
     match stmt {
-        Statement::AssignLeft { lhs: _, rhs } => match rhs {
-            Rhs::Var(var) => match &var {
-                Var::User {
-                    name: _,
-                    namespace: other_ns,
-                } => is_sub_namespace(other_ns, namespace),
-                Var::Log => true,
-                Var::Predef {
-                    name: _,
-                    namespace: other_ns,
-                } => is_sub_namespace(other_ns, namespace),
-            },
-            _ => true,
-        },
-        Statement::AssignRight { lhs, rhs: _ } => match lhs {
-            Rhs::Var(var) => match &var {
-                Var::User {
-                    name: _,
-                    namespace: other_ns,
-                } => is_sub_namespace(other_ns, namespace),
-                Var::Log => true,
-                Var::Predef {
-                    name: _,
-                    namespace: other_ns,
-                } => is_sub_namespace(other_ns, namespace),
-            },
-            _ => true,
-        },
-        Statement::Compare { rhs: _, lhs: _ } => true,
+        Statement::AssignLeft { lhs, rhs: _ } => lhs.iter().any(|r| match r {
+            Var::Log => false,
+            Var::Predef {
+                name: _,
+                namespace: var_ns,
+            } => is_sub_namespace(namespace, var_ns),
+            Var::User {
+                name: _,
+                namespace: var_ns,
+            } => is_sub_namespace(namespace, var_ns),
+        }),
+        Statement::AssignRight { lhs: _, rhs } => rhs.iter().any(|r| match r {
+            Var::Log => false,
+            Var::Predef {
+                name: _,
+                namespace: var_ns,
+            } => is_sub_namespace(namespace, var_ns),
+            Var::User {
+                name: _,
+                namespace: var_ns,
+            } => is_sub_namespace(namespace, var_ns),
+        }),
+
+        Statement::Compare { rhs: _, lhs: _ } => false,
     }
 }
 
 impl VariableHistory {
     pub fn new(ast: Vec<StatementKindOwned>) -> Self {
-        VariableHistory { ast }
+        VariableHistory {
+            ast,
+            var_cache: HashMap::new(),
+        }
+    }
+
+    pub fn with_state(mut self, state: HashMap<Var, Rhs>) -> Self {
+        self.var_cache = state;
+        self
     }
 
     fn filter_by_namespace(
@@ -1773,6 +1727,11 @@ impl VariableHistory {
     }
 
     fn resolve_recursive(&self, var: &Var, up_to: Option<usize>) -> anyhow::Result<Option<Rhs>> {
+        // use previous state if already resolved there
+        if let Some(cache_hit) = self.var_cache.get(var) {
+            return Ok(Some(cache_hit.clone()));
+        }
+
         let mut val = None;
         for (i, stmt) in self
             .ast
@@ -1906,12 +1865,40 @@ impl VariableHistory {
         Ok(val)
     }
 
-    pub fn resolve_ns(&self, namespace: &[&str]) -> anyhow::Result<Vec<(Var, Rhs)>> {
+    fn prepend_ns(var: &Var, ns: &[String]) -> Var {
+        match var {
+            Var::Log => Var::Log,
+            Var::Predef {
+                name,
+                namespace: var_ns,
+            } => {
+                let v = vec_prepend(ns, var_ns);
+
+                Var::Predef {
+                    name: name.clone(),
+                    namespace: v,
+                }
+            }
+            Var::User {
+                name,
+                namespace: var_ns,
+            } => {
+                let v = vec_prepend(ns, var_ns);
+
+                Var::User {
+                    name: name.clone(),
+                    namespace: v,
+                }
+            }
+        }
+    }
+
+    pub fn resolve_ns(&self, namespace: &[&str]) -> Vec<(Var, Rhs)> {
         let owned_ns = namespace
             .into_iter()
             .map(|s| (*s).to_owned())
             .collect::<Vec<_>>();
-        self.filter_by_namespace(&owned_ns, None, false)
+        self.filter_by_namespace(&owned_ns, None, true)
             .iter()
             .flat_map(|stmt| match stmt {
                 StatementKindOwned::Rule(rule_owned) => rule_owned
@@ -1920,12 +1907,24 @@ impl VariableHistory {
                     .flat_map(|st| match st {
                         Statement::AssignLeft { lhs, rhs: _ } => Some(
                             lhs.iter()
-                                .map(|lh| (lh, self.resolve_var(lh)))
+                                .map(|lh| {
+                                    (
+                                        lh,
+                                        self.resolve_var(&Self::prepend_ns(lh, &owned_ns))
+                                            .expect("Should have failed in Pass 2"),
+                                    )
+                                })
                                 .collect::<Vec<_>>(),
                         ),
                         Statement::AssignRight { lhs: _, rhs } => Some(
                             rhs.iter()
-                                .map(|lh| (lh, self.resolve_var(lh)))
+                                .map(|lh| {
+                                    (
+                                        lh,
+                                        self.resolve_var(&Self::prepend_ns(lh, &owned_ns))
+                                            .expect("Should have failed in Pass 2"),
+                                    )
+                                })
                                 .collect::<Vec<_>>(),
                         ),
                         Statement::Compare { rhs: _, lhs: _ } => None,
@@ -1935,12 +1934,24 @@ impl VariableHistory {
                 StatementKindOwned::VariableDef(statement) => match statement {
                     Statement::AssignLeft { lhs, rhs: _ } => lhs
                         .iter()
-                        .map(|lh| (lh, self.resolve_var(lh)))
+                        .map(|lh| {
+                            (
+                                lh,
+                                self.resolve_var(&Self::prepend_ns(lh, &owned_ns))
+                                    .expect("Should have failed in Pass 2"),
+                            )
+                        })
                         .collect::<Vec<_>>(),
 
                     Statement::AssignRight { lhs: _, rhs } => rhs
                         .iter()
-                        .map(|lh| (lh, self.resolve_var(lh)))
+                        .map(|lh| {
+                            (
+                                lh,
+                                self.resolve_var(&Self::prepend_ns(lh, &owned_ns))
+                                    .expect("Should have failed in Pass 2"),
+                            )
+                        })
                         .collect::<Vec<_>>(),
 
                     Statement::Compare { rhs: _, lhs: _ } => vec![],
@@ -1948,14 +1959,22 @@ impl VariableHistory {
                 StatementKindOwned::Reset(_) => vec![],
                 StatementKindOwned::SendFrames { kind: _, at: _ } => vec![],
             })
-            .try_fold(Vec::new(), |mut acc, res| match res {
-                (var, Ok(Some(rhs))) => {
+            .fold(Vec::new(), |mut acc, res| match res {
+                (var, Some(rhs)) => {
                     acc.push((truncate_namespace_var(&owned_ns, var), rhs));
-                    Ok(acc)
+                    acc
                 }
-                (_, Err(e)) => Err(e),
-                (_, Ok(None)) => Ok(acc), // skip if not set to anything
+                (_, None) => acc, // skip if not set to anything
             })
+    }
+
+    pub fn filter_ns(&self, namespace: &[&str]) -> Self {
+        let owned_ns = namespace
+            .into_iter()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>();
+        let filtered = self.filter_by_namespace(&owned_ns, None, true);
+        Self::new(filtered)
     }
 
     pub fn resolve(&self, var: &str) -> anyhow::Result<Option<Rhs>> {
@@ -1967,7 +1986,69 @@ impl VariableHistory {
     }
 }
 
-pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
+fn resolve_rhs_recursive(
+    rhs: &mut Rhs,
+    var_history: &VariableHistory,
+    i: usize,
+) -> anyhow::Result<()> {
+    match rhs {
+        Rhs::Array(items) => {
+            for rhs_item in items.iter_mut() {
+                resolve_rhs_recursive(&mut *rhs_item, var_history, i)?;
+            }
+        }
+        Rhs::Var(var) => {
+            // implicit strings when mentioned but not found in context earlier
+            *rhs = match var_history.resolve_recursive(var, Some(i))? {
+                None => Rhs::Val(Val::StringVal(match var {
+                    Var::User { name, namespace: _ } => name.clone(),
+                    Var::Log => {
+                        return Err(anyhow!("Log can not be assigned."));
+                    }
+                    Var::Predef {
+                        name: _,
+                        namespace: _,
+                    } => {
+                        return Err(anyhow!("Predef variables can not be assigned."));
+                    }
+                })),
+                Some(rhs) => rhs,
+            };
+        }
+        _ => {}
+    };
+
+    Ok(())
+}
+
+fn resolve_stmt(
+    stmt: &mut Statement,
+    var_history: &VariableHistory,
+    i: usize,
+) -> anyhow::Result<()> {
+    match stmt {
+        Statement::AssignLeft { lhs: _, rhs } => {
+            resolve_rhs_recursive(rhs, var_history, i)?;
+        }
+        Statement::AssignRight { lhs, rhs: _ } => {
+            resolve_rhs_recursive(lhs, var_history, i)?;
+        }
+        Statement::Compare { rhs: _, lhs: _ } => {} // keep compare since only applicable to rules that are parsed as variables
+    }
+
+    Ok(())
+}
+
+pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
+    let currdir = std::env::current_dir()?;
+    compile_code_with_state(source_code_raw, &currdir, None)
+}
+
+pub fn compile_code_with_state(
+    source_code_raw: &str,
+    source_code_parent_dir: &std::path::Path,
+    var_state: Option<HashMap<Var, Rhs>>,
+) -> anyhow::Result<Evaluated> {
     let token_iter = Token::lexer(&source_code_raw)
         .spanned()
         // Convert logos errors into tokens. We want parsing to be recoverable and not fail at the lexing stage, so
@@ -1994,7 +2075,7 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
                 .collect::<Vec<StatementKindOwnedPass1>>();
 
             // Pass 1
-            let ast = do_pass1(owned)?; // could print parse errors from included files
+            let mut ast = do_pass1(owned, source_code_parent_dir)?; // could print parse errors from included files
 
             let mut rules = Vec::new();
             let mut winds = Vec::new();
@@ -2016,9 +2097,9 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
             let wind = winds
                 .into_iter()
                 .filter_map(|f| match f {
-                    StatementKindOwned::Reset(file) => Some(WindFunctions::Reset(file.to_owned())),
+                    StatementKindOwned::Reset(file) => Some(WindFunction::Reset(file.to_owned())),
                     StatementKindOwned::SendFrames { kind, at } => {
-                        Some(WindFunctions::SendFrames {
+                        Some(WindFunction::SendFrames {
                             kind,
                             at: at.to_owned(),
                         }) // owned to make easier to outside parser, TODO maybe passthrough lifetimes
@@ -2027,10 +2108,30 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
                 })
                 .collect::<Vec<_>>();
 
+            // Pass 2 -- needs entire ast for resolving. TODO could still be combined to Pass 1 with a subset of the ast to t-1.
+            // Resolve all variables here, else implicit strings in nested assigns are handled as variables.
+            // Use the repl state in case the user already run some variables from before which we want to build upon
+            let var_history =
+                VariableHistory::new(ast.clone()).with_state(var_state.clone().unwrap_or_default());
+            for (i, node) in ast.iter_mut().enumerate() {
+                match node {
+                    StatementKindOwned::Rule(rule_owned) => {
+                        for stmt in rule_owned.stmts.iter_mut() {
+                            resolve_stmt(stmt, &var_history, i)?;
+                        }
+                    }
+                    StatementKindOwned::VariableDef(statement) => {
+                        resolve_stmt(statement, &var_history, i)?;
+                    }
+                    StatementKindOwned::Reset(_) => {}
+                    StatementKindOwned::SendFrames { kind: _, at: _ } => {}
+                }
+            }
+
             return Ok(Evaluated {
                 rules,
                 wind,
-                vars: VariableHistory { ast },
+                vars: VariableHistory::new(ast).with_state(var_state.unwrap_or_default()),
             });
         }
         // If parsing was unsuccessful, generate a nice user-friendly diagnostic with ariadne. You could also use
@@ -2055,22 +2156,6 @@ pub fn evaluate_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
 
     Err(anyhow!("Could not parse"))
 }
-
-// fn convert_to_path(input: &str) -> String {
-//     if input.is_empty() {
-//         return String::new();
-//     }
-
-//     let replaced_open = input.replace('(', "::");
-
-//     let removed_close = replaced_open.replace(')', "");
-
-//     if let Some(stripped) = removed_close.strip_suffix("::") {
-//         stripped.to_string()
-//     } else {
-//         removed_close
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -2131,7 +2216,7 @@ mod tests {
             ],
         );
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         assert!(!eval.rules.0.is_empty());
@@ -2154,7 +2239,7 @@ mod tests {
         play_frames l 10s var1
         ";
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         assert!(!eval.rules.raw().is_empty());
@@ -2167,7 +2252,7 @@ mod tests {
         (var1 testRat1 -> testRat2)
         ";
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         assert!(!eval.rules.raw().is_empty());
@@ -2181,7 +2266,7 @@ mod tests {
         play_frames l 10s var1 # yo
         ";
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         assert!(eval.rules.raw().is_empty());
@@ -2199,13 +2284,9 @@ mod tests {
 
         // let mut a = Token::lexer(SRC);
         // let b = a.next();
-        // let b = a.next();
-        // let b = a.next();
-        // let b = a.next();
-        // // let b = a.next();
         // dbg!(b);
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
 
@@ -2242,13 +2323,9 @@ mod tests {
 
         // let mut a = Token::lexer(SRC);
         // let b = a.next();
-        // let b = a.next();
-        // let b = a.next();
-        // let b = a.next();
-        // let b = a.next();
         // dbg!(b);
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
 
@@ -2287,7 +2364,7 @@ mod tests {
         }
         ";
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
 
@@ -2314,20 +2391,16 @@ mod tests {
         }
 
         c.{
-            # top
             t = 5
 
-            # mid
             d.{
                 1 -> o
             }
-
-            # bottom
             i = 95
         }
         ";
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
 
@@ -2369,7 +2442,7 @@ mod tests {
         assert!(!res);
         let res = is_sub_namespace(&["a".to_owned()], &["a".to_owned(), "b".to_owned()]); // a is in a.b, true
         assert!(res);
-        let res = is_sub_namespace(&[], &["a".to_owned(), "b".to_owned()]); // empty is not in a.b, false
+        let res = is_sub_namespace(&[], &["a".to_owned()]); // empty is not in a.b, false
         assert!(!res);
     }
 
@@ -2378,17 +2451,17 @@ mod tests {
         const SRC: &str = r"
         (var1
             testRat1 -> testRat2
+            testRat1 -> testRat2, a.c
             a.b <- 5
         )
         ";
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         let e = eval.vars.resolve_ns(&["a"]);
-        let e = e.unwrap();
-        assert_eq!(e.len(), 1);
-        let (var, rhs) = &e[0];
+        assert_eq!(e.len(), 2);
+        let (var, rhs) = &e[1];
         assert_eq!(*var, Var::from_str("b").unwrap());
         assert_eq!(*rhs, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
     }
@@ -2402,7 +2475,7 @@ mod tests {
             
         "#;
 
-        let eval = evaluate_code(SRC);
+        let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
 
@@ -2426,6 +2499,30 @@ mod tests {
         assert!(e.is_some());
         let rhs = e.unwrap();
         assert_eq!(rhs, Rhs::Val(Val::StringVal("Lidar::Ouster".to_owned())));
+    }
+
+    #[test]
+    fn arrays() {
+        const SRC: &str = r#"
+        a = [ "bla with space", Blub ]
+        "#;
+
+        let eval = compile_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+
+        let e = eval.vars.resolve("a");
+        assert!(e.is_ok());
+        let e = e.unwrap();
+        assert!(e.is_some());
+        let rhs = e.unwrap();
+        assert_eq!(
+            rhs,
+            Rhs::Array(vec![
+                Box::new(Rhs::Val(Val::StringVal("bla with space".to_owned()))),
+                Box::new(Rhs::Val(Val::StringVal("Blub".to_owned()))),
+            ])
+        );
     }
 
     // #[test]
@@ -2455,31 +2552,44 @@ mod tests {
     //     const SRC: &str = "a = Sensor::Lidar";
 
     // TODO Give Enum to parser function that has all possible variants as trait. so fn variants(self--impl display) -> [impl FromStr]. Then call that in parser and pass type through to AST. If parser finds Sensor type, that has the same name as one of the enums in display. so it calls the parse function on that variant.
-    // let eval = evaluate_code(SRC);
-    // assert!(eval.is_ok());
-    // let eval = eval.unwrap();
-    // let e = eval.vars.resolve_ns(&["a"]);
-    // let e = e.unwrap();
-    // assert_eq!(e.len(), 1);
-    // let (var, rhs) = &e[0];
-    // assert_eq!(*var, Var::from_str("b").unwrap());
-    // assert_eq!(*rhs, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
     // }
 
-    // // TODO impl
-    // // #[test]
-    // fn vec_mat_vals() {
-    //     const SRC: &str = r"
-    //     vec = [3, 2, 4]
+    #[test]
+    fn vec_mat_vals() {
+        const SRC: &str = r"
+        vec = [3, 2, 4]
 
-    //     mat = [ [3, 1, 1]
-    //             [3, 2, 4] ]
-    //     ";
+        mat = [ [3, 1, 1],
+                [3, 2, 4] ]
+        ";
 
-    //     // let eval = evaluate_code(SRC);
-    //     // assert!(eval.is_ok());
-    //     // let eval = eval.unwrap();
-    //     // assert!(eval.rules.raw().is_empty());
-    //     // assert!(!eval.wind.is_empty());
-    // }
+        let eval = compile_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        let vec = eval.vars.resolve("vec").unwrap().unwrap();
+        assert_eq!(
+            vec,
+            Rhs::Array(vec![
+                Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(3)))),
+                Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(2)))),
+                Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(4)))),
+            ])
+        );
+        let mat = eval.vars.resolve("mat").unwrap().unwrap();
+        assert_eq!(
+            mat,
+            Rhs::Array(vec![
+                Box::new(Rhs::Array(vec![
+                    Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(3)))),
+                    Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(1)))),
+                    Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(1)))),
+                ])),
+                Box::new(Rhs::Array(vec![
+                    Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(3)))),
+                    Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(2)))),
+                    Box::new(Rhs::Val(Val::NumVal(NumVal::Integer(4)))),
+                ])),
+            ])
+        );
+    }
 }
