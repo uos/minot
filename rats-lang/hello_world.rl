@@ -1,11 +1,11 @@
-(var1
+rule! (var1
 	testRat1 -> testRat2
 )
 
-(var3
+rule! (var3
 	testRat1, LOG <- testRat2
 )
 
-(var4
+rule! (var4
 	testRat1 == testRat2
 )

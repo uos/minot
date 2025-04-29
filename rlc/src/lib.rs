@@ -165,9 +165,7 @@ fn rm_first_and_last<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
 
 // TODO use Result in this callback for feedback
 fn play_frames_args<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<PlayType> {
-    let chars = lex.slice()["play_frames ".len()..]
-        .chars()
-        .collect::<Vec<_>>();
+    let chars = lex.slice()["pf! ".len()..].chars().collect::<Vec<_>>();
 
     match chars.len() {
         1 => {
@@ -248,10 +246,10 @@ enum Token<'a> {
     NewLine,
 
     #[token("(")]
-    RuleDefinitionOpen,
+    BracketOpen,
 
     #[token(")")]
-    RuleDefinitionClose,
+    BracketClose,
 
     #[token("{")]
     BlockStart,
@@ -298,11 +296,14 @@ enum Token<'a> {
     DoNotCareOptim,
 
     // -- Embedded functions (Wind) --
-    #[regex(r"play_frames [m|l|i][l|i]?", play_frames_args)]
+    #[regex(r"pf! [m|l|i][l|i]?", play_frames_args)]
     FnPlayFrames(PlayType),
 
-    #[token("reset")]
+    #[token("reset!")]
     FnReset,
+
+    #[token("rule!")]
+    FnRule,
 
     // -- Expressions --
     #[token("true")]
@@ -357,6 +358,7 @@ impl fmt::Display for Token<'_> {
             Self::String(string) => write!(f, "String({:?})", string),
             // Self::EnumDivider => write!(f, "::"),
             Self::FnReset => write!(f, "reset()"),
+            Self::FnRule => write!(f, "rule()"),
             Self::Comma => write!(f, ","),
             Self::KwLog => write!(f, "LOG"),
             Self::OpPlus => write!(f, "+"),
@@ -364,8 +366,8 @@ impl fmt::Display for Token<'_> {
             Self::OpMinus => write!(f, "-"),
             Self::Error => write!(f, "<error>"),
             Self::NewLine => write!(f, "\\n"),
-            Self::RuleDefinitionOpen => write!(f, "["),
-            Self::RuleDefinitionClose => write!(f, "]"),
+            Self::BracketOpen => write!(f, "["),
+            Self::BracketClose => write!(f, "]"),
             Self::BlockStart => write!(f, "{}", "{"),
             Self::BlockEnd => write!(f, "{}", "}"),
             Self::LParen => write!(f, "("),
@@ -530,7 +532,7 @@ pub struct Evaluated {
 #[derive(Debug)]
 pub enum WindFunction {
     Reset(String),
-    SendFrames { kind: PlayKindUnited, at: String },
+    SendFrames(PlayKindUnited),
 }
 
 #[derive(Debug, Clone)]
@@ -540,26 +542,38 @@ pub struct Root<'a> {
     pub vardefs: Vec<Statement>,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum PlayKindUnit {
-    TimeMs(u64),
-    Count(u64),
+pub type PlayTimeMsRange = (u64, u64);
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum PlayTrigger {
+    DurationMs(u64),
+    Variable(String),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PlayCount {
+    TimeRelativeMs(u64),
+    TimeRangeMs(PlayTimeMsRange),
+    Amount(u64),
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum PlayKindUnited {
     SensorCount {
         sensor: SensorType,
-        count: usize,
+        count: PlayCount,
+        trigger: Option<PlayTrigger>,
     },
     UntilSensorCount {
         sending: SensorType,
         until_sensor: SensorType,
-        until_count: usize,
+        until_count: PlayCount,
+        trigger: Option<PlayTrigger>,
     },
     UntilTime {
         sending: SensorType,
-        duration: std::time::Duration,
+        duration: PlayTimeMsRange,
+        trigger: Option<PlayTrigger>,
     },
 }
 
@@ -581,10 +595,7 @@ pub enum StatementKindPass1<'a> {
         namespace: Vec<String>,
         path: String,
     },
-    SendFrames {
-        kind: PlayKindUnited,
-        at: String,
-    },
+    SendFrames(PlayKindUnited),
     VariableNamespaceBlock {
         ns: Vec<&'a str>,
         stmts: Vec<Box<StatementKindPass1<'a>>>,
@@ -604,10 +615,7 @@ pub enum StatementKindOwnedPass1 {
         stmts: Vec<Box<StatementKindOwnedPass1>>,
     },
     Reset(String),
-    SendFrames {
-        kind: PlayKindUnited,
-        at: String,
-    },
+    SendFrames(PlayKindUnited),
 }
 
 #[derive(Debug, Clone)]
@@ -615,7 +623,7 @@ pub enum StatementKindOwned {
     Rule(RuleOwned),
     VariableDef(Statement),
     Reset(String),
-    SendFrames { kind: PlayKindUnited, at: String },
+    SendFrames(PlayKindUnited),
 }
 
 fn do_pass1(
@@ -659,8 +667,8 @@ fn do_pass1(
             StatementKindOwnedPass1::Reset(rs) => {
                 out.push(StatementKindOwned::Reset(rs));
             }
-            StatementKindOwnedPass1::SendFrames { kind, at } => {
-                out.push(StatementKindOwned::SendFrames { kind, at });
+            StatementKindOwnedPass1::SendFrames(kind) => {
+                out.push(StatementKindOwned::SendFrames(kind));
             }
             StatementKindOwnedPass1::Include { namespace, path } => {
                 let to_parse = PathBuf::from_str(&path)?;
@@ -757,9 +765,7 @@ impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
                 StatementKindOwnedPass1::VariableDef(statement)
             }
             StatementKindPass1::Reset(path) => StatementKindOwnedPass1::Reset(path),
-            StatementKindPass1::SendFrames { kind, at } => {
-                StatementKindOwnedPass1::SendFrames { kind, at }
-            }
+            StatementKindPass1::SendFrames(kind) => StatementKindOwnedPass1::SendFrames(kind),
             StatementKindPass1::Include { namespace, path } => {
                 StatementKindOwnedPass1::Include { namespace, path }
             }
@@ -1058,7 +1064,7 @@ where
     .or(variable)
     .labelled("term");
 
-    let range = choice((numberrange, timerange, wayrange));
+    let range = choice((numberrange, timerange.clone(), wayrange));
 
     let rhs_array = recursive(|rhs_array| {
         choice((term.clone(), range.clone(), value.clone(), rhs_array))
@@ -1192,7 +1198,8 @@ where
         })
         .labelled("statement");
 
-    let rule_header = just(Token::RuleDefinitionOpen)
+    let rule_header = just(Token::FnRule)
+        .ignore_then(just(Token::BracketOpen))
         .ignore_then(select! { Token::Variable(v) => v }.labelled("rule name"))
         .then_ignore(just(Token::NewLine).or_not())
         .labelled("rule header");
@@ -1201,7 +1208,7 @@ where
         .then_ignore(just(Token::NewLine).repeated())
         .then(statement.clone().repeated().collect())
         .then_ignore(just(Token::NewLine).repeated())
-        .then_ignore(just(Token::RuleDefinitionClose))
+        .then_ignore(just(Token::BracketClose))
         .map(|(variable, stmts): (&str, Vec<StatementKindPass1>)| {
             let stmts = stmts
                 .into_iter()
@@ -1225,67 +1232,163 @@ where
         .map(|expr| StatementKindPass1::Reset(expr.to_owned()))
         .labelled("reset");
 
-    let wind_play_frames_fn = select! { Token::FnPlayFrames(pt) => StatementKindPass1::SendFrames { kind: match pt {
-                    PlayType::SensorCount { sensor } => PlayKindUnited::SensorCount { sensor: sensor, count: 0 },
-                    PlayType::UntilSensorCount { sending, until_sensor } => PlayKindUnited::UntilSensorCount { sending: sending, until_sensor: until_sensor, until_count: 0 },
-                }, at: "".to_owned() }}.labelled("send_frames")
-            .then(select! {
-                Token::IntegerNumberMillisecond(ms) => PlayKindUnit::TimeMs(ms as u64),
-                Token::FloatingNumberMillisecond(ms) => PlayKindUnit::TimeMs(ms.round() as u64),
-                Token::IntegerNumber(i) => PlayKindUnit::Count(i as u64),
-            }.labelled("int number or timespan"))
-            .then(variable.labelled("var as trigger"))
-            .try_map(|((f, arg), at), span| {
-                    match (f, arg) {
-                        (StatementKindPass1::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _ }, at: _ }, PlayKindUnit::TimeMs(ms)) => {
-                            Ok(StatementKindPass1::SendFrames{ kind: PlayKindUnited::UntilTime { sending: sensor, duration: std::time::Duration::from_millis(ms) }, at: match at {
-                                Rhs::Var(Var::User { name, namespace }) => {
-                                    if !namespace.is_empty() {
-                                        return Err(Rich::custom(span, "Rats can not have namespaces."))
-                                    } else {
-                                        name
-                                    }
-                                },
-                                _ => unreachable!(),
-                            }})
-                        },
-                        (StatementKindPass1::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: _}, at: _}, PlayKindUnit::Count(count)) => {
-                            Ok(StatementKindPass1::SendFrames{ kind: PlayKindUnited::SensorCount { sensor, count: count as usize }, at: match at {
-                                Rhs::Var(Var::User { name, namespace }) => {
-                                    if !namespace.is_empty() {
-                                        return Err(Rich::custom(span, "Rats can not have namespaces."))
-                                    } else {
-                                        name
-                                    }
-                                },                                _ => unreachable!(),
-                            }})
-                        },
-                        (StatementKindPass1::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: _}, at: _ }, PlayKindUnit::Count(count)) => {
-                            Ok(StatementKindPass1::SendFrames{ kind: PlayKindUnited::UntilSensorCount { sending, until_sensor, until_count: count as usize }, at: match at {
-                                Rhs::Var(Var::User { name, namespace }) => {
-                                    if !namespace.is_empty() {
-                                        return Err(Rich::custom(span, "Rats can not have namespaces."))
-                                    } else {
-                                        name
-                                    }
-                                },
-                                                                _ => unreachable!(),
-                            }})
-                        },
-                        (StatementKindPass1::Reset(_), _) => {
-                            Err(Rich::custom(span, "Reset does not take arguments."))
-                        },
-                        (StatementKindPass1::Rule(_), _) => {
-                            Err(Rich::custom(span, "Rules do not take arguments."))
-                        },
-                        (StatementKindPass1::SendFrames { kind: _, at: _}, _) => {
-                            Err(Rich::custom(span, "Unexpected arguments to send_frames function."))
-                        },
-                        (StatementKindPass1::VariableDef(_), _) => unreachable!("parsed variable definition"),
-                        (StatementKindPass1::VariableNamespaceBlock { ns: _, stmts: _ }, _) => unreachable!("parsed namespace block"),
-                        (StatementKindPass1::Include { namespace:_, path: _}, _) => unreachable!("parsed include"),
+    let wind_play_frames_fn = select! {
+        Token::FnPlayFrames(pt) => pt,
+    }
+    .labelled("send_frames")
+    .then(
+        choice((
+            timerange.clone(),
+            time.map(|t| {
+                Rhs::Val(Val::UnitedVal(UnitVal {
+                    val: match t {
+                        NumVal::Integer(i) => i as u64,
+                        _ => unreachable!(),
+                    },
+                    unit: Unit::TimeMilliseconds,
+                }))
+            }),
+            select! {
+                Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i as i64))), // (until) number of frames
+            },
+        ))
+        .labelled("int number for count, relative time from now or absolute timespan"),
+    )
+    .then(
+        choice((
+            variable.try_map(|v, span| match v {
+                Rhs::Var(var) => match var {
+                    Var::Log => {
+                        return Err(Rich::custom(span, "Can not trigger on Log."));
                     }
-                }).labelled("play_frames");
+                    Var::Predef {
+                        name: _,
+                        namespace: _,
+                    } => {
+                        return Err(Rich::custom(
+                            span,
+                            "Did not expect a predef variable as a variable name.",
+                        ));
+                    }
+                    Var::User { name, namespace } => {
+                        if !namespace.is_empty() {
+                            return Err(Rich::custom(
+                                span,
+                                "Rat names should not have a namespace.",
+                            )); // TODO needs fix when using topics with namespaces
+                        }
+
+                        Ok(Rhs::Var(Var::User {
+                            name,
+                            namespace: vec![],
+                        }))
+                    }
+                },
+                _ => unreachable!(),
+            }),
+            time.map(|t| {
+                Rhs::Val(Val::UnitedVal(UnitVal {
+                    val: match t {
+                        NumVal::Integer(i) => i as u64,
+                        _ => unreachable!(),
+                    },
+                    unit: Unit::TimeMilliseconds,
+                }))
+            }),
+        ))
+        .or_not()
+        .labelled("trigger"),
+    )
+    .map(|((pt, arg), trigger): ((PlayType, Rhs), Option<Rhs>)| {
+        let trigger = trigger.map(|trigger| match trigger {
+            Rhs::Val(Val::UnitedVal(UnitVal {
+                val,
+                unit: Unit::TimeMilliseconds,
+            })) => PlayTrigger::DurationMs(val),
+            Rhs::Var(Var::User { name, namespace: _ }) => PlayTrigger::Variable(name),
+            _ => unreachable!(),
+        });
+
+        let pku = match pt {
+            PlayType::SensorCount { sensor } => match arg {
+                Rhs::Range {
+                    from:
+                        Val::UnitedVal(UnitVal {
+                            val: from_val,
+                            unit: Unit::TimeMilliseconds,
+                        }),
+                    to:
+                        Val::UnitedVal(UnitVal {
+                            val: to_val,
+                            unit: Unit::TimeMilliseconds,
+                        }),
+                } => PlayKindUnited::SensorCount {
+                    sensor,
+                    count: PlayCount::TimeRangeMs((from_val, to_val)),
+                    trigger,
+                },
+                Rhs::Val(Val::NumVal(NumVal::Integer(i))) => PlayKindUnited::SensorCount {
+                    sensor,
+                    count: PlayCount::Amount(i as u64),
+                    trigger,
+                },
+                Rhs::Val(Val::UnitedVal(UnitVal {
+                    val: ms,
+                    unit: Unit::TimeMilliseconds,
+                })) => PlayKindUnited::SensorCount {
+                    sensor,
+                    count: PlayCount::TimeRelativeMs(ms),
+                    trigger,
+                },
+                _ => {
+                    unreachable!()
+                }
+            },
+            PlayType::UntilSensorCount {
+                sending,
+                until_sensor,
+            } => match arg {
+                Rhs::Range {
+                    from:
+                        Val::UnitedVal(UnitVal {
+                            val: from_val,
+                            unit: Unit::TimeMilliseconds,
+                        }),
+                    to:
+                        Val::UnitedVal(UnitVal {
+                            val: to_val,
+                            unit: Unit::TimeMilliseconds,
+                        }),
+                } => PlayKindUnited::UntilSensorCount {
+                    sending,
+                    until_sensor,
+                    until_count: PlayCount::TimeRangeMs((from_val, to_val)),
+                    trigger,
+                },
+                Rhs::Val(Val::NumVal(NumVal::Integer(i))) => PlayKindUnited::UntilSensorCount {
+                    sending,
+                    until_sensor,
+                    until_count: PlayCount::Amount(i as u64),
+                    trigger,
+                },
+                Rhs::Val(Val::UnitedVal(UnitVal {
+                    val: ms,
+                    unit: Unit::TimeMilliseconds,
+                })) => PlayKindUnited::UntilSensorCount {
+                    sending,
+                    until_sensor,
+                    until_count: PlayCount::TimeRelativeMs(ms),
+                    trigger,
+                },
+                _ => {
+                    unreachable!()
+                }
+            },
+        };
+
+        StatementKindPass1::SendFrames(pku)
+    })
+    .labelled("play_frames");
 
     let include = just(Token::OpAssignToLeft)
         .ignore_then(select! {
@@ -1632,10 +1735,7 @@ fn truncate_namespace(ns: &[String], stmt: &StatementKindOwned) -> StatementKind
             StatementKindOwned::VariableDef(truncate_namespace_stmt(ns, statement))
         }
         StatementKindOwned::Reset(path) => StatementKindOwned::Reset(path.clone()),
-        StatementKindOwned::SendFrames { kind, at } => StatementKindOwned::SendFrames {
-            kind: kind.clone(),
-            at: at.clone(),
-        },
+        StatementKindOwned::SendFrames(kind) => StatementKindOwned::SendFrames(kind.clone()),
     }
 }
 
@@ -1719,7 +1819,7 @@ impl VariableHistory {
                     }
                 }
                 StatementKindOwned::Reset(_) => {}
-                StatementKindOwned::SendFrames { kind: _, at: _ } => {}
+                StatementKindOwned::SendFrames(_) => {}
             }
         }
 
@@ -1859,7 +1959,7 @@ impl VariableHistory {
                     Statement::Compare { rhs: _, lhs: _ } => {}
                 },
                 &StatementKindOwned::Reset(_) => {}
-                &StatementKindOwned::SendFrames { kind: _, at: _ } => {}
+                &StatementKindOwned::SendFrames(_) => {}
             }
         }
         Ok(val)
@@ -1957,7 +2057,7 @@ impl VariableHistory {
                     Statement::Compare { rhs: _, lhs: _ } => vec![],
                 },
                 StatementKindOwned::Reset(_) => vec![],
-                StatementKindOwned::SendFrames { kind: _, at: _ } => vec![],
+                StatementKindOwned::SendFrames(_) => vec![],
             })
             .fold(Vec::new(), |mut acc, res| match res {
                 (var, Some(rhs)) => {
@@ -2087,7 +2187,7 @@ pub fn compile_code_with_state(
                         rules.push(rule.clone());
                     }
                     &StatementKindOwned::Reset(_) => winds.push(expr.clone()),
-                    &StatementKindOwned::SendFrames { kind: _, at: _ } => winds.push(expr.clone()),
+                    &StatementKindOwned::SendFrames(_) => winds.push(expr.clone()),
                     &StatementKindOwned::VariableDef(_) => {}
                 }
                 // ast.push(expr.into());
@@ -2098,12 +2198,7 @@ pub fn compile_code_with_state(
                 .into_iter()
                 .filter_map(|f| match f {
                     StatementKindOwned::Reset(file) => Some(WindFunction::Reset(file.to_owned())),
-                    StatementKindOwned::SendFrames { kind, at } => {
-                        Some(WindFunction::SendFrames {
-                            kind,
-                            at: at.to_owned(),
-                        }) // owned to make easier to outside parser, TODO maybe passthrough lifetimes
-                    }
+                    StatementKindOwned::SendFrames(kind) => Some(WindFunction::SendFrames(kind)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -2124,7 +2219,7 @@ pub fn compile_code_with_state(
                         resolve_stmt(statement, &var_history, i)?;
                     }
                     StatementKindOwned::Reset(_) => {}
-                    StatementKindOwned::SendFrames { kind: _, at: _ } => {}
+                    StatementKindOwned::SendFrames(_) => {}
                 }
             }
 
@@ -2164,15 +2259,15 @@ mod tests {
     #[test]
     fn test_minimal_rules() {
         const SRC: &str = r"
-        (var1
+        rule!(var1
             testRat1 -> testRat2
         )
         
-        (var3
+        rule!(var3
             testRat1, LOG <- testRat2
         )
 
-        (var4
+        rule!(var4
             testRat1 == testRat2
         )
         ";
@@ -2227,16 +2322,16 @@ mod tests {
     #[test]
     fn minimal_wind() {
         const SRC: &str = r"
-        reset ./bag_file_name
+        reset! ./bag_file_name
 
-        play_frames l 10s var1
-        play_frames il 5 var1
-        play_frames l 10 var1
+        pf! l 10s var1
+        pf! il 5 var1
+        pf! l 10 var1
 
-        (var1
+        rule!(var1
             testRat1 -> testRat2
         )
-        play_frames l 10s var1
+        pf! l 10s var1
         ";
 
         let eval = compile_code(SRC);
@@ -2249,7 +2344,7 @@ mod tests {
     #[test]
     fn single_line_rule() {
         const SRC: &str = r"
-        (var1 testRat1 -> testRat2)
+        rule!(var1 testRat1 -> testRat2)
         ";
 
         let eval = compile_code(SRC);
@@ -2263,7 +2358,7 @@ mod tests {
         const SRC: &str = r"
         # bla,.
         # ups /// \masd
-        play_frames l 10s var1 # yo
+        pf! l 10s var1 # yo
         ";
 
         let eval = compile_code(SRC);
@@ -2449,7 +2544,7 @@ mod tests {
     #[test]
     fn resolve_ns() {
         const SRC: &str = r"
-        (var1
+        rule! (var1
             testRat1 -> testRat2
             testRat1 -> testRat2, a.c
             a.b <- 5
@@ -2591,5 +2686,38 @@ mod tests {
                 ])),
             ])
         );
+    }
+
+    #[test]
+    fn advanced_wind() {
+        const SRC: &str = r"
+        reset! ./bag_file_name
+
+        # send all lidar frames between the absolute 10s and 20s of the bagfile immediately
+        pf! l 10s..20s
+
+        # send all lidar frames between the absolute 10s and 20s of the bagfile when reaching var1
+        pf! l 10s..20s var1   
+
+        # send all lidar frames between the absolute 10s and 20s of the bagfile but slow down time so it sends it over 1 minute
+        pf! l 10s..20s 2mins  
+
+        # send imu frames until 2 lidar frames are encountered
+        pf! il 2
+
+        # send imu frames until 2 lidar frames are encountered but spread over 8s real time
+        pf! il 2 8s
+
+        # send 10 lidar frames but spread them out over 20s
+        pf! l 10 20s
+
+        # send the next(!) 10 seconds of lidar frames every time it reaches var1
+        pf! l 10s var1
+        ";
+
+        let eval = compile_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+        assert!(!eval.wind.is_empty());
     }
 }

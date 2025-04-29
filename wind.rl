@@ -1,6 +1,8 @@
+# Wind settings (where they publish)
 <- ./wind_ros2.rl
 
-reset ./dlg_cut
+reset! ./dlg_cut
+
 _bag.{
 	imu.topic = /ouster/imu
 	lidar.topic = /ouster/points
@@ -8,4 +10,4 @@ _bag.{
 
 _wind = [ turbine_ros2 ]
 
-play_frames l 1 var1
+pf! l 1 var1
