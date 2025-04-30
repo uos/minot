@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use mcap::{McapError, Message};
 use memmap2::Mmap;
 use nalgebra::{UnitQuaternion, Vector3};
-use rlc::{PlayKindUnited, SensorType};
+use rlc::{PlayCount, PlayKindUnited, PlayTrigger, SensorType};
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
@@ -274,38 +274,39 @@ pub enum BagMsg {
 pub enum PlayKindUnitedRich {
     SensorCount {
         sensor: SensorTypeRich,
-        count: usize,
+        count: PlayCount,
+        trigger: Option<PlayTrigger>,
     },
     UntilSensorCount {
         sending: SensorTypeRich,
         until_sensor: SensorTypeRich,
-        until_count: usize,
-    },
-    UntilTime {
-        sending: SensorTypeRich,
-        duration: std::time::Duration,
+        until_count: PlayCount,
+        trigger: Option<PlayTrigger>,
     },
 }
 
 impl PlayKindUnitedRich {
-    pub fn with_topic(src: &PlayKindUnited, topics: &[&str]) -> Self {
+    pub fn with_topic(src: PlayKindUnited, topics: &[&str]) -> Self {
         match src {
-            PlayKindUnited::SensorCount { sensor, count } => PlayKindUnitedRich::SensorCount {
-                sensor: SensorTypeRich::with_topic(sensor, topics),
-                count: *count,
+            PlayKindUnited::SensorCount {
+                sensor,
+                count,
+                trigger,
+            } => PlayKindUnitedRich::SensorCount {
+                sensor: SensorTypeRich::with_topic(&sensor, topics),
+                count,
+                trigger,
             },
             PlayKindUnited::UntilSensorCount {
                 sending,
                 until_sensor,
                 until_count,
+                trigger,
             } => PlayKindUnitedRich::UntilSensorCount {
-                sending: SensorTypeRich::with_topic(sending, topics),
-                until_sensor: SensorTypeRich::with_topic(until_sensor, topics),
-                until_count: *until_count,
-            },
-            PlayKindUnited::UntilTime { sending, duration } => PlayKindUnitedRich::UntilTime {
-                sending: SensorTypeRich::with_topic(sending, topics),
-                duration: *duration,
+                sending: SensorTypeRich::with_topic(&sending, topics),
+                until_sensor: SensorTypeRich::with_topic(&until_sensor, topics),
+                until_count,
+                trigger,
             },
         }
     }
@@ -515,6 +516,7 @@ fn collect_until_time(
 }
 
 impl Bagfile {
+    // TODO handle trigger and counts coorectly
     pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<BagMsg>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
@@ -522,24 +524,17 @@ impl Bagfile {
                 let iter = stream.skip(self.cursor);
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
                 match kind {
-                    PlayKindUnitedRich::SensorCount { sensor, count } => {
-                        collect_until_count(iter, metadata, sensor, None, *count)
-                    }
+                    PlayKindUnitedRich::SensorCount {
+                        sensor,
+                        count,
+                        trigger,
+                    } => collect_until_count(iter, metadata, sensor, None, 0),
                     PlayKindUnitedRich::UntilSensorCount {
                         sending,
                         until_sensor,
                         until_count,
-                    } => collect_until_count(
-                        iter,
-                        metadata,
-                        sending,
-                        Some(until_sensor),
-                        *until_count,
-                    ),
-
-                    PlayKindUnitedRich::UntilTime { sending, duration } => {
-                        collect_until_time(iter, metadata, sending, duration)
-                    }
+                        trigger,
+                    } => collect_until_count(iter, metadata, sending, Some(until_sensor), 1),
                 }
             }
             None => Err(anyhow!("Not yet initialized.")),
@@ -663,6 +658,7 @@ mod tests {
 
     #[test]
     fn bag_read_simple() {
+        // TODO add trigger
         let path = "../dlg_cut";
         let mut bag = Bagfile::default();
         let res = bag.reset(Some(path));
@@ -672,7 +668,8 @@ mod tests {
             sensor: SensorTypeRich::Lidar {
                 topic: "/ouster/points".to_owned(),
             },
-            count: 1,
+            count: PlayCount::Amount(1),
+            trigger: None,
         });
 
         assert!(clouds.is_ok());
@@ -687,11 +684,12 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(&PlayKindUnitedRich::UntilTime {
-            sending: SensorTypeRich::Lidar {
+        let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
+            sensor: SensorTypeRich::Lidar {
                 topic: "/ouster/points".to_owned(),
             },
-            duration: std::time::Duration::from_millis(50),
+            trigger: None,
+            count: PlayCount::TimeRelativeMs(50),
         });
 
         assert!(clouds.is_ok());

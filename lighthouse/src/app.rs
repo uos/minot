@@ -1894,7 +1894,7 @@ impl App {
                     }
                 }
                 // TODO add "at" to logic
-                rlc::WindFunction::SendFrames { kind, at } => {
+                rlc::WindFunction::SendFrames(kind) => {
                     let sending_lidar_topic =
                         match Self::topic_from_eval_or_default(&eval, "_bag.lidar.topic", "/cloud")
                         {
@@ -1921,7 +1921,7 @@ impl App {
                         .wind_cursor
                         .bagfile
                         .next(&PlayKindUnitedRich::with_topic(
-                            kind,
+                            kind.clone(),
                             &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
                         ));
 

@@ -570,11 +570,6 @@ pub enum PlayKindUnited {
         until_count: PlayCount,
         trigger: Option<PlayTrigger>,
     },
-    UntilTime {
-        sending: SensorType,
-        duration: PlayTimeMsRange,
-        trigger: Option<PlayTrigger>,
-    },
 }
 
 #[derive(Debug, Clone)]
