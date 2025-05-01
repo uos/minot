@@ -312,7 +312,7 @@ impl SensorTypeRich {
     }
 }
 
-fn collect_until_count(
+fn collect_until(
     iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
     cursor: &mut usize,
     metadata: &Metadata,
@@ -495,7 +495,7 @@ impl Bagfile {
                         sensor,
                         count,
                         trigger: _,
-                    } => collect_until_count(
+                    } => collect_until(
                         stream,
                         &mut self.cursor,
                         metadata,
@@ -508,7 +508,7 @@ impl Bagfile {
                         until_sensor,
                         until_count,
                         trigger: _,
-                    } => collect_until_count(
+                    } => collect_until(
                         stream,
                         &mut self.cursor,
                         metadata,
@@ -539,7 +539,7 @@ impl Bagfile {
             let path = path.unwrap();
             let metapath = path.join("metadata.yaml");
 
-            let metadata_contents = fs::read_to_string(metapath).unwrap();
+            let metadata_contents = fs::read_to_string(metapath)?;
             let bag_info: Metadata = serde_yml::from_str(&metadata_contents)?;
             validate_support(&bag_info)?;
             let mcap_file = bag_info

@@ -11,7 +11,7 @@ use ros2_interfaces_jazzy::{
 };
 
 use anyhow::anyhow;
-use log::error;
+use log::{error, info};
 use wind::wind;
 
 fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
@@ -77,7 +77,8 @@ impl From<crate::Qos> for ros2::QosPolicies {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    let env = env_logger::Env::new().filter_or("WIND_LOG", "off");
+    env_logger::Builder::from_env(env).init();
 
     let wind_name = get_env_or_default("wind_name", "turbine_ros2")?;
     let rlc_file = if let Some(file) = std::env::args().nth(1) {
@@ -152,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
     let ctx = ros2_client::Context::new()?;
-    let node_name = wind_name + "_node";
+    let node_name = wind_name.clone() + "_node";
     let mut node = ctx.new_node(
         NodeName::new(&namespace, &node_name)?,
         NodeOptions::new().enable_rosout(true),
@@ -184,13 +185,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .unwrap();
 
-    let mut wind_receiver = wind(&namespace).await?;
+    let mut wind_receiver = wind(&wind_name).await?;
 
     while let Some(data) = wind_receiver.recv().await {
         match data {
             wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
                 let msg: PointCloud2 = point_cloud2_msg.into();
                 cloud_publisher.publish(msg)?;
+                info!("published cloud");
             }
             wind::sea::WindData::Imu(imu_msg) => {
                 let msg = Imu {
@@ -226,15 +228,15 @@ async fn main() -> anyhow::Result<()> {
                         z: imu_msg.angular_velocity.z,
                     },
                     angular_velocity_covariance: [
-                        imu_msg.angular_velocity[0],
-                        imu_msg.angular_velocity[1],
-                        imu_msg.angular_velocity[2],
-                        imu_msg.angular_velocity[3],
-                        imu_msg.angular_velocity[4],
-                        imu_msg.angular_velocity[5],
-                        imu_msg.angular_velocity[6],
-                        imu_msg.angular_velocity[7],
-                        imu_msg.angular_velocity[8],
+                        imu_msg.angular_velocity_covariance[0],
+                        imu_msg.angular_velocity_covariance[1],
+                        imu_msg.angular_velocity_covariance[2],
+                        imu_msg.angular_velocity_covariance[3],
+                        imu_msg.angular_velocity_covariance[4],
+                        imu_msg.angular_velocity_covariance[5],
+                        imu_msg.angular_velocity_covariance[6],
+                        imu_msg.angular_velocity_covariance[7],
+                        imu_msg.angular_velocity_covariance[8],
                     ],
                     linear_acceleration: Vector3 {
                         x: imu_msg.linear_acceleration.x,
@@ -254,6 +256,7 @@ async fn main() -> anyhow::Result<()> {
                     ],
                 };
                 imu_publisher.publish(msg)?;
+                info!("published imu");
             }
         }
     }

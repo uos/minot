@@ -49,7 +49,10 @@ pub enum PacketKind {
         action: Action,
         lock_until_ack: bool,
     },
-    Wind(WindData),
+    Wind {
+        data: WindData,
+        at_var: Option<String>,
+    },
 }
 
 pub trait SeaSendableScalar:

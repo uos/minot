@@ -1,4 +1,4 @@
-// Example of rats (.rat -- Rats Language)
+# Testing ground for the development of ratslang. May be outdated.
 
 ==._print <- false
 ==._verbose <- true

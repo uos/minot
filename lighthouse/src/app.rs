@@ -6,6 +6,7 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Error, anyhow};
@@ -689,7 +690,7 @@ pub struct WindCursor {
     wind_send_state: WindSendState,
     wind_file_path: PathBuf,
     bagfile: bagread::Bagfile,
-    variable_cache: HashMap<String, rlc::Rhs>,
+    variable_cache: HashMap<String, rlc::Rhs>, // TODO use
 }
 
 impl Default for WindCursor {
@@ -1564,6 +1565,82 @@ fn get_current_time() -> String {
 
 pub(crate) const INFO_LINES: usize = 8;
 
+fn wrap_text(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if text.is_empty() {
+        return String::new();
+    }
+
+    let mut wrapped_lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+
+    for word in text.split_whitespace() {
+        let word_chars_count = word.chars().count();
+
+        let space_needed = if current_line.is_empty() { 0 } else { 1 };
+        let potential_line_chars_count =
+            current_line.chars().count() + space_needed + word_chars_count;
+
+        if potential_line_chars_count <= max_width {
+            if !current_line.is_empty() {
+                current_line.push(' ');
+            }
+            current_line.push_str(word);
+        } else {
+            if !current_line.is_empty() {
+                wrapped_lines.push(current_line);
+            }
+            current_line = String::new();
+
+            if word_chars_count > max_width {
+                let mut chars = word.chars();
+                let mut segment = String::new();
+                while let Some(c) = chars.next() {
+                    segment.push(c);
+                    if segment.chars().count() == max_width {
+                        wrapped_lines.push(segment);
+                        segment = String::new();
+                    }
+                }
+                if !segment.is_empty() {
+                    wrapped_lines.push(segment);
+                }
+                current_line = String::new();
+            } else {
+                current_line.push_str(word);
+            }
+        }
+    }
+    if !current_line.is_empty() {
+        wrapped_lines.push(current_line);
+    }
+
+    wrapped_lines.join("\n")
+}
+
+pub fn vec_to_wrapped_string(vec_of_strings: &Vec<String>, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    let mut first_string = true;
+
+    for original_string in vec_of_strings {
+        if !first_string {
+            result.push('\n');
+        }
+        first_string = false;
+
+        let wrapped_part = wrap_text(&original_string, max_width);
+        result.push_str(&wrapped_part);
+    }
+
+    result
+}
+
 // TODO fix text not rendered coloured because info is lost with String. Needs "Line" from ratatui
 impl InfoView {
     pub fn log_info(&mut self, log: &str) {
@@ -1599,7 +1676,7 @@ impl InfoView {
     }
 
     pub fn render(&self) -> String {
-        self.log.join("\n")
+        vec_to_wrapped_string(&self.log, 50)
     }
 }
 
@@ -1645,11 +1722,18 @@ impl App {
             }
         });
         tokio::task::yield_now().await;
+
+        let mut wind_cursor = WindCursor::default();
+
+        if let Some(rl) = &rats {
+            wind_cursor = wind_cursor.with_rats(rl.clone());
+        }
+
         Self {
             running: true,
             coordinator: Coordinator::default(),
             history,
-            wind_cursor: WindCursor::default(),
+            wind_cursor,
             mode: Mode::default(),
             tolerance: Tolerance::default(),
             compare: ClientCompare::default(),
@@ -1856,11 +1940,21 @@ impl App {
         }
     }
 
+    fn timestamp_to_millis(t: &bagread::TimeMsg) -> u64 {
+        t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
+    }
+
+    fn timestamp_to_millis_rpcl2(t: &ros_pointcloud2::ros::TimeMsg) -> u64 {
+        t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
+    }
+
     pub async fn wind_fire_at_current_cursor(&mut self) {
         let lines = self.wind_cursor.selected_lines();
         let start_line = lines.first().map(|l| *l as usize);
         let end_line = lines.last().map(|l| *l as usize);
         let rats_file = self.wind_cursor.wind_file_path.clone();
+
+        // TODO wait until the last fire is finished
 
         // TODO to thread and wait for end
         // TODO set wind indicators while processing
@@ -1877,8 +1971,6 @@ impl App {
         self.info_view
             .log_info(&format!("compiled {start_line:?}-{end_line:?}"));
 
-        self.info_view.log_info(&format!("{:?}", eval));
-
         for windfn in eval.wind.iter() {
             match windfn {
                 rlc::WindFunction::Reset(path) => {
@@ -1893,7 +1985,6 @@ impl App {
                         }
                     }
                 }
-                // TODO add "at" to logic
                 rlc::WindFunction::SendFrames(kind) => {
                     let sending_lidar_topic =
                         match Self::topic_from_eval_or_default(&eval, "_bag.lidar.topic", "/cloud")
@@ -1917,6 +2008,21 @@ impl App {
 
                     self.info_view
                         .log_info(&format!("imu topic: {sending_imu_topic}"));
+
+                    let trigger = match &kind {
+                        rlc::PlayKindUnited::SensorCount {
+                            sensor: _,
+                            count: _,
+                            trigger,
+                        } => trigger,
+                        rlc::PlayKindUnited::UntilSensorCount {
+                            sending: _,
+                            until_sensor: _,
+                            until_count: _,
+                            trigger,
+                        } => trigger,
+                    };
+
                     let bagmsgs = self
                         .wind_cursor
                         .bagfile
@@ -1933,41 +2039,125 @@ impl App {
                         }
                     };
 
+                    let mut wind_data = Vec::with_capacity(bagmsgs.len());
+                    let mut start_time = None;
+                    let mut end_time = None;
                     for msg in bagmsgs {
                         let wind = match msg {
                             bagread::BagMsg::Cloud(point_cloud2_msg) => {
-                                WindData::Pointcloud(point_cloud2_msg)
+                                let t =
+                                    Self::timestamp_to_millis_rpcl2(&point_cloud2_msg.header.stamp);
+                                if start_time.is_none() {
+                                    start_time.replace(t);
+                                }
+
+                                end_time.replace(t);
+
+                                (
+                                    end_time.unwrap() - start_time.unwrap(),
+                                    WindData::Pointcloud(point_cloud2_msg),
+                                )
                             }
-                            bagread::BagMsg::Imu(imu_msg) => WindData::Imu(sea::ImuMsg {
-                                header: sea::Header {
-                                    seq: imu_msg.header.seq,
-                                    stamp: sea::TimeMsg {
-                                        sec: imu_msg.header.stamp.sec,
-                                        nanosec: imu_msg.header.stamp.nanosec,
-                                    },
-                                    frame_id: imu_msg.header.frame_id,
-                                },
-                                timestamp_sec: sea::TimeMsg {
-                                    sec: imu_msg.timestamp_sec.sec,
-                                    nanosec: imu_msg.timestamp_sec.nanosec,
-                                },
-                                orientation: imu_msg.orientation,
-                                orientation_covariance: imu_msg.orientation_covariance,
-                                angular_velocity: imu_msg.angular_velocity,
-                                angular_velocity_covariance: imu_msg.angular_velocity_covariance,
-                                linear_acceleration: imu_msg.linear_acceleration,
-                                linear_acceleration_covariance: imu_msg
-                                    .linear_acceleration_covariance,
-                            }),
+                            bagread::BagMsg::Imu(imu_msg) => {
+                                let t = Self::timestamp_to_millis(&imu_msg.header.stamp);
+                                if start_time.is_none() {
+                                    start_time.replace(t);
+                                }
+
+                                end_time.replace(t);
+
+                                (
+                                    end_time.unwrap() - start_time.unwrap(),
+                                    WindData::Imu(sea::ImuMsg {
+                                        header: sea::Header {
+                                            seq: imu_msg.header.seq,
+                                            stamp: sea::TimeMsg {
+                                                sec: imu_msg.header.stamp.sec,
+                                                nanosec: imu_msg.header.stamp.nanosec,
+                                            },
+                                            frame_id: imu_msg.header.frame_id,
+                                        },
+                                        timestamp_sec: sea::TimeMsg {
+                                            sec: imu_msg.timestamp_sec.sec,
+                                            nanosec: imu_msg.timestamp_sec.nanosec,
+                                        },
+                                        orientation: imu_msg.orientation,
+                                        orientation_covariance: imu_msg.orientation_covariance,
+                                        angular_velocity: imu_msg.angular_velocity,
+                                        angular_velocity_covariance: imu_msg
+                                            .angular_velocity_covariance,
+                                        linear_acceleration: imu_msg.linear_acceleration,
+                                        linear_acceleration_covariance: imu_msg
+                                            .linear_acceleration_covariance,
+                                    }),
+                                )
+                            }
                         };
 
-                        let send = self.send_coordinator.send(PacketKind::Wind(wind)).await;
-                        match send {
-                            Ok(_) => {}
-                            Err(e) => {
-                                self.info_view
-                                    .log_error(&format!("Could not send Wind to coordinator: {e}"));
-                                return;
+                        wind_data.push(wind);
+                    }
+
+                    if wind_data.is_empty() {
+                        return;
+                    }
+
+                    let var = match trigger {
+                        Some(rlc::PlayTrigger::Variable(var)) => Some(var.clone()),
+                        _ => None,
+                    };
+
+                    match trigger {
+                        Some(rlc::PlayTrigger::DurationMs(target_duration_ms)) => {
+                            let original_duration_ms = end_time.unwrap() - start_time.unwrap();
+                            let scale = *target_duration_ms as f64 / original_duration_ms as f64;
+
+                            let start_time = Instant::now();
+
+                            for (original_ts, wind) in wind_data {
+                                let scaled_ts = original_ts as f64 * scale;
+                                let target_offset = Duration::from_secs_f64(scaled_ts / 1000.0);
+                                let target_wall_time = start_time + target_offset;
+                                let sleep_duration =
+                                    target_wall_time.saturating_duration_since(Instant::now());
+                                tokio::time::sleep(sleep_duration).await;
+
+                                let send = self
+                                    .send_coordinator
+                                    .send(PacketKind::Wind {
+                                        data: wind,
+                                        at_var: None,
+                                    })
+                                    .await;
+                                match send {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        self.info_view.log_error(&format!(
+                                            "Could not send Wind to coordinator: {e}"
+                                        ));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        // TODO this can be probably way more elegant. needs var as None in case None and Some(var) in case some var
+                        _ => {
+                            for (_, wind) in wind_data {
+                                let send = self
+                                    .send_coordinator
+                                    .send(PacketKind::Wind {
+                                        data: wind,
+                                        at_var: var.clone(),
+                                    })
+                                    .await;
+                                match send {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        self.info_view.log_error(&format!(
+                                            "Could not send Wind to coordinator: {e}"
+                                        ));
+                                        return;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1982,7 +2172,6 @@ impl App {
             WindMode::Inactive => WindMode::Inactive,
             WindMode::Active => WindMode::ActiveSelect,
             WindMode::ActiveSelect => WindMode::Active,
-            // WindMode::Inactive => WindMode::Inactive,
         };
     }
 
@@ -1999,7 +2188,7 @@ impl App {
                 self.wind_cursor.popup_buffer.clear();
                 self.wind_cursor.showing_popup = false;
                 WindMode::Inactive
-            } // WindMode::Inactive => WindMode::Inactive,
+            }
         };
         self.info_view
             .log_info(&format!("{:?}", self.wind_cursor.mode));
@@ -2010,7 +2199,6 @@ impl App {
             WindMode::Inactive => false,
             WindMode::Active => true,
             WindMode::ActiveSelect => true,
-            // WindMode::Inactive => false,
         }
     }
 

@@ -18,7 +18,7 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>
                     tx.send(wind_data).unwrap();
                 }
                 Err(e) => {
-                    error!("Error: {}", e);
+                    error!("{}", e);
                     continue;
                 }
             }

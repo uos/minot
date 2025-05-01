@@ -41,7 +41,7 @@ impl crate::Coordinator for CoordinatorImpl {
         if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
             let paket = Packet {
                 header: crate::net::Header::default(),
-                data: PacketKind::Wind(data),
+                data: PacketKind::Wind { data, at_var: None },
             };
             return client_info
                 .sender

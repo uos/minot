@@ -8,6 +8,6 @@ _bag.{
 	lidar.topic = /ouster/points
 }
 
-_wind = [ turbine_ros2 ]
+# pf! il 2 10s # check if there are really only 9 msgs before the first 2 lidar frames
 
-pf! l 1 var1
+pf! il 2 10s

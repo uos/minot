@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use log::{debug, error, info, warn};
+use nalgebra::SimdValue;
 use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
-use rlc::{ActionPlan, COMPARE_NODE_NAME};
-use sea::Coordinator;
+use rlc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};
+use sea::{Coordinator, WindData};
 
 #[derive(Debug)]
 enum LighthouseTask {
@@ -34,12 +35,23 @@ enum LighthouseTask {
 
 #[tokio::main(flavor = "multi_thread")]
 pub async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    let env = env_logger::Env::new().filter_or("LH_LOG", "off");
+    env_logger::Builder::from_env(env).init();
 
     // file can be rules or wind set by _wind var
-    let filepath = std::env::args().nth(1).unwrap_or("./lh.rl".into());
-    let rules_file = PathBuf::from_str(&filepath)?;
-    let eval = rlc::compile_file(&rules_file, None, None)?;
+    let filepath = std::env::args().nth(1);
+
+    let eval = if let Some(fp) = filepath {
+        let rules_file = PathBuf::from_str(&fp)?;
+        let rules_file = std::fs::canonicalize(&rules_file)?;
+        rlc::compile_file(&rules_file, None, None)?
+    } else {
+        rlc::Evaluated {
+            rules: Rules::new(),
+            wind: Vec::new(),
+            vars: VariableHistory::new(Vec::new()),
+        }
+    };
 
     let rules = eval.rules;
     let mut clients = HashSet::new();
@@ -92,6 +104,12 @@ pub async fn main() -> anyhow::Result<()> {
 
     let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
     let rules_changer = std::sync::Arc::clone(&rules);
+
+    let winds_var = std::sync::Arc::new(std::sync::RwLock::new(HashMap::<
+        String,
+        (bool, Vec<WindData>),
+    >::new()));
+    let winds_changer = std::sync::Arc::clone(&winds_var);
 
     let (wind_tx, _) = tokio::sync::broadcast::channel::<sea::WindData>(20); // TODO send on wind_tx
 
@@ -146,6 +164,7 @@ pub async fn main() -> anyhow::Result<()> {
                                 let inner_name = name.clone();
                                 let rat_rules = rules.clone();
                                 let rat_coord_tx = coord_tx_new_client.clone();
+                                let winds_inner = std::sync::Arc::clone(&winds_changer);
                                 // spawn task to handle variable requests for this rat
                                 tokio::spawn(async move {
                                     let lighthouse_name = COMPARE_NODE_NAME.to_string();
@@ -179,14 +198,41 @@ pub async fn main() -> anyhow::Result<()> {
                                                             .send(LighthouseTask::Unlock)
                                                             .unwrap();
                                                     }
-                                                    PacketKind::Wind(wind_data) => {
-                                                        wind_tx_inner.send(wind_data).unwrap(); // Forward to each listener of newly connected winds. They resolve the names.
-                                                    }
+                                                    PacketKind::Wind {
+                                                        data: wind_data,
+                                                        at_var,
+                                                    } => match at_var {
+                                                        Some(var) => {
+                                                            let mut w =
+                                                                winds_inner.write().unwrap();
+                                                            if let Some((_, wd)) = w.get_mut(&var) {
+                                                                wd.push(wind_data);
+                                                            } else {
+                                                                w.insert(
+                                                                    var,
+                                                                    (false, vec![wind_data]),
+                                                                );
+                                                            }
+                                                        }
+                                                        None => {
+                                                            let res = wind_tx_inner.send(wind_data);
+                                                            if let Err(_) = res {
+                                                                error!(
+                                                                    "Could not send wind data to proxy sender. Are you sure the winds are connected?",
+                                                                );
+                                                            }
+                                                        }
+                                                    },
 
+                                                    PacketKind::Heartbeat => {
+                                                        debug!(
+                                                            "Received Heartbeat from wind Lighthouse TUI."
+                                                        );
+                                                    }
                                                     _ => {
                                                         warn!(
-                                                            "Received unexpected packet from Lighthouse TUI {:?}",
-                                                            packet.data
+                                                            "Received unexpected packet from Lighthouse TUI",
+                                                            // packet.data
                                                         );
                                                     }
                                                 },
@@ -254,6 +300,42 @@ pub async fn main() -> anyhow::Result<()> {
                                                             })
                                                             .unwrap();
                                                             }
+
+                                                            let mut winds =
+                                                                winds_inner.write().unwrap();
+
+                                                            let mut changed = false;
+                                                            winds.get_mut(&variable).map(
+                                                                |(recently_sent, wds)| {
+                                                                    if !*recently_sent {
+                                                                        wds.iter().for_each(
+                                                                            |wind_data| {
+                                                                                wind_tx_inner
+                                                                                    .send(
+                                                                                        wind_data
+                                                                                            .clone(
+                                                                                            ),
+                                                                                    )
+                                                                                    .unwrap(); // Forward to each listener of newly connected winds. They resolve the names.
+                                                                            },
+                                                                        );
+                                                                        *recently_sent = true;
+                                                                        changed = true;
+                                                                    }
+                                                                },
+                                                            );
+
+                                                            // set all other to be sent again
+                                                            if changed {
+                                                                for (var, wind) in winds.iter_mut()
+                                                                {
+                                                                    if var == &variable {
+                                                                        continue;
+                                                                    }
+
+                                                                    wind.0 = false;
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                     Err(e) => {
@@ -285,6 +367,11 @@ pub async fn main() -> anyhow::Result<()> {
                                                         return;
                                                     }
                                                 }
+                                                PacketKind::Heartbeat => {
+                                                    debug!(
+                                                        "Received Heartbeat from wind {inner_name_rx}."
+                                                    );
+                                                }
                                                 _ => {
                                                     warn!(
                                                         "Unexpected packet from wind: {packet:?}"
@@ -305,7 +392,6 @@ pub async fn main() -> anyhow::Result<()> {
                                 tokio::spawn(async move {
                                     let mut sub = wind_tx_inner.subscribe();
                                     while let Ok(data) = sub.recv().await {
-                                        info!("received wind");
                                         wind_coord_tx
                                             .send(LighthouseTask::SendWind {
                                                 ship_name: inner_name.clone(),
@@ -354,7 +440,6 @@ pub async fn main() -> anyhow::Result<()> {
 
         let mut lock_next = false;
         while let Some(task) = coord_rx.recv().await {
-            debug!("received coordinator task {:?}", task);
             match task {
                 LighthouseTask::AppendRule { variable, commands } => {
                     let mut current_rules = rules_changer.write().unwrap();

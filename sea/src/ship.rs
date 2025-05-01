@@ -140,35 +140,25 @@ impl crate::Ship for NetworkShipImpl {
         self
     }
 
-    // async fn wait_for_action(&self) -> anyhow::Result<crate::Action> {
-    //     let client = self.client.lock().await;
-    //     let coord_receive = client.coordinator_receive.read().unwrap().clone();
-    //     if let Some(receiver) = coord_receive {
-    //         let mut sub = receiver.subscribe();
-    //         debug!("subbed");
-    //         while let Ok((packet, _)) = sub.recv().await {
-    //             debug!("received");
-    //             if let PacketKind::RatAction(action) = packet.data {
-    //                 return Ok(action);
-    //             }
-    //         }
-    //         return Err(anyhow!(
-    //             "Could not receive action while Channel was subscribed."
-    //         ));
-    //     } else {
-    //         debug!("waiting to be available..");
-    //         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    //         return self.wait_for_action().await;
-    //     }
-    // }
-
     async fn wait_for_wind(&self) -> anyhow::Result<crate::WindData> {
         let client = self.client.lock().await;
-        let coord_receive = client.coordinator_receive.read().unwrap().clone();
+        let coord_receive = { client.coordinator_receive.read().unwrap().clone() };
         if let Some(receiver) = coord_receive {
             let mut sub = receiver.subscribe();
             while let Ok((packet, _)) = sub.recv().await {
-                if let PacketKind::Wind(data) = packet.data {
+                if let PacketKind::Wind { data, at_var: _ } = packet.data {
+                    // send ack to coordinator
+                    let sender = {
+                        let coord_read = client.coordinator_send.read().unwrap();
+                        coord_read.as_ref().unwrap().clone()
+                    };
+                    sender
+                        .send(crate::net::Packet {
+                            header: crate::net::Header::default(),
+                            data: PacketKind::Acknowledge,
+                        })
+                        .await
+                        .unwrap();
                     return Ok(data);
                 }
             }
