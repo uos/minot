@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use log::{debug, error, info, warn};
-use nalgebra::SimdValue;
 use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
 use rlc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};

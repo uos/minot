@@ -8,10 +8,11 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
     match key_event.code {
         // Exit application on `ESC` or `q`
         KeyCode::Esc | KeyCode::Char('q') => {
-            if app.wind_mode() && app.wind_cursor.showing_popup {
-                app.wind_cursor.showing_popup = false;
-                app.wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
-                app.wind_cursor.popup_buffer.clear();
+            if app.wind_mode() && app.wind_cursor.read().unwrap().showing_popup {
+                let mut wind_cursor = app.wind_cursor.write().unwrap();
+                wind_cursor.showing_popup = false;
+                wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
+                wind_cursor.popup_buffer.clear();
             } else {
                 if app.compare.show_line_input_popup {
                     app.compare.show_line_input_popup = false;
@@ -147,8 +148,8 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             app.change_diff_rat(crate::app::VerticalDirection::Down);
         }
         KeyCode::Enter => {
-            if app.wind_mode() && app.wind_cursor.showing_popup {
-                let buffer = app.wind_cursor.popup_buffer.clone();
+            if app.wind_mode() && app.wind_cursor.read().unwrap().showing_popup {
+                let buffer = app.wind_cursor.read().unwrap().popup_buffer.clone();
                 let s: String = buffer.into_iter().collect();
 
                 let parsed = match s.parse::<usize>() {
@@ -159,12 +160,14 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
                 match parsed {
                     Ok(p) => {
                         app.wind_cursor(crate::app::VerticalDirection::Row(p));
-                        app.wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
-                        app.wind_cursor.showing_popup = false;
-                        app.wind_cursor.popup_buffer.clear();
+                        let mut wind_cursor = app.wind_cursor.write().unwrap();
+                        wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
+                        wind_cursor.showing_popup = false;
+                        wind_cursor.popup_buffer.clear();
                     }
                     Err(_e) => {
-                        app.wind_cursor.popup_title = POPUP_TITLE_ERR;
+                        let mut wind_cursor = app.wind_cursor.write().unwrap();
+                        wind_cursor.popup_title = POPUP_TITLE_ERR;
                     }
                 }
             } else {
@@ -206,7 +209,8 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
                             true
                         }
                         (_, _) => {
-                            app.wind_cursor.popup_title = POPUP_TITLE_ERR;
+                            let mut wind_cursor = app.wind_cursor.write().unwrap();
+                            wind_cursor.popup_title = POPUP_TITLE_ERR;
                             false
                         }
                     };
@@ -232,40 +236,41 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         | KeyCode::Char('8')
         | KeyCode::Char('9')
         | KeyCode::Char('0') => {
-            if app.wind_mode() && app.wind_cursor.showing_popup {
+            if app.wind_mode() && app.wind_cursor.read().unwrap().showing_popup {
+                let mut wind_cursor = app.wind_cursor.write().unwrap();
                 match key_event.code {
                     KeyCode::Backspace => {
-                        app.wind_cursor.popup_buffer.pop();
+                        wind_cursor.popup_buffer.pop();
                     }
                     KeyCode::Char('1') => {
-                        app.wind_cursor.popup_buffer.push('1');
+                        wind_cursor.popup_buffer.push('1');
                     }
                     KeyCode::Char('2') => {
-                        app.wind_cursor.popup_buffer.push('2');
+                        wind_cursor.popup_buffer.push('2');
                     }
                     KeyCode::Char('3') => {
-                        app.wind_cursor.popup_buffer.push('3');
+                        wind_cursor.popup_buffer.push('3');
                     }
                     KeyCode::Char('4') => {
-                        app.wind_cursor.popup_buffer.push('4');
+                        wind_cursor.popup_buffer.push('4');
                     }
                     KeyCode::Char('5') => {
-                        app.wind_cursor.popup_buffer.push('5');
+                        wind_cursor.popup_buffer.push('5');
                     }
                     KeyCode::Char('6') => {
-                        app.wind_cursor.popup_buffer.push('6');
+                        wind_cursor.popup_buffer.push('6');
                     }
                     KeyCode::Char('7') => {
-                        app.wind_cursor.popup_buffer.push('7');
+                        wind_cursor.popup_buffer.push('7');
                     }
                     KeyCode::Char('8') => {
-                        app.wind_cursor.popup_buffer.push('8');
+                        wind_cursor.popup_buffer.push('8');
                     }
                     KeyCode::Char('9') => {
-                        app.wind_cursor.popup_buffer.push('9');
+                        wind_cursor.popup_buffer.push('9');
                     }
                     KeyCode::Char('0') => {
-                        app.wind_cursor.popup_buffer.push('0');
+                        wind_cursor.popup_buffer.push('0');
                     }
                     _ => {}
                 }

@@ -24,8 +24,10 @@ use crate::{
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let env = env_logger::Env::new().filter_or("LH_LOG", "off");
-    env_logger::Builder::from_env(env).init();
+    tui_logger::init_logger(log::LevelFilter::Info).unwrap();
+    tui_logger::set_default_level(log::LevelFilter::Info);
+    // let env = env_logger::Env::new().filter_or("LH_LOG", "off");
+    // env_logger::Builder::from_env(env).init();
 
     let file = std::env::args().nth(1).map(|f| PathBuf::from_str(&f));
     let file = match file {

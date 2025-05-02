@@ -740,7 +740,7 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
         }
     }
 
-    return Err(anyhow!("Could not parse"));
+    return Err(anyhow!("Could not parse ratslang code."));
 }
 
 impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
@@ -1548,7 +1548,7 @@ pub fn compile_file(
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) -> anyhow::Result<Evaluated> {
-    compile_file_with_state(path, start_line, end_line, None)
+    compile_file_with_state(path, start_line, end_line, None, std::io::stderr(), true)
 }
 
 pub fn compile_file_with_state(
@@ -1556,6 +1556,8 @@ pub fn compile_file_with_state(
     start_line: Option<usize>,
     end_line: Option<usize>,
     var_state: Option<HashMap<Var, Rhs>>,
+    out: impl std::io::Write,
+    rich_out: bool,
 ) -> anyhow::Result<Evaluated> {
     let file = std::fs::read_to_string(path.clone());
     let file = match file {
@@ -1583,13 +1585,13 @@ pub fn compile_file_with_state(
     let dir = path.parent().ok_or(anyhow!(
         "Could not get parent directory of source code file."
     ))?;
-    compile_code_with_state(&selected_lines, dir, var_state)
+    compile_code_with_state(&selected_lines, dir, var_state, out, rich_out)
 }
 
 #[derive(Debug)]
 pub struct VariableHistory {
     ast: Vec<StatementKindOwned>,
-    var_cache: HashMap<Var, Rhs>,
+    pub var_cache: HashMap<Var, Rhs>,
 }
 
 fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
@@ -1774,6 +1776,25 @@ impl VariableHistory {
     pub fn with_state(mut self, state: HashMap<Var, Rhs>) -> Self {
         self.var_cache = state;
         self
+    }
+
+    pub fn populate_cache(&mut self) {
+        self.ast.iter().for_each(|f| match f {
+            StatementKindOwned::VariableDef(statement) => match statement {
+                Statement::AssignLeft { lhs, rhs } => {
+                    for l in lhs {
+                        self.var_cache.insert(l.clone(), rhs.clone());
+                    }
+                }
+                Statement::AssignRight { lhs, rhs } => {
+                    for r in rhs {
+                        self.var_cache.insert(r.clone(), lhs.clone());
+                    }
+                }
+                Statement::Compare { rhs: _, lhs: _ } => {}
+            },
+            _ => {}
+        });
     }
 
     fn filter_by_namespace(
@@ -2136,13 +2157,15 @@ fn resolve_stmt(
 
 pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     let currdir = std::env::current_dir()?;
-    compile_code_with_state(source_code_raw, &currdir, None)
+    compile_code_with_state(source_code_raw, &currdir, None, std::io::stderr(), true)
 }
 
 pub fn compile_code_with_state(
     source_code_raw: &str,
     source_code_parent_dir: &std::path::Path,
     var_state: Option<HashMap<Var, Rhs>>,
+    mut out: impl std::io::Write,
+    rich_out: bool,
 ) -> anyhow::Result<Evaluated> {
     let token_iter = Token::lexer(&source_code_raw)
         .spanned()
@@ -2224,27 +2247,50 @@ pub fn compile_code_with_state(
                 vars: VariableHistory::new(ast).with_state(var_state.unwrap_or_default()),
             });
         }
-        // If parsing was unsuccessful, generate a nice user-friendly diagnostic with ariadne. You could also use
-        // codespan, or whatever other diagnostic library you care about. You could even just display-print the errors
-        // with Rust's built-in `Display` trait, but it's a little crude
         Err(errs) => {
+            let src = Source::from(source_code_raw);
             for err in errs {
-                Report::build(ReportKind::Error, (), err.span().start)
-                    .with_code(3)
-                    .with_message(err.to_string())
-                    .with_label(
-                        Label::new(err.span().into_range())
-                            .with_message(err.reason().to_string())
-                            .with_color(Color::Red),
-                    )
-                    .finish()
-                    .eprint(Source::from(source_code_raw))
-                    .unwrap();
+                if rich_out {
+                    let e = Report::build(ReportKind::Error, (), err.span().start)
+                        .with_code(3)
+                        .with_message(err.to_string())
+                        .with_label(
+                            Label::new(err.span().into_range())
+                                .with_message(err.reason().to_string())
+                                .with_color(Color::Red),
+                        )
+                        .finish();
+
+                    e.write(src.clone(), &mut out).unwrap();
+                } else {
+                    // let e = Report::build(ReportKind::Error, (), err.span().start)
+                    //     .with_config(
+                    //         ariadne::Config::default()
+                    //             .with_color(false)
+                    //             .with_char_set(ariadne::CharSet::Ascii),
+                    //     )
+                    //     .with_code(3)
+                    //     .with_message(err.to_string())
+                    //     .with_label(
+                    //         Label::new(err.span().into_range())
+                    //             .with_message(err.reason().to_string())
+                    //             .with_color(Color::Red),
+                    //     )
+                    //     .finish();
+
+                    let msg = format!(
+                        "<{}-{}>  {}",
+                        err.span().start,
+                        err.span().end,
+                        err.reason().to_string(),
+                    );
+                    out.write(msg.as_bytes()).unwrap();
+                }
             }
         }
     }
 
-    Err(anyhow!("Could not parse"))
+    Err(anyhow!("Could not parse ratslang code."))
 }
 
 #[cfg(test)]
@@ -2312,6 +2358,26 @@ mod tests {
         assert!(!eval.rules.0.is_empty());
         let eval = eval.rules;
         assert_eq!(eval, rules);
+    }
+
+    #[test]
+    fn empty() {
+        const SRC: &str = r"";
+        let eval = compile_code(SRC);
+        assert!(eval.is_ok());
+
+        const SRC0: &str = r"
+        ";
+        let eval = compile_code(SRC0);
+        assert!(eval.is_ok());
+
+        const SRC1: &str = r"# blub
+        ";
+        // let mut a = Token::lexer(SRC1);
+        // let b = a.next();
+        // dbg!(b);
+        let eval = compile_code(SRC1);
+        assert!(eval.is_ok());
     }
 
     #[test]

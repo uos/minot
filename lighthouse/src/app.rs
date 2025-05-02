@@ -1,8 +1,8 @@
 use std::{
-    collections::HashMap,
-    error::{self},
+    collections::{HashMap, VecDeque},
     fmt::Display,
-    i8,
+    i8, io,
+    ops::DerefMut,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
@@ -12,16 +12,17 @@ use std::{
 use anyhow::{Error, anyhow};
 use bagread::PlayKindUnitedRich;
 use chrono::{DateTime, Local};
+use log::{error, info};
 use ratatui::{
-    layout::Constraint,
+    layout::{Alignment, Constraint},
     style::Stylize,
-    widgets::{Cell, Row, ScrollbarState, Table, TableState},
+    widgets::{Cell, Paragraph, Row, ScrollbarState, Table, TableState},
 };
-use rlc::Rhs;
+use rlc::{Evaluated, Rhs};
 use sea::{WindData, net::PacketKind};
 
 /// Application result type.
-pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
+pub type AppResult<T> = std::result::Result<T, Box<dyn core::error::Error>>;
 
 #[derive(Debug, Default)]
 pub enum Mode {
@@ -665,6 +666,13 @@ pub enum WindSendState {
     NotRun,
 }
 
+#[derive(Debug, Default)]
+pub enum WindCompile {
+    Compiling,
+    #[default]
+    Done,
+}
+
 pub const WIND_POPUP_TITLE_NOERR: &'static str = "WindCursor to Line:";
 pub const POPUP_TITLE_ERR: &'static str = "Could not parse! Please correct:";
 
@@ -688,9 +696,11 @@ pub struct WindCursor {
     pub popup_title: &'static str,
     pub popup_buffer: Vec<char>,
     wind_send_state: WindSendState,
+    wind_work_queue: VecDeque<Evaluated>,
+    compile_state: WindCompile,
     wind_file_path: PathBuf,
     bagfile: bagread::Bagfile,
-    variable_cache: HashMap<String, rlc::Rhs>, // TODO use
+    variable_cache: HashMap<rlc::Var, rlc::Rhs>, // TODO use
 }
 
 impl Default for WindCursor {
@@ -706,6 +716,8 @@ impl Default for WindCursor {
             wind_file_path: PathBuf::from("./wind.rl"),
             bagfile: bagread::Bagfile::default(),
             variable_cache: HashMap::new(),
+            wind_work_queue: VecDeque::new(),
+            compile_state: WindCompile::default(),
         }
     }
 }
@@ -730,10 +742,27 @@ impl Display for WindCursor {
             format!("{}-{}", self.line_start, self.line_end)
         };
 
+        let queue_len = self.wind_work_queue.len();
+        let queue_len_present = if queue_len == 0 {
+            "".to_owned()
+        } else {
+            format!("+{}", queue_len)
+        };
+
+        let compile_state = match self.compile_state {
+            WindCompile::Compiling => "💫",
+            WindCompile::Done => "",
+        }
+        .to_owned();
+
         match self.wind_send_state {
-            WindSendState::Acked => f.write_fmt(format_args!("{}✅", lines)),
-            WindSendState::Sent => f.write_fmt(format_args!("{}🔄", lines)),
-            WindSendState::NotRun => f.write_fmt(format_args!("{}", lines)),
+            WindSendState::Acked => {
+                f.write_fmt(format_args!("{compile_state}{lines}✅{queue_len_present}"))
+            }
+            WindSendState::Sent => {
+                f.write_fmt(format_args!("{compile_state}{lines}🔄{queue_len_present}"))
+            }
+            WindSendState::NotRun => f.write_fmt(format_args!("{lines}")),
         }
     }
 }
@@ -746,14 +775,6 @@ impl WindCursor {
     fn with_rats(mut self, wind_file_path: PathBuf) -> Self {
         self.wind_file_path = wind_file_path;
         self
-    }
-
-    fn get_var_from_cache(&self, var: &str) -> Option<&rlc::Rhs> {
-        self.variable_cache.get(var)
-    }
-
-    fn add_var_to_cache(&mut self, var: String, val: rlc::Rhs) {
-        self.variable_cache.insert(var, val);
     }
 }
 
@@ -1563,130 +1584,70 @@ fn get_current_time() -> String {
     formatted_time
 }
 
-pub(crate) const INFO_LINES: usize = 8;
+pub(crate) const INFO_LINES: usize = 10;
 
-fn wrap_text(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-    if text.is_empty() {
-        return String::new();
-    }
+impl std::io::Write for InfoView {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let s = str::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let s = String::from(s);
+        error!("{s}");
+        // self.log.push(s);
 
-    let mut wrapped_lines: Vec<String> = Vec::new();
-    let mut current_line = String::new();
-
-    for word in text.split_whitespace() {
-        let word_chars_count = word.chars().count();
-
-        let space_needed = if current_line.is_empty() { 0 } else { 1 };
-        let potential_line_chars_count =
-            current_line.chars().count() + space_needed + word_chars_count;
-
-        if potential_line_chars_count <= max_width {
-            if !current_line.is_empty() {
-                current_line.push(' ');
-            }
-            current_line.push_str(word);
-        } else {
-            if !current_line.is_empty() {
-                wrapped_lines.push(current_line);
-            }
-            current_line = String::new();
-
-            if word_chars_count > max_width {
-                let mut chars = word.chars();
-                let mut segment = String::new();
-                while let Some(c) = chars.next() {
-                    segment.push(c);
-                    if segment.chars().count() == max_width {
-                        wrapped_lines.push(segment);
-                        segment = String::new();
-                    }
-                }
-                if !segment.is_empty() {
-                    wrapped_lines.push(segment);
-                }
-                current_line = String::new();
-            } else {
-                current_line.push_str(word);
-            }
-        }
-    }
-    if !current_line.is_empty() {
-        wrapped_lines.push(current_line);
+        Ok(buf.len())
     }
 
-    wrapped_lines.join("\n")
-}
-
-pub fn vec_to_wrapped_string(vec_of_strings: &Vec<String>, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
-
-    let mut result = String::new();
-    let mut first_string = true;
-
-    for original_string in vec_of_strings {
-        if !first_string {
-            result.push('\n');
-        }
-        first_string = false;
-
-        let wrapped_part = wrap_text(&original_string, max_width);
-        result.push_str(&wrapped_part);
-    }
-
-    result
 }
 
 // TODO fix text not rendered coloured because info is lost with String. Needs "Line" from ratatui
 impl InfoView {
-    pub fn log_info(&mut self, log: &str) {
-        let txt = "INFO".blue();
-        self.log
-            .push(format!("[{txt}] {} -- {log}", get_current_time()));
+    // pub fn log_info(&mut self, log: &str) {
+    //     let txt = "INFO".blue();
+    //     self.log
+    //         .push(format!("[{txt}] {} -- {log}", get_current_time()));
 
-        if self.log.len() > INFO_LINES {
-            self.log.remove(1);
-        }
-    }
-    pub fn log_error(&mut self, log: &str) {
-        let txt = "ERROR".red();
-        self.log
-            .push(format!("[{txt}] {} - {log}", get_current_time()));
+    //     if self.log.len() > INFO_LINES {
+    //         self.log.remove(1);
+    //     }
+    // }
+    // pub fn log_error(&mut self, log: &str) {
+    //     let txt = "ERROR".red();
+    //     self.log
+    //         .push(format!("[{txt}] {} - {log}", get_current_time()));
 
-        if self.log.len() > INFO_LINES {
-            self.log.remove(1);
-        }
-    }
-    pub fn log_debug(&mut self, log: &str) {
-        let txt = "DEBUG";
-        self.log
-            .push(format!("[{txt}] {} -- {log}", get_current_time()));
+    //     if self.log.len() > INFO_LINES {
+    //         self.log.remove(1);
+    //     }
+    // }
+    // pub fn log_debug(&mut self, log: &str) {
+    //     let txt = "DEBUG";
+    //     self.log
+    //         .push(format!("[{txt}] {} -- {log}", get_current_time()));
 
-        if self.log.len() > INFO_LINES {
-            self.log.remove(1);
-        }
-    }
+    //     if self.log.len() > INFO_LINES {
+    //         self.log.remove(1);
+    //     }
+    // }
 
     pub fn toggle(&mut self) {
         self.shown = !self.shown;
     }
 
-    pub fn render(&self) -> String {
-        vec_to_wrapped_string(&self.log, 50)
+    pub fn render(&self) -> Paragraph<'_> {
+        let text = self.log.join("\n");
+        Paragraph::new(text).wrap(ratatui::widgets::Wrap { trim: true })
     }
 }
 
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
-    pub info_view: InfoView,
+    pub info_view: Arc<RwLock<InfoView>>,
     pub coordinator: Coordinator,
     pub history: Arc<RwLock<History>>, // 0 var1; -1 var2 etc.
-    pub wind_cursor: WindCursor,
+    pub wind_cursor: Arc<RwLock<WindCursor>>,
     pub mode: Mode,
     pub tolerance: Tolerance,
     pub compare: ClientCompare,
@@ -1733,13 +1694,13 @@ impl App {
             running: true,
             coordinator: Coordinator::default(),
             history,
-            wind_cursor,
+            wind_cursor: Arc::new(RwLock::new(wind_cursor)),
             mode: Mode::default(),
             tolerance: Tolerance::default(),
             compare: ClientCompare::default(),
             send_coordinator: sender,
             rats_file: rats,
-            info_view: InfoView::default(),
+            info_view: Arc::new(RwLock::new(InfoView::default())),
         }
     }
 
@@ -1770,11 +1731,11 @@ impl App {
     }
 
     pub fn render_wind_cursor(&self) -> String {
-        format!("{}", self.wind_cursor)
+        format!("{}", self.wind_cursor.read().unwrap())
     }
 
     pub fn toggle_info_window(&mut self) {
-        self.info_view.toggle();
+        self.info_view.write().unwrap().toggle();
     }
 
     pub fn focus_right_rat(&mut self) {
@@ -1873,46 +1834,47 @@ impl App {
     }
 
     pub fn wind_cursor(&mut self, direction: VerticalDirection) {
-        match self.wind_cursor.mode {
+        let mut wind_cursor = self.wind_cursor.write().unwrap();
+        match wind_cursor.mode {
             WindMode::Active => match direction {
                 VerticalDirection::Up => {
-                    self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_sub(1);
-                    if self.wind_cursor.line_start == 0 {
-                        self.wind_cursor.line_start = 1;
+                    wind_cursor.line_start = wind_cursor.line_start.saturating_sub(1);
+                    if wind_cursor.line_start == 0 {
+                        wind_cursor.line_start = 1;
                     }
-                    self.wind_cursor.line_end = self.wind_cursor.line_start;
+                    wind_cursor.line_end = wind_cursor.line_start;
                 }
                 VerticalDirection::Down => {
-                    self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_add(1);
-                    self.wind_cursor.line_end = self.wind_cursor.line_start;
+                    wind_cursor.line_start = wind_cursor.line_start.saturating_add(1);
+                    wind_cursor.line_end = wind_cursor.line_start;
                 }
                 VerticalDirection::Row(line) => {
-                    self.wind_cursor.line_end = line
+                    wind_cursor.line_end = line
                         .clamp(0, u32::MAX as usize)
                         .try_into()
                         .expect("just clamped");
-                    self.wind_cursor.line_end = self.wind_cursor.line_start;
+                    wind_cursor.line_end = wind_cursor.line_start;
                 }
             },
             WindMode::ActiveSelect => match direction {
                 VerticalDirection::Up => {
-                    if self.wind_cursor.line_end == self.wind_cursor.line_start {
-                        self.wind_cursor.line_start = self.wind_cursor.line_start.saturating_sub(1);
-                        if self.wind_cursor.line_start == 0 {
-                            self.wind_cursor.line_start = 1;
+                    if wind_cursor.line_end == wind_cursor.line_start {
+                        wind_cursor.line_start = wind_cursor.line_start.saturating_sub(1);
+                        if wind_cursor.line_start == 0 {
+                            wind_cursor.line_start = 1;
                         }
                     } else {
-                        self.wind_cursor.line_end = self.wind_cursor.line_end.saturating_sub(1);
-                        if self.wind_cursor.line_end == 0 {
-                            self.wind_cursor.line_end = 1;
+                        wind_cursor.line_end = wind_cursor.line_end.saturating_sub(1);
+                        if wind_cursor.line_end == 0 {
+                            wind_cursor.line_end = 1;
                         }
                     }
                 }
                 VerticalDirection::Down => {
-                    self.wind_cursor.line_end = self.wind_cursor.line_end.saturating_add(1);
+                    wind_cursor.line_end = wind_cursor.line_end.saturating_add(1);
                 }
                 VerticalDirection::Row(line) => {
-                    self.wind_cursor.line_end = line
+                    wind_cursor.line_end = line
                         .clamp(1, u32::MAX as usize)
                         .try_into()
                         .expect("just clamped");
@@ -1949,226 +1911,329 @@ impl App {
     }
 
     pub async fn wind_fire_at_current_cursor(&mut self) {
-        let lines = self.wind_cursor.selected_lines();
-        let start_line = lines.first().map(|l| *l as usize);
-        let end_line = lines.last().map(|l| *l as usize);
-        let rats_file = self.wind_cursor.wind_file_path.clone();
+        let send_coordinator = self.send_coordinator.clone();
+        let info_view = self.info_view.clone();
+        let wind_cursor_states = self.wind_cursor.clone();
 
-        // TODO wait until the last fire is finished
+        // task to not block the UI while compiling
+        tokio::spawn(async move {
+            let wind_cursor_outer = wind_cursor_states.clone();
+            let info_view_outer = info_view.clone();
 
-        // TODO to thread and wait for end
-        // TODO set wind indicators while processing
-        let eval = rlc::compile_file(&rats_file, start_line, end_line);
-        let eval = match eval {
-            Ok(eval) => eval,
-            Err(e) => {
-                self.info_view.log_error(&format!(
-                    "Could not compile ratslang file {rats_file:?}: {e}"
-                ));
-                return;
-            }
-        };
-        self.info_view
-            .log_info(&format!("compiled {start_line:?}-{end_line:?}"));
+            let var_state = {
+                let mut wc = wind_cursor_outer.write().unwrap();
+                wc.compile_state = WindCompile::Compiling;
+                wc.variable_cache.clone()
+            };
 
-        for windfn in eval.wind.iter() {
-            match windfn {
-                rlc::WindFunction::Reset(path) => {
-                    match self.wind_cursor.bagfile.reset(Some(path)) {
-                        Err(e) => {
-                            self.info_view
-                                .log_error(&format!("Could not reset bagfile path {path:?}: {e}"));
-                            return;
-                        }
-                        Ok(_) => {
-                            self.info_view.log_info(&format!("read bag {path}"));
-                        }
-                    }
+            let lines = wind_cursor_outer.read().unwrap().selected_lines();
+            let start_line = lines.first().map(|l| *l as usize);
+            let end_line = lines.last().map(|l| *l as usize);
+            let rats_file = wind_cursor_outer.read().unwrap().wind_file_path.clone();
+            let eval = rlc::compile_file_with_state(
+                &rats_file,
+                start_line,
+                end_line,
+                Some(var_state),
+                info_view_outer.write().unwrap().deref_mut(),
+                false,
+            );
+            let mut eval = match eval {
+                Ok(eval) => eval,
+                Err(e) => {
+                    error!("{e}");
+                    return;
                 }
-                rlc::WindFunction::SendFrames(kind) => {
-                    let sending_lidar_topic =
-                        match Self::topic_from_eval_or_default(&eval, "_bag.lidar.topic", "/cloud")
-                        {
-                            Ok(topic) => topic,
-                            Err(e) => {
-                                self.info_view.log_error(&format!("{e}"));
-                                return;
-                            }
-                        };
-                    self.info_view
-                        .log_info(&format!("lidar topic: {sending_lidar_topic}"));
-                    let sending_imu_topic =
-                        match Self::topic_from_eval_or_default(&eval, "_bag.imu.topic", "/imu") {
-                            Ok(topic) => topic,
-                            Err(e) => {
-                                self.info_view.log_error(&format!("{e}"));
-                                return;
-                            }
-                        };
+            };
 
-                    self.info_view
-                        .log_info(&format!("imu topic: {sending_imu_topic}"));
+            {
+                let mut wc = wind_cursor_outer.write().unwrap();
+                eval.vars.populate_cache();
+                wc.variable_cache = eval.vars.var_cache.clone();
+                wc.compile_state = WindCompile::Done;
+            }
 
-                    let trigger = match &kind {
-                        rlc::PlayKindUnited::SensorCount {
-                            sensor: _,
-                            count: _,
-                            trigger,
-                        } => trigger,
-                        rlc::PlayKindUnited::UntilSensorCount {
-                            sending: _,
-                            until_sensor: _,
-                            until_count: _,
-                            trigger,
-                        } => trigger,
-                    };
-
-                    let bagmsgs = self
-                        .wind_cursor
-                        .bagfile
-                        .next(&PlayKindUnitedRich::with_topic(
-                            kind.clone(),
-                            &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
-                        ));
-
-                    let bagmsgs = match bagmsgs {
-                        Ok(msgs) => msgs,
-                        Err(e) => {
-                            self.info_view.log_error(&format!("{e}"));
-                            return;
-                        }
-                    };
-
-                    let mut wind_data = Vec::with_capacity(bagmsgs.len());
-                    let mut start_time = None;
-                    let mut end_time = None;
-                    for msg in bagmsgs {
-                        let wind = match msg {
-                            bagread::BagMsg::Cloud(point_cloud2_msg) => {
-                                let t =
-                                    Self::timestamp_to_millis_rpcl2(&point_cloud2_msg.header.stamp);
-                                if start_time.is_none() {
-                                    start_time.replace(t);
-                                }
-
-                                end_time.replace(t);
-
-                                (
-                                    end_time.unwrap() - start_time.unwrap(),
-                                    WindData::Pointcloud(point_cloud2_msg),
-                                )
-                            }
-                            bagread::BagMsg::Imu(imu_msg) => {
-                                let t = Self::timestamp_to_millis(&imu_msg.header.stamp);
-                                if start_time.is_none() {
-                                    start_time.replace(t);
-                                }
-
-                                end_time.replace(t);
-
-                                (
-                                    end_time.unwrap() - start_time.unwrap(),
-                                    WindData::Imu(sea::ImuMsg {
-                                        header: sea::Header {
-                                            seq: imu_msg.header.seq,
-                                            stamp: sea::TimeMsg {
-                                                sec: imu_msg.header.stamp.sec,
-                                                nanosec: imu_msg.header.stamp.nanosec,
-                                            },
-                                            frame_id: imu_msg.header.frame_id,
-                                        },
-                                        timestamp_sec: sea::TimeMsg {
-                                            sec: imu_msg.timestamp_sec.sec,
-                                            nanosec: imu_msg.timestamp_sec.nanosec,
-                                        },
-                                        orientation: imu_msg.orientation,
-                                        orientation_covariance: imu_msg.orientation_covariance,
-                                        angular_velocity: imu_msg.angular_velocity,
-                                        angular_velocity_covariance: imu_msg
-                                            .angular_velocity_covariance,
-                                        linear_acceleration: imu_msg.linear_acceleration,
-                                        linear_acceleration_covariance: imu_msg
-                                            .linear_acceleration_covariance,
-                                    }),
-                                )
-                            }
-                        };
-
-                        wind_data.push(wind);
-                    }
-
-                    if wind_data.is_empty() {
+            info!("compiled {start_line:?}-{end_line:?}");
+            {
+                let mut wind_cursor = wind_cursor_outer.write().unwrap();
+                match wind_cursor.wind_send_state {
+                    WindSendState::Acked | WindSendState::Sent => {
+                        wind_cursor.wind_work_queue.push_back(eval);
                         return;
                     }
-
-                    let var = match trigger {
-                        Some(rlc::PlayTrigger::Variable(var)) => Some(var.clone()),
-                        _ => None,
-                    };
-
-                    match trigger {
-                        Some(rlc::PlayTrigger::DurationMs(target_duration_ms)) => {
-                            let original_duration_ms = end_time.unwrap() - start_time.unwrap();
-                            let scale = *target_duration_ms as f64 / original_duration_ms as f64;
-
-                            let start_time = Instant::now();
-
-                            for (original_ts, wind) in wind_data {
-                                let scaled_ts = original_ts as f64 * scale;
-                                let target_offset = Duration::from_secs_f64(scaled_ts / 1000.0);
-                                let target_wall_time = start_time + target_offset;
-                                let sleep_duration =
-                                    target_wall_time.saturating_duration_since(Instant::now());
-                                tokio::time::sleep(sleep_duration).await;
-
-                                let send = self
-                                    .send_coordinator
-                                    .send(PacketKind::Wind {
-                                        data: wind,
-                                        at_var: None,
-                                    })
-                                    .await;
-                                match send {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        self.info_view.log_error(&format!(
-                                            "Could not send Wind to coordinator: {e}"
-                                        ));
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        // TODO this can be probably way more elegant. needs var as None in case None and Some(var) in case some var
-                        _ => {
-                            for (_, wind) in wind_data {
-                                let send = self
-                                    .send_coordinator
-                                    .send(PacketKind::Wind {
-                                        data: wind,
-                                        at_var: var.clone(),
-                                    })
-                                    .await;
-                                match send {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        self.info_view.log_error(&format!(
-                                            "Could not send Wind to coordinator: {e}"
-                                        ));
-                                        return;
-                                    }
-                                }
-                            }
-                        }
+                    WindSendState::NotRun => {
+                        wind_cursor.wind_work_queue.push_back(eval);
+                        wind_cursor.wind_send_state = WindSendState::Sent;
                     }
                 }
             }
-        }
+
+            // task for doing the task on the queue
+            tokio::spawn(async move {
+                let wind_cursor = wind_cursor_states.clone();
+                let fun = async move {
+                    loop {
+                        let eval = {
+                            let mut wc = wind_cursor.write().unwrap();
+                            wc.wind_work_queue.pop_front()
+                        };
+
+                        match eval {
+                            Some(eval) => {
+                                for windfn in eval.wind.iter() {
+                                    match windfn {
+                                        rlc::WindFunction::Reset(path) => {
+                                            match wind_cursor
+                                                .write()
+                                                .unwrap()
+                                                .bagfile
+                                                .reset(Some(path))
+                                            {
+                                                Err(e) => {
+                                                    error!(
+                                                        "Could not reset bagfile path {path:?}: {e}"
+                                                    );
+
+                                                    return;
+                                                }
+                                                Ok(_) => {
+                                                    info!("read bag {path}");
+                                                }
+                                            }
+                                        }
+                                        rlc::WindFunction::SendFrames(kind) => {
+                                            let sending_lidar_topic =
+                                                match Self::topic_from_eval_or_default(
+                                                    &eval,
+                                                    "_bag.lidar.topic",
+                                                    "/cloud",
+                                                ) {
+                                                    Ok(topic) => topic,
+                                                    Err(e) => {
+                                                        error!("{e}");
+                                                        return;
+                                                    }
+                                                };
+                                            info!("lidar topic: {sending_lidar_topic}");
+                                            let sending_imu_topic =
+                                                match Self::topic_from_eval_or_default(
+                                                    &eval,
+                                                    "_bag.imu.topic",
+                                                    "/imu",
+                                                ) {
+                                                    Ok(topic) => topic,
+                                                    Err(e) => {
+                                                        error!("{e}");
+                                                        return;
+                                                    }
+                                                };
+
+                                            info!("imu topic: {sending_imu_topic}");
+
+                                            let trigger = match &kind {
+                                                rlc::PlayKindUnited::SensorCount {
+                                                    sensor: _,
+                                                    count: _,
+                                                    trigger,
+                                                } => trigger,
+                                                rlc::PlayKindUnited::UntilSensorCount {
+                                                    sending: _,
+                                                    until_sensor: _,
+                                                    until_count: _,
+                                                    trigger,
+                                                } => trigger,
+                                            };
+
+                                            let bagmsgs =
+                                                wind_cursor.write().unwrap().bagfile.next(
+                                                    &PlayKindUnitedRich::with_topic(
+                                                        kind.clone(),
+                                                        &vec![
+                                                            sending_lidar_topic.as_str(),
+                                                            sending_imu_topic.as_str(),
+                                                        ],
+                                                    ),
+                                                );
+
+                                            let bagmsgs = match bagmsgs {
+                                                Ok(msgs) => msgs,
+                                                Err(e) => {
+                                                    error!("{e}");
+                                                    return;
+                                                }
+                                            };
+
+                                            let mut wind_data = Vec::with_capacity(bagmsgs.len());
+                                            let mut start_time = None;
+                                            let mut end_time = None;
+                                            for msg in bagmsgs {
+                                                let wind = match msg {
+                                                    bagread::BagMsg::Cloud(point_cloud2_msg) => {
+                                                        let t = Self::timestamp_to_millis_rpcl2(
+                                                            &point_cloud2_msg.header.stamp,
+                                                        );
+                                                        if start_time.is_none() {
+                                                            start_time.replace(t);
+                                                        }
+
+                                                        end_time.replace(t);
+
+                                                        (
+                                                            end_time.unwrap() - start_time.unwrap(),
+                                                            WindData::Pointcloud(point_cloud2_msg),
+                                                        )
+                                                    }
+                                                    bagread::BagMsg::Imu(imu_msg) => {
+                                                        let t = Self::timestamp_to_millis(
+                                                            &imu_msg.header.stamp,
+                                                        );
+                                                        if start_time.is_none() {
+                                                            start_time.replace(t);
+                                                        }
+
+                                                        end_time.replace(t);
+
+                                                        (
+                                            end_time.unwrap() - start_time.unwrap(),
+                                            WindData::Imu(sea::ImuMsg {
+                                                header: sea::Header {
+                                                    seq: imu_msg.header.seq,
+                                                    stamp: sea::TimeMsg {
+                                                        sec: imu_msg.header.stamp.sec,
+                                                        nanosec: imu_msg.header.stamp.nanosec,
+                                                    },
+                                                    frame_id: imu_msg.header.frame_id,
+                                                },
+                                                timestamp_sec: sea::TimeMsg {
+                                                    sec: imu_msg.timestamp_sec.sec,
+                                                    nanosec: imu_msg.timestamp_sec.nanosec,
+                                                },
+                                                orientation: imu_msg.orientation,
+                                                orientation_covariance: imu_msg
+                                                    .orientation_covariance,
+                                                angular_velocity: imu_msg.angular_velocity,
+                                                angular_velocity_covariance: imu_msg
+                                                    .angular_velocity_covariance,
+                                                linear_acceleration: imu_msg.linear_acceleration,
+                                                linear_acceleration_covariance: imu_msg
+                                                    .linear_acceleration_covariance,
+                                            }),
+                                        )
+                                                    }
+                                                };
+
+                                                wind_data.push(wind);
+                                            }
+
+                                            if wind_data.is_empty() {
+                                                return;
+                                            }
+
+                                            let var = match trigger {
+                                                Some(rlc::PlayTrigger::Variable(var)) => {
+                                                    Some(var.clone())
+                                                }
+                                                _ => None,
+                                            };
+
+                                            match trigger {
+                                                Some(rlc::PlayTrigger::DurationMs(
+                                                    target_duration_ms,
+                                                )) => {
+                                                    let original_duration_ms =
+                                                        end_time.unwrap() - start_time.unwrap();
+                                                    let scale = *target_duration_ms as f64
+                                                        / original_duration_ms as f64;
+
+                                                    let start_time = Instant::now();
+
+                                                    for (original_ts, wind) in wind_data {
+                                                        let scaled_ts = original_ts as f64 * scale;
+                                                        let target_offset = Duration::from_secs_f64(
+                                                            scaled_ts / 1000.0,
+                                                        );
+                                                        let target_wall_time =
+                                                            start_time + target_offset;
+                                                        let sleep_duration = target_wall_time
+                                                            .saturating_duration_since(
+                                                                Instant::now(),
+                                                            );
+                                                        tokio::time::sleep(sleep_duration).await;
+
+                                                        let send = send_coordinator
+                                                            .send(PacketKind::Wind {
+                                                                data: wind,
+                                                                at_var: None,
+                                                            })
+                                                            .await;
+                                                        match send {
+                                                            Ok(_) => {}
+                                                            Err(e) => {
+                                                                error!(
+                                                                    "Could not send Wind to coordinator: {e}"
+                                                                );
+                                                                return;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // TODO this can be probably way more elegant. needs var as None in case None and Some(var) in case some var
+                                                _ => {
+                                                    for (_, wind) in wind_data {
+                                                        let send = send_coordinator
+                                                            .send(PacketKind::Wind {
+                                                                data: wind,
+                                                                at_var: var.clone(),
+                                                            })
+                                                            .await;
+                                                        match send {
+                                                            Ok(_) => {}
+                                                            Err(e) => {
+                                                                error!(
+                                                                    "Could not send Wind to coordinator: {e}"
+                                                                );
+                                                                return;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                };
+
+                // run function and always close by setting the acked state to wind
+                fun.await;
+                {
+                    let mut wind_cursor = wind_cursor_states.write().unwrap();
+                    wind_cursor.wind_send_state = WindSendState::Acked;
+                }
+
+                // reset state after
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let mut wind_cursor = wind_cursor_states.write().unwrap();
+                match wind_cursor.wind_send_state {
+                    WindSendState::Acked => {
+                        wind_cursor.wind_send_state = WindSendState::NotRun;
+                    }
+                    WindSendState::Sent => {}
+                    WindSendState::NotRun => {}
+                };
+            });
+        });
+
+        tokio::task::yield_now().await; // needs to spawn the task
     }
 
     // TODO change display to show what is selected and that mode is active
     pub fn wind_toggle_select(&mut self) {
-        self.wind_cursor.mode = match self.wind_cursor.mode {
+        let mut wind_cursor = self.wind_cursor.write().unwrap();
+        wind_cursor.mode = match wind_cursor.mode {
             WindMode::Inactive => WindMode::Inactive,
             WindMode::Active => WindMode::ActiveSelect,
             WindMode::ActiveSelect => WindMode::Active,
@@ -2180,22 +2245,23 @@ impl App {
     }
 
     pub fn wind_toggle_mode(&mut self) {
-        self.wind_cursor.mode = match self.wind_cursor.mode {
+        let mut wind_cursor = self.wind_cursor.write().unwrap();
+        wind_cursor.mode = match wind_cursor.mode {
             WindMode::Inactive => WindMode::Active,
             WindMode::Active => WindMode::Inactive,
             WindMode::ActiveSelect => {
-                self.wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
-                self.wind_cursor.popup_buffer.clear();
-                self.wind_cursor.showing_popup = false;
+                wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
+                wind_cursor.popup_buffer.clear();
+                wind_cursor.showing_popup = false;
                 WindMode::Inactive
             }
         };
-        self.info_view
-            .log_info(&format!("{:?}", self.wind_cursor.mode));
+        info!("{:?}", wind_cursor.mode);
     }
 
     pub fn wind_mode(&mut self) -> bool {
-        match self.wind_cursor.mode {
+        let wind_cursor = self.wind_cursor.read().unwrap();
+        match wind_cursor.mode {
             WindMode::Inactive => false,
             WindMode::Active => true,
             WindMode::ActiveSelect => true,
@@ -2203,6 +2269,7 @@ impl App {
     }
 
     pub fn wind_toggle_popup(&mut self) {
-        self.wind_cursor.showing_popup = !self.wind_cursor.showing_popup;
+        let mut wind_cursor = self.wind_cursor.write().unwrap();
+        wind_cursor.showing_popup = !wind_cursor.showing_popup;
     }
 }

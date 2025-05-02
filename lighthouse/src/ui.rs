@@ -8,6 +8,7 @@ use ratatui::{
         ScrollbarOrientation,
     },
 };
+use tui_logger::TuiLoggerWidget;
 
 use crate::app::App;
 
@@ -186,20 +187,40 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         &mut app.compare.horizontal_scroll_state,
     );
 
-    if app.wind_cursor.showing_popup {
+    if app.wind_cursor.read().unwrap().showing_popup {
         let block = Block::bordered().title("Wind Cursor to Line:");
         let area = popup_area(frame.area(), 30, 3);
-        let buffer = app.wind_cursor.popup_buffer.iter().collect::<String>();
+        let buffer = app
+            .wind_cursor
+            .read()
+            .unwrap()
+            .popup_buffer
+            .iter()
+            .collect::<String>();
         let content = Paragraph::new(buffer).block(block);
         frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
         frame.render_widget(content, area);
     }
 
-    if app.info_view.shown {
+    if app.info_view.read().unwrap().shown {
         let block = Block::bordered().title("Info");
-        let area = popup_area(frame.area(), 60, 2 * crate::app::INFO_LINES as u16);
-        let buffer = app.info_view.render();
-        let content = Paragraph::new(buffer).block(block);
+        let area = frame.area().inner(Margin {
+            horizontal: 10,
+            vertical: 5,
+        });
+
+        let content = TuiLoggerWidget::default()
+            .style_error(Style::default().fg(ratatui::style::Color::Red))
+            .style_warn(Style::default().fg(ratatui::style::Color::Yellow))
+            .style_info(Style::default().fg(ratatui::style::Color::Blue))
+            .style_debug(Style::default().fg(ratatui::style::Color::Magenta))
+            .style_trace(Style::default().fg(ratatui::style::Color::Gray))
+            .output_line(false)
+            .output_file(false)
+            .output_timestamp(Some("%H:%M:%S".to_owned()))
+            .output_target(false)
+            .output_separator(' ')
+            .block(block);
         frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
         frame.render_widget(content, area);
     }

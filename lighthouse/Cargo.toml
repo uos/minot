@@ -24,6 +24,7 @@ futures = "0.3.31"
 ratatui = "0.29.0"
 rosbag2-rs = "0.2.1"
 chrono = "0.4.40"
+tui-logger = "0.17.2"
 
 [profile.release]
 lto = true          # Link Time Optimization
