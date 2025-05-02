@@ -10,4 +10,6 @@ reset! ./dlg_cut
 
 # pf! il 2 10s # check if there are really only 9 msgs before the first 2 lidar frames
 
-pf! il 2 10s
+# pf! il 2 10s
+pf! l 1 var1 d
+

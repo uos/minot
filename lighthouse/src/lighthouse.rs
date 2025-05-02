@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use log::error;
+use log::{error, info};
 use rlc::COMPARE_NODE_NAME;
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 
@@ -48,8 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
     let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
-    // let write_data = Arc::clone(&var_data);
-    // tokio::spawn(async move {
+    let (dyn_wind_tx, dyn_wind_rx) = tokio::sync::mpsc::channel(10);
     let (mut sub, recv) = {
         let client = comparer.client.lock().await;
         let sender = client
@@ -127,40 +126,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         loop {
             match sub.recv().await {
-                Ok((packet, _)) => {
-                    match packet.data {
-                        sea::net::PacketKind::RatAction {
-                            action,
-                            lock_until_ack: _,
-                        } => {
-                            if let crate::Action::Catch { source } = action {
-                                match comparer.get_cannon().catch_dyn(&source).await {
-                                    Ok((strrep, _var_type, var_name)) => {
-                                        let name = match &source.kind {
-                                            ShipKind::Rat(name) => name.clone(),
-                                            ShipKind::Wind(_) => {
-                                                error!("Received something from Wind.");
-                                                continue;
-                                            }
-                                        };
+                Ok((packet, _)) => match packet.data {
+                    sea::net::PacketKind::VariableTaskRequest(var) => {
+                        info!("received var request: {var}");
+                        match dyn_wind_tx.send(var).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("Could forward var request for wind: {e}");
+                            }
+                        }
+                    }
+                    sea::net::PacketKind::RatAction {
+                        action,
+                        lock_until_ack: _,
+                    } => {
+                        if let crate::Action::Catch { source } = action {
+                            match comparer.get_cannon().catch_dyn(&source).await {
+                                Ok((strrep, _var_type, var_name)) => {
+                                    let name = match &source.kind {
+                                        ShipKind::Rat(name) => name.clone(),
+                                        ShipKind::Wind(_) => {
+                                            error!("Received something from Wind.");
+                                            continue;
+                                        }
+                                    };
 
-                                        match ndata_tx.send((name, strrep, var_name)).await {
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                error!("Error sending received variable: {e}");
-                                            }
+                                    match ndata_tx.send((name, strrep, var_name)).await {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!("Error sending received variable: {e}");
                                         }
                                     }
-                                    Err(e) => {
-                                        // TODO should print all errors somewhere in the TUI. maybe popup?
-                                        error!("Could not catch dynamic typed var: {e}");
-                                    }
+                                }
+                                Err(e) => {
+                                    error!("Could not catch dynamic typed var: {e}");
                                 }
                             }
                         }
-                        _ => (),
                     }
-                }
+                    _ => (),
+                },
                 Err(e) => {
                     error!("Error receiving action for comparer: {e}");
                 }
@@ -168,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut app = App::new(tx, ndata_rx, file).await;
+    let mut app = App::new(tx, ndata_rx, dyn_wind_rx, file).await;
 
     let backend = CrosstermBackend::new(std::io::stdout());
     let terminal = Terminal::new(backend)?;

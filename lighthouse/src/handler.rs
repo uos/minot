@@ -139,7 +139,12 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             }
         }
         KeyCode::Char(' ') => {
-            app.wind_fire_at_current_cursor().await;
+            App::wind_fire_at_current_cursor(
+                app.send_coordinator.clone(),
+                std::sync::Arc::clone(&app.wind_cursor),
+                None,
+            )
+            .await;
         }
         KeyCode::PageUp => {
             app.change_diff_rat(crate::app::VerticalDirection::Up);

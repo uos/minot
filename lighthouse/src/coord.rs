@@ -29,7 +29,20 @@ enum LighthouseTask {
         ship_name: String,
         data: sea::WindData,
     },
+    WindDynamicVarReq(String), // Target is always LH TUI
     Unlock,
+}
+
+#[derive(Debug)]
+enum WindTaskKind {
+    Fix(Vec<WindData>),
+    Dynamic,
+}
+
+#[derive(Debug)]
+struct WindTask {
+    kind: WindTaskKind,
+    already_seen: bool,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -104,10 +117,7 @@ pub async fn main() -> anyhow::Result<()> {
     let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
     let rules_changer = std::sync::Arc::clone(&rules);
 
-    let winds_var = std::sync::Arc::new(std::sync::RwLock::new(HashMap::<
-        String,
-        (bool, Vec<WindData>),
-    >::new()));
+    let winds_var = std::sync::Arc::new(std::sync::RwLock::new(HashMap::<String, WindTask>::new()));
     let winds_changer = std::sync::Arc::clone(&winds_var);
 
     let (wind_tx, _) = tokio::sync::broadcast::channel::<sea::WindData>(20); // TODO send on wind_tx
@@ -197,6 +207,18 @@ pub async fn main() -> anyhow::Result<()> {
                                                             .send(LighthouseTask::Unlock)
                                                             .unwrap();
                                                     }
+                                                    PacketKind::WindDynamic(var) => {
+                                                        let mut w = winds_inner.write().unwrap();
+                                                        if w.get(&var).is_none() {
+                                                            w.insert(
+                                                                var,
+                                                                WindTask {
+                                                                    already_seen: false,
+                                                                    kind: WindTaskKind::Dynamic,
+                                                                },
+                                                            );
+                                                        }
+                                                    }
                                                     PacketKind::Wind {
                                                         data: wind_data,
                                                         at_var,
@@ -204,12 +226,24 @@ pub async fn main() -> anyhow::Result<()> {
                                                         Some(var) => {
                                                             let mut w =
                                                                 winds_inner.write().unwrap();
-                                                            if let Some((_, wd)) = w.get_mut(&var) {
-                                                                wd.push(wind_data);
+                                                            if let Some(wt) = w.get_mut(&var) {
+                                                                match &mut wt.kind {
+                                                                    WindTaskKind::Fix(
+                                                                        wind_datas,
+                                                                    ) => {
+                                                                        wind_datas.push(wind_data);
+                                                                    }
+                                                                    _ => {}
+                                                                }
                                                             } else {
                                                                 w.insert(
                                                                     var,
-                                                                    (false, vec![wind_data]),
+                                                                    WindTask {
+                                                                        already_seen: false,
+                                                                        kind: WindTaskKind::Fix(
+                                                                            vec![wind_data],
+                                                                        ),
+                                                                    },
                                                                 );
                                                             }
                                                         }
@@ -304,25 +338,29 @@ pub async fn main() -> anyhow::Result<()> {
                                                                 winds_inner.write().unwrap();
 
                                                             let mut changed = false;
-                                                            winds.get_mut(&variable).map(
-                                                                |(recently_sent, wds)| {
-                                                                    if !*recently_sent {
-                                                                        wds.iter().for_each(
-                                                                            |wind_data| {
-                                                                                wind_tx_inner
-                                                                                    .send(
-                                                                                        wind_data
-                                                                                            .clone(
-                                                                                            ),
-                                                                                    )
-                                                                                    .unwrap(); // Forward to each listener of newly connected winds. They resolve the names.
-                                                                            },
-                                                                        );
-                                                                        *recently_sent = true;
-                                                                        changed = true;
+                                                            winds.get_mut(&variable).map(|wt| {
+                                                                if !wt.already_seen {
+                                                                    match &mut wt.kind {
+                                                                        WindTaskKind::Fix(
+                                                                            wind_datas,
+                                                                        ) => {
+                                                                            wind_datas
+                                                                                .iter()
+                                                                                .for_each(
+                                                                                    |wind_data| {
+                                                                                        wind_tx_inner.send(wind_data.clone()).unwrap(); // Forward to each listener of newly connected winds. They resolve the names.
+                                                                                    },
+                                                                                );
+                                                                            wt.already_seen = true;
+                                                                            changed = true;
+                                                                        }
+                                                                        WindTaskKind::Dynamic => {
+                                                                            // ask LH TUI to send the next fix command to us
+                                                                            rat_coord_tx.send(LighthouseTask::WindDynamicVarReq(variable.clone())).unwrap();
+                                                                        }
                                                                     }
-                                                                },
-                                                            );
+                                                                }
+                                                            });
 
                                                             // set all other to be sent again
                                                             if changed {
@@ -332,7 +370,7 @@ pub async fn main() -> anyhow::Result<()> {
                                                                         continue;
                                                                     }
 
-                                                                    wind.0 = false;
+                                                                    wind.already_seen = false;
                                                                 }
                                                             }
                                                         }
@@ -440,6 +478,27 @@ pub async fn main() -> anyhow::Result<()> {
         let mut lock_next = false;
         while let Some(task) = coord_rx.recv().await {
             match task {
+                LighthouseTask::WindDynamicVarReq(var) => {
+                    {
+                        let lh_connected = lighthouse_client_connected.read().unwrap();
+                        if !*lh_connected {
+                            error!(
+                                "Wants to ask LH TUI for wind for var {var} but is not connected."
+                            );
+                            continue;
+                        }
+                    }
+
+                    let ret = coordinator
+                        .rat_send(
+                            COMPARE_NODE_NAME.to_owned(),
+                            PacketKind::VariableTaskRequest(var),
+                        )
+                        .await;
+                    if let Err(e) = ret {
+                        error!("Could not send Dynamic Var Request to LH TUI: {e}");
+                    }
+                }
                 LighthouseTask::AppendRule { variable, commands } => {
                     let mut current_rules = rules_changer.write().unwrap();
                     current_rules.insert(variable, commands);

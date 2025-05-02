@@ -53,6 +53,7 @@ pub enum PacketKind {
         data: WindData,
         at_var: Option<String>,
     },
+    WindDynamic(String),
 }
 
 pub trait SeaSendableScalar:

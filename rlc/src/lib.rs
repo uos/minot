@@ -444,7 +444,7 @@ pub struct UnitVal {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
-    Range { from: Val, to: Val },
+    Range { from: Option<Val>, to: Option<Val> },
     Var(Var),
     Path(String),
     // Expr() TODO evaluate so in the end it becomes atomic Rhs
@@ -547,13 +547,28 @@ pub type PlayTimeMsRange = (u64, u64);
 #[derive(Debug, PartialEq, Clone)]
 pub enum PlayTrigger {
     DurationMs(u64),
+    DurationRelFactor(f64),
     Variable(String),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PlayMode {
+    Dynamic,
+    Fix,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum AbsTimeRange {
+    Open,
+    UpperOpen(u64),
+    LowerOpen(u64),
+    Closed((u64, u64)),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PlayCount {
     TimeRelativeMs(u64),
-    TimeRangeMs(PlayTimeMsRange),
+    TimeRangeMs(AbsTimeRange),
     Amount(u64),
 }
 
@@ -563,12 +578,14 @@ pub enum PlayKindUnited {
         sensor: SensorType,
         count: PlayCount,
         trigger: Option<PlayTrigger>,
+        play_mode: PlayMode,
     },
     UntilSensorCount {
         sending: SensorType,
         until_sensor: SensorType,
         until_count: PlayCount,
         trigger: Option<PlayTrigger>,
+        play_mode: PlayMode,
     },
 }
 
@@ -899,27 +916,36 @@ where
     .labelled("way");
 
     let timerange = time
+        .or_not()
         .then_ignore(just(Token::OpRange))
         .then(time)
         .try_map(|(from, to), span| {
             Ok(Rhs::Range {
-                from: Val::UnitedVal(UnitVal {
-                    val: match from {
-                        NumVal::Floating(_) => unreachable!("integerised before"),
-                        NumVal::Integer(i) => {
-                            if i < 0 {
-                                return Err(Rich::custom(
-                                    span,
-                                    "Negative Integer Number for Timespan.",
-                                ));
-                            } else {
-                                i as u64
-                            }
-                        }
-                    },
-                    unit: Unit::TimeMilliseconds,
-                }),
-                to: Val::UnitedVal(UnitVal {
+                from: {
+                    if let Some(from) = from {
+                        Some(Val::UnitedVal(UnitVal {
+                            val: {
+                                match from {
+                                    NumVal::Floating(_) => unreachable!("integerised before"),
+                                    NumVal::Integer(i) => {
+                                        if i < 0 {
+                                            return Err(Rich::custom(
+                                                span,
+                                                "Negative Integer Number for Timespan.",
+                                            ));
+                                        } else {
+                                            i as u64
+                                        }
+                                    }
+                                }
+                            },
+                            unit: Unit::TimeMilliseconds,
+                        }))
+                    } else {
+                        None
+                    }
+                },
+                to: Some(Val::UnitedVal(UnitVal {
                     val: match to {
                         NumVal::Floating(_) => unreachable!("integerised before"),
                         NumVal::Integer(i) => {
@@ -934,17 +960,53 @@ where
                         }
                     },
                     unit: Unit::TimeMilliseconds,
-                }),
+                })),
             })
         })
         .labelled("time range");
+
+    let timerange_open_upper = time
+        .then_ignore(just(Token::OpRange))
+        .then_ignore(time.not())
+        .try_map(|from, span| {
+            Ok(Rhs::Range {
+                from: Some(Val::UnitedVal(UnitVal {
+                    val: match from {
+                        NumVal::Floating(_) => unreachable!("integerised before"),
+                        NumVal::Integer(i) => {
+                            if i < 0 {
+                                return Err(Rich::custom(
+                                    span,
+                                    "Negative Integer Number for Timespan.",
+                                ));
+                            } else {
+                                i as u64
+                            }
+                        }
+                    },
+                    unit: Unit::TimeMilliseconds,
+                })),
+                to: None,
+            })
+        })
+        .labelled("upper open time range");
+
+    let timerange_open = time
+        .not()
+        .then_ignore(just(Token::OpRange))
+        .then_ignore(time.not())
+        .map(|_| Rhs::Range {
+            from: None,
+            to: None,
+        })
+        .labelled("open not-time range");
 
     let wayrange = way
         .then_ignore(just(Token::OpRange))
         .then(way)
         .try_map(|(from, to), span| {
             Ok(Rhs::Range {
-                from: Val::UnitedVal(UnitVal {
+                from: Some(Val::UnitedVal(UnitVal {
                     val: match from {
                         NumVal::Floating(_) => unreachable!("integerised before"),
                         NumVal::Integer(i) => {
@@ -959,8 +1021,8 @@ where
                         }
                     },
                     unit: Unit::WayMillimeter,
-                }),
-                to: Val::UnitedVal(UnitVal {
+                })),
+                to: Some(Val::UnitedVal(UnitVal {
                     val: match to {
                         NumVal::Floating(_) => unreachable!("integerised before"),
                         NumVal::Integer(i) => {
@@ -975,7 +1037,7 @@ where
                         }
                     },
                     unit: Unit::WayMillimeter,
-                }),
+                })),
             })
         })
         .labelled("way range");
@@ -1020,8 +1082,8 @@ where
             };
 
             Rhs::Range {
-                from: Val::NumVal(from),
-                to: Val::NumVal(to),
+                from: Some(Val::NumVal(from)),
+                to: Some(Val::NumVal(to)),
             }
         })
         .labelled("number range");
@@ -1233,6 +1295,8 @@ where
     .labelled("send_frames")
     .then(
         choice((
+            timerange_open,
+            timerange_open_upper,
             timerange.clone(),
             time.map(|t| {
                 Rhs::Val(Val::UnitedVal(UnitVal {
@@ -1290,99 +1354,223 @@ where
                     unit: Unit::TimeMilliseconds,
                 }))
             }),
+            select! {
+                Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
+            },
         ))
         .or_not()
         .labelled("trigger"),
     )
-    .map(|((pt, arg), trigger): ((PlayType, Rhs), Option<Rhs>)| {
-        let trigger = trigger.map(|trigger| match trigger {
-            Rhs::Val(Val::UnitedVal(UnitVal {
-                val,
-                unit: Unit::TimeMilliseconds,
-            })) => PlayTrigger::DurationMs(val),
-            Rhs::Var(Var::User { name, namespace: _ }) => PlayTrigger::Variable(name),
-            _ => unreachable!(),
-        });
+    .then(
+        variable
+            .clone()
+            .try_map(|v, span| {
+                let errmsg = "Only f or d allowed. f for fixed, d for dynamic.";
+                match v {
+                    Rhs::Var(var) => match var {
+                        Var::Log => {
+                            return Err(Rich::custom(span, errmsg));
+                        }
+                        Var::Predef { name, namespace } => {
+                            if !namespace.is_empty() {
+                                return Err(Rich::custom(span, errmsg));
+                            } else {
+                                if name.as_str() != "f" && name.as_str() != "d" {
+                                    return Err(Rich::custom(span, errmsg));
+                                }
 
-        let pku = match pt {
-            PlayType::SensorCount { sensor } => match arg {
-                Rhs::Range {
-                    from:
-                        Val::UnitedVal(UnitVal {
-                            val: from_val,
-                            unit: Unit::TimeMilliseconds,
-                        }),
-                    to:
-                        Val::UnitedVal(UnitVal {
-                            val: to_val,
-                            unit: Unit::TimeMilliseconds,
-                        }),
-                } => PlayKindUnited::SensorCount {
-                    sensor,
-                    count: PlayCount::TimeRangeMs((from_val, to_val)),
-                    trigger,
-                },
-                Rhs::Val(Val::NumVal(NumVal::Integer(i))) => PlayKindUnited::SensorCount {
-                    sensor,
-                    count: PlayCount::Amount(i as u64),
-                    trigger,
-                },
-                Rhs::Val(Val::UnitedVal(UnitVal {
-                    val: ms,
-                    unit: Unit::TimeMilliseconds,
-                })) => PlayKindUnited::SensorCount {
-                    sensor,
-                    count: PlayCount::TimeRelativeMs(ms),
-                    trigger,
-                },
-                _ => {
-                    unreachable!()
-                }
-            },
-            PlayType::UntilSensorCount {
-                sending,
-                until_sensor,
-            } => match arg {
-                Rhs::Range {
-                    from:
-                        Val::UnitedVal(UnitVal {
-                            val: from_val,
-                            unit: Unit::TimeMilliseconds,
-                        }),
-                    to:
-                        Val::UnitedVal(UnitVal {
-                            val: to_val,
-                            unit: Unit::TimeMilliseconds,
-                        }),
-                } => PlayKindUnited::UntilSensorCount {
-                    sending,
-                    until_sensor,
-                    until_count: PlayCount::TimeRangeMs((from_val, to_val)),
-                    trigger,
-                },
-                Rhs::Val(Val::NumVal(NumVal::Integer(i))) => PlayKindUnited::UntilSensorCount {
-                    sending,
-                    until_sensor,
-                    until_count: PlayCount::Amount(i as u64),
-                    trigger,
-                },
-                Rhs::Val(Val::UnitedVal(UnitVal {
-                    val: ms,
-                    unit: Unit::TimeMilliseconds,
-                })) => PlayKindUnited::UntilSensorCount {
-                    sending,
-                    until_sensor,
-                    until_count: PlayCount::TimeRelativeMs(ms),
-                    trigger,
-                },
-                _ => {
-                    unreachable!()
-                }
-            },
-        };
+                                Ok(name)
+                            }
+                        }
+                        Var::User { name, namespace } => {
+                            if !namespace.is_empty() {
+                                return Err(Rich::custom(span, errmsg));
+                            } else {
+                                if name.as_str() != "f" && name.as_str() != "d" {
+                                    return Err(Rich::custom(span, errmsg));
+                                }
 
-        StatementKindPass1::SendFrames(pku)
-    })
+                                Ok(name)
+                            }
+                        }
+                    },
+                    _ => unreachable!(),
+                }
+            })
+            .labelled("play mode [f|d]. f = fixed, d = dynamic")
+            .or_not(),
+    )
+    .map(
+        |(((pt, arg), trigger), mode): (((PlayType, Rhs), Option<Rhs>), Option<String>)| {
+            let play_mode = mode
+                .map(|mode| match mode.as_str() {
+                    "f" => PlayMode::Fix,
+                    "d" => PlayMode::Dynamic,
+                    _ => unreachable!(),
+                })
+                .unwrap_or(PlayMode::Dynamic);
+
+            let trigger = trigger.map(|trigger| match trigger {
+                Rhs::Val(Val::UnitedVal(UnitVal {
+                    val,
+                    unit: Unit::TimeMilliseconds,
+                })) => PlayTrigger::DurationMs(val),
+                Rhs::Var(Var::User { name, namespace: _ }) => PlayTrigger::Variable(name),
+                Rhs::Val(Val::NumVal(NumVal::Floating(f))) => PlayTrigger::DurationRelFactor(f),
+                _ => unreachable!(),
+            });
+
+            let pku = match pt {
+                PlayType::SensorCount { sensor } => match arg {
+                    Rhs::Range {
+                        from:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: from_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                        to:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: to_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                    } => PlayKindUnited::SensorCount {
+                        sensor,
+                        count: PlayCount::TimeRangeMs(AbsTimeRange::Closed((from_val, to_val))),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Range {
+                        from: None,
+                        to:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: to_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                    } => PlayKindUnited::SensorCount {
+                        sensor,
+                        count: PlayCount::TimeRangeMs(AbsTimeRange::LowerOpen(to_val)),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Range {
+                        from:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: from_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                        to: None,
+                    } => PlayKindUnited::SensorCount {
+                        sensor,
+                        count: PlayCount::TimeRangeMs(AbsTimeRange::UpperOpen(from_val)),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Range {
+                        from: None,
+                        to: None,
+                    } => PlayKindUnited::SensorCount {
+                        sensor,
+                        count: PlayCount::TimeRangeMs(AbsTimeRange::Open),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Val(Val::NumVal(NumVal::Integer(i))) => PlayKindUnited::SensorCount {
+                        sensor,
+                        count: PlayCount::Amount(i as u64),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Val(Val::UnitedVal(UnitVal {
+                        val: ms,
+                        unit: Unit::TimeMilliseconds,
+                    })) => PlayKindUnited::SensorCount {
+                        sensor,
+                        count: PlayCount::TimeRelativeMs(ms),
+                        trigger,
+                        play_mode,
+                    },
+                    _ => {
+                        unreachable!()
+                    }
+                },
+                PlayType::UntilSensorCount {
+                    sending,
+                    until_sensor,
+                } => match arg {
+                    Rhs::Range {
+                        from:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: from_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                        to:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: to_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                    } => PlayKindUnited::UntilSensorCount {
+                        sending,
+                        until_sensor,
+                        until_count: PlayCount::TimeRangeMs(AbsTimeRange::Closed((
+                            from_val, to_val,
+                        ))),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Range {
+                        from: None,
+                        to:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: to_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                    } => PlayKindUnited::UntilSensorCount {
+                        sending,
+                        until_sensor,
+                        until_count: PlayCount::TimeRangeMs(AbsTimeRange::LowerOpen(to_val)),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Range {
+                        from:
+                            Some(Val::UnitedVal(UnitVal {
+                                val: from_val,
+                                unit: Unit::TimeMilliseconds,
+                            })),
+                        to: None,
+                    } => PlayKindUnited::UntilSensorCount {
+                        sending,
+                        until_sensor,
+                        until_count: PlayCount::TimeRangeMs(AbsTimeRange::UpperOpen(from_val)),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Val(Val::NumVal(NumVal::Integer(i))) => PlayKindUnited::UntilSensorCount {
+                        sending,
+                        until_sensor,
+                        until_count: PlayCount::Amount(i as u64),
+                        trigger,
+                        play_mode,
+                    },
+                    Rhs::Val(Val::UnitedVal(UnitVal {
+                        val: ms,
+                        unit: Unit::TimeMilliseconds,
+                    })) => PlayKindUnited::UntilSensorCount {
+                        sending,
+                        until_sensor,
+                        until_count: PlayCount::TimeRelativeMs(ms),
+                        trigger,
+                        play_mode,
+                    },
+                    _ => {
+                        unreachable!()
+                    }
+                },
+            };
+
+            StatementKindPass1::SendFrames(pku)
+        },
+    )
     .labelled("play_frames");
 
     let include = just(Token::OpAssignToLeft)
@@ -2263,21 +2451,6 @@ pub fn compile_code_with_state(
 
                     e.write(src.clone(), &mut out).unwrap();
                 } else {
-                    // let e = Report::build(ReportKind::Error, (), err.span().start)
-                    //     .with_config(
-                    //         ariadne::Config::default()
-                    //             .with_color(false)
-                    //             .with_char_set(ariadne::CharSet::Ascii),
-                    //     )
-                    //     .with_code(3)
-                    //     .with_message(err.to_string())
-                    //     .with_label(
-                    //         Label::new(err.span().into_range())
-                    //             .with_message(err.reason().to_string())
-                    //             .with_color(Color::Red),
-                    //     )
-                    //     .finish();
-
                     let msg = format!(
                         "<{}-{}>  {}",
                         err.span().start,
@@ -2758,10 +2931,10 @@ mod tests {
         pf! l 10s..20s
 
         # send all lidar frames between the absolute 10s and 20s of the bagfile when reaching var1
-        pf! l 10s..20s var1   
+        pf! l 10s..20s var1
 
         # send all lidar frames between the absolute 10s and 20s of the bagfile but slow down time so it sends it over 1 minute
-        pf! l 10s..20s 2mins  
+        pf! l 10s..20s 2mins
 
         # send imu frames until 2 lidar frames are encountered
         pf! il 2
@@ -2774,6 +2947,27 @@ mod tests {
 
         # send the next(!) 10 seconds of lidar frames every time it reaches var1
         pf! l 10s var1
+
+        # fixed var
+        pf! l 10s..20s var1 f
+
+        # dynamic var
+        pf! l 10s..20s var1 d
+
+        # implicit dynamic var
+        pf! l 10s..20s var1
+
+        # rosbag play with filters :)
+        pf! m .. 1.
+
+        # fixed start until open end
+        pf! m 5s.. 1.0
+
+        # start until 20s
+        pf! m ..5s .5
+
+        # relative play time
+        pf! l 10s..20s 1.
         ";
 
         let eval = compile_code(SRC);

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use mcap::{McapError, Message};
 use memmap2::Mmap;
 use nalgebra::{UnitQuaternion, Vector3};
-use rlc::{PlayCount, PlayKindUnited, PlayTrigger, SensorType};
+use rlc::{AbsTimeRange, PlayCount, PlayKindUnited, PlayMode, PlayTrigger, SensorType};
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
@@ -250,12 +250,14 @@ pub enum PlayKindUnitedRich {
         sensor: SensorTypeRich,
         count: PlayCount,
         trigger: Option<PlayTrigger>,
+        play_mode: PlayMode,
     },
     UntilSensorCount {
         sending: SensorTypeRich,
         until_sensor: SensorTypeRich,
         until_count: PlayCount,
         trigger: Option<PlayTrigger>,
+        play_mode: PlayMode,
     },
 }
 
@@ -266,21 +268,25 @@ impl PlayKindUnitedRich {
                 sensor,
                 count,
                 trigger,
+                play_mode,
             } => PlayKindUnitedRich::SensorCount {
                 sensor: SensorTypeRich::with_topic(&sensor, topics),
                 count,
                 trigger,
+                play_mode,
             },
             PlayKindUnited::UntilSensorCount {
                 sending,
                 until_sensor,
                 until_count,
                 trigger,
+                play_mode,
             } => PlayKindUnitedRich::UntilSensorCount {
                 sending: SensorTypeRich::with_topic(&sending, topics),
                 until_sensor: SensorTypeRich::with_topic(&until_sensor, topics),
                 until_count,
                 trigger,
+                play_mode,
             },
         }
     }
@@ -331,7 +337,8 @@ fn collect_until(
         .enumerate()
         .skip_while(|(i, s)| {
             match until {
-                Some(PlayCount::TimeRangeMs((min, _))) => {
+                Some(PlayCount::TimeRangeMs(AbsTimeRange::Closed((min, _))))
+                | Some(PlayCount::TimeRangeMs(AbsTimeRange::UpperOpen(min))) => {
                     let min = (*min as u128) * 1_000_000;
                     if let Ok(msg) = s {
                         let msg_time = msg.publish_time as u128;
@@ -379,12 +386,22 @@ fn collect_until(
                             start_time.replace(msg.publish_time as u128);
                         }
                     }
-                    Some(PlayCount::TimeRangeMs((min, max))) => {
+                    Some(PlayCount::TimeRangeMs(AbsTimeRange::Closed((min, max)))) => {
                         let min = (*min as u128) * 1_000_000;
                         let max = (*max as u128) * 1_000_000;
                         let rel_dur = max - min;
                         if let Some(tstart) = start_time {
                             if tstart + rel_dur < msg.publish_time as u128 {
+                                return Ok(msgs);
+                            }
+                        } else {
+                            start_time.replace(msg.publish_time as u128);
+                        }
+                    }
+                    Some(PlayCount::TimeRangeMs(AbsTimeRange::LowerOpen(max))) => {
+                        let max = (*max as u128) * 1_000_000;
+                        if let Some(tstart) = start_time {
+                            if tstart + max < msg.publish_time as u128 {
                                 return Ok(msgs);
                             }
                         } else {
@@ -484,7 +501,7 @@ fn collect_until(
 }
 
 impl Bagfile {
-    // TODO handle trigger outside
+    // TODO handle trigger and play_mode outside
     pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<BagMsg>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
@@ -495,6 +512,7 @@ impl Bagfile {
                         sensor,
                         count,
                         trigger: _,
+                        play_mode: _,
                     } => collect_until(
                         stream,
                         &mut self.cursor,
@@ -508,6 +526,7 @@ impl Bagfile {
                         until_sensor,
                         until_count,
                         trigger: _,
+                        play_mode: _,
                     } => collect_until(
                         stream,
                         &mut self.cursor,
@@ -651,6 +670,7 @@ mod tests {
             },
             count: PlayCount::Amount(1),
             trigger: None,
+            play_mode: PlayMode::Fix,
         });
 
         assert!(clouds.is_ok());
@@ -671,6 +691,7 @@ mod tests {
             },
             trigger: None,
             count: PlayCount::TimeRelativeMs(50),
+            play_mode: PlayMode::Fix,
         });
 
         assert!(clouds.is_ok());
@@ -682,7 +703,8 @@ mod tests {
                 topic: "/ouster/points".to_owned(),
             },
             trigger: None,
-            count: PlayCount::TimeRangeMs((50, 100)),
+            count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((50, 100))),
+            play_mode: PlayMode::Fix,
         });
 
         assert!(clouds.is_ok());
@@ -694,7 +716,8 @@ mod tests {
                 topic: "/ouster/points".to_owned(),
             },
             trigger: None,
-            count: PlayCount::TimeRangeMs((0, 100)),
+            count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((0, 100))),
+            play_mode: PlayMode::Fix,
         });
 
         assert!(clouds.is_ok());

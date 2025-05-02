@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt::Display,
     i8, io,
-    ops::DerefMut,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
@@ -11,14 +10,13 @@ use std::{
 
 use anyhow::{Error, anyhow};
 use bagread::PlayKindUnitedRich;
-use chrono::{DateTime, Local};
 use log::{error, info};
 use ratatui::{
-    layout::{Alignment, Constraint},
+    layout::Constraint,
     style::Stylize,
     widgets::{Cell, Paragraph, Row, ScrollbarState, Table, TableState},
 };
-use rlc::{Evaluated, Rhs};
+use rlc::{Evaluated, PlayKindUnited, PlayMode, Rhs, Rules, VariableHistory, WindFunction};
 use sea::{WindData, net::PacketKind};
 
 /// Application result type.
@@ -681,7 +679,6 @@ pub const COMPARE_POPUP_TITLE_NOERR: &'static str = "CompareCursor to row[:col]"
 #[derive(Debug, Default)]
 pub enum WindMode {
     #[default]
-    // Inactive, // only if no wind connected. TODO get this info from coordinator. Set automatically to Active as soon as some wind is connected
     Inactive, // shown but not changable
     Active,
     ActiveSelect,
@@ -700,7 +697,8 @@ pub struct WindCursor {
     compile_state: WindCompile,
     wind_file_path: PathBuf,
     bagfile: bagread::Bagfile,
-    variable_cache: HashMap<rlc::Var, rlc::Rhs>, // TODO use
+    variable_cache: HashMap<rlc::Var, rlc::Rhs>,
+    dynamic_vars: HashMap<String, Vec<PlayKindUnited>>,
 }
 
 impl Default for WindCursor {
@@ -718,6 +716,7 @@ impl Default for WindCursor {
             variable_cache: HashMap::new(),
             wind_work_queue: VecDeque::new(),
             compile_state: WindCompile::default(),
+            dynamic_vars: HashMap::new(),
         }
     }
 }
@@ -1572,27 +1571,26 @@ impl Default for ClientCompare {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct InfoView {
     pub shown: bool,
     pub log: Vec<String>,
 }
 
-fn get_current_time() -> String {
-    let now: DateTime<Local> = Local::now();
-    let formatted_time = now.format("%H:%M:%S").to_string();
-    formatted_time
+impl Default for InfoView {
+    fn default() -> Self {
+        Self {
+            shown: true,
+            log: Vec::new(),
+        }
+    }
 }
 
-pub(crate) const INFO_LINES: usize = 10;
-
-impl std::io::Write for InfoView {
+struct ErrorWriter {}
+impl std::io::Write for ErrorWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let s = str::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let s = String::from(s);
+        let s = String::from_utf8_lossy(buf);
         error!("{s}");
-        // self.log.push(s);
-
         Ok(buf.len())
     }
 
@@ -1601,36 +1599,7 @@ impl std::io::Write for InfoView {
     }
 }
 
-// TODO fix text not rendered coloured because info is lost with String. Needs "Line" from ratatui
 impl InfoView {
-    // pub fn log_info(&mut self, log: &str) {
-    //     let txt = "INFO".blue();
-    //     self.log
-    //         .push(format!("[{txt}] {} -- {log}", get_current_time()));
-
-    //     if self.log.len() > INFO_LINES {
-    //         self.log.remove(1);
-    //     }
-    // }
-    // pub fn log_error(&mut self, log: &str) {
-    //     let txt = "ERROR".red();
-    //     self.log
-    //         .push(format!("[{txt}] {} - {log}", get_current_time()));
-
-    //     if self.log.len() > INFO_LINES {
-    //         self.log.remove(1);
-    //     }
-    // }
-    // pub fn log_debug(&mut self, log: &str) {
-    //     let txt = "DEBUG";
-    //     self.log
-    //         .push(format!("[{txt}] {} -- {log}", get_current_time()));
-
-    //     if self.log.len() > INFO_LINES {
-    //         self.log.remove(1);
-    //     }
-    // }
-
     pub fn toggle(&mut self) {
         self.shown = !self.shown;
     }
@@ -1671,6 +1640,7 @@ impl App {
     pub async fn new(
         sender: tokio::sync::mpsc::Sender<PacketKind>,
         mut receiver: tokio::sync::mpsc::Receiver<(String, String, String)>,
+        mut dyn_wind_receiver: tokio::sync::mpsc::Receiver<String>,
         rats: Option<PathBuf>,
     ) -> Self {
         let history = Arc::new(RwLock::new(History::default()));
@@ -1682,19 +1652,48 @@ impl App {
                 hist.add(mat, client_name, var_name);
             }
         });
-        tokio::task::yield_now().await;
-
         let mut wind_cursor = WindCursor::default();
 
         if let Some(rl) = &rats {
             wind_cursor = wind_cursor.with_rats(rl.clone());
         }
+        let wind_cursor = Arc::new(RwLock::new(wind_cursor));
+
+        let wind_update = Arc::clone(&wind_cursor);
+        let wind_answer_sender = sender.clone();
+        tokio::spawn(async move {
+            while let Some(var) = dyn_wind_receiver.recv().await {
+                let wd = {
+                    let wc = wind_update.write().unwrap();
+                    let v = wc.dynamic_vars.get(&var);
+                    match v {
+                        Some(wd) => wd.clone(), // probably very costly but the old data needs to stay there
+                        None => {
+                            error!(
+                                "Received Dyn Wind request for {} but no data available.",
+                                &var
+                            );
+                            continue;
+                        }
+                    }
+                };
+
+                App::wind_fire_at_current_cursor(
+                    wind_answer_sender.clone(),
+                    Arc::clone(&wind_update),
+                    Some(wd),
+                )
+                .await;
+            }
+        });
+
+        tokio::task::yield_now().await;
 
         Self {
             running: true,
             coordinator: Coordinator::default(),
             history,
-            wind_cursor: Arc::new(RwLock::new(wind_cursor)),
+            wind_cursor,
             mode: Mode::default(),
             tolerance: Tolerance::default(),
             compare: ClientCompare::default(),
@@ -1910,50 +1909,64 @@ impl App {
         t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
     }
 
-    pub async fn wind_fire_at_current_cursor(&mut self) {
-        let send_coordinator = self.send_coordinator.clone();
-        let info_view = self.info_view.clone();
-        let wind_cursor_states = self.wind_cursor.clone();
+    pub async fn wind_fire_at_current_cursor(
+        send_coordinator: tokio::sync::mpsc::Sender<PacketKind>,
+        wind_cursor_states: Arc<RwLock<WindCursor>>,
+        state: Option<Vec<PlayKindUnited>>,
+    ) {
+        let state = state.map(|pkus| {
+            let wf = pkus
+                .into_iter()
+                .map(|pku| WindFunction::SendFrames(pku))
+                .collect::<Vec<_>>();
+            Evaluated {
+                rules: Rules::new(),
+                wind: wf,
+                vars: VariableHistory::new(vec![]),
+            }
+        });
 
         // task to not block the UI while compiling
         tokio::spawn(async move {
             let wind_cursor_outer = wind_cursor_states.clone();
-            let info_view_outer = info_view.clone();
 
-            let var_state = {
-                let mut wc = wind_cursor_outer.write().unwrap();
-                wc.compile_state = WindCompile::Compiling;
-                wc.variable_cache.clone()
-            };
+            let eval = state.unwrap_or({
+                let var_state = {
+                    let mut wc = wind_cursor_outer.write().unwrap();
+                    wc.compile_state = WindCompile::Compiling;
+                    wc.variable_cache.clone()
+                };
 
-            let lines = wind_cursor_outer.read().unwrap().selected_lines();
-            let start_line = lines.first().map(|l| *l as usize);
-            let end_line = lines.last().map(|l| *l as usize);
-            let rats_file = wind_cursor_outer.read().unwrap().wind_file_path.clone();
-            let eval = rlc::compile_file_with_state(
-                &rats_file,
-                start_line,
-                end_line,
-                Some(var_state),
-                info_view_outer.write().unwrap().deref_mut(),
-                false,
-            );
-            let mut eval = match eval {
-                Ok(eval) => eval,
-                Err(e) => {
-                    error!("{e}");
-                    return;
+                let lines = wind_cursor_outer.read().unwrap().selected_lines();
+                let start_line = lines.first().map(|l| *l as usize);
+                let end_line = lines.last().map(|l| *l as usize);
+                let rats_file = wind_cursor_outer.read().unwrap().wind_file_path.clone();
+                let eval = rlc::compile_file_with_state(
+                    &rats_file,
+                    start_line,
+                    end_line,
+                    Some(var_state),
+                    ErrorWriter {},
+                    false,
+                );
+                let mut eval = match eval {
+                    Ok(eval) => eval,
+                    Err(e) => {
+                        error!("{e}");
+                        return;
+                    }
+                };
+                {
+                    let mut wc = wind_cursor_outer.write().unwrap();
+                    eval.vars.populate_cache();
+                    wc.variable_cache = eval.vars.var_cache.clone();
+                    wc.compile_state = WindCompile::Done;
                 }
-            };
 
-            {
-                let mut wc = wind_cursor_outer.write().unwrap();
-                eval.vars.populate_cache();
-                wc.variable_cache = eval.vars.var_cache.clone();
-                wc.compile_state = WindCompile::Done;
-            }
+                info!("compiled {start_line:?}-{end_line:?}");
+                eval
+            });
 
-            info!("compiled {start_line:?}-{end_line:?}");
             {
                 let mut wind_cursor = wind_cursor_outer.write().unwrap();
                 match wind_cursor.wind_send_state {
@@ -2029,20 +2042,6 @@ impl App {
                                                 };
 
                                             info!("imu topic: {sending_imu_topic}");
-
-                                            let trigger = match &kind {
-                                                rlc::PlayKindUnited::SensorCount {
-                                                    sensor: _,
-                                                    count: _,
-                                                    trigger,
-                                                } => trigger,
-                                                rlc::PlayKindUnited::UntilSensorCount {
-                                                    sending: _,
-                                                    until_sensor: _,
-                                                    until_count: _,
-                                                    trigger,
-                                                } => trigger,
-                                            };
 
                                             let bagmsgs =
                                                 wind_cursor.write().unwrap().bagfile.next(
@@ -2129,16 +2128,68 @@ impl App {
                                                 return;
                                             }
 
-                                            let var = match trigger {
-                                                Some(rlc::PlayTrigger::Variable(var)) => {
-                                                    Some(var.clone())
+                                            let trigger = match &kind {
+                                                rlc::PlayKindUnited::SensorCount {
+                                                    sensor: _,
+                                                    count: _,
+                                                    trigger,
+                                                    play_mode,
+                                                } => {
+                                                    trigger.as_ref().map(|trigger| match trigger {
+                                                        rlc::PlayTrigger::DurationRelFactor(
+                                                            factor,
+                                                        ) => {
+                                                            let original_duration_ms = end_time
+                                                                .unwrap()
+                                                                - start_time.unwrap();
+                                                            let scaled_dur = original_duration_ms
+                                                                as f64
+                                                                * factor;
+                                                            (
+                                                                rlc::PlayTrigger::DurationMs(
+                                                                    scaled_dur.round() as u64,
+                                                                ),
+                                                                play_mode,
+                                                            )
+                                                        }
+                                                        _ => (trigger.clone(), play_mode),
+                                                    })
                                                 }
-                                                _ => None,
+                                                rlc::PlayKindUnited::UntilSensorCount {
+                                                    sending: _,
+                                                    until_sensor: _,
+                                                    until_count: _,
+                                                    trigger,
+                                                    play_mode,
+                                                } => {
+                                                    trigger.as_ref().map(|trigger| match trigger {
+                                                        rlc::PlayTrigger::DurationRelFactor(
+                                                            factor,
+                                                        ) => {
+                                                            let original_duration_ms = end_time
+                                                                .unwrap()
+                                                                - start_time.unwrap();
+                                                            let scaled_dur = original_duration_ms
+                                                                as f64
+                                                                * factor;
+                                                            (
+                                                                rlc::PlayTrigger::DurationMs(
+                                                                    scaled_dur.round() as u64,
+                                                                ),
+                                                                play_mode,
+                                                            )
+                                                        }
+                                                        _ => (trigger.clone(), play_mode),
+                                                    })
+                                                }
                                             };
 
-                                            match trigger {
-                                                Some(rlc::PlayTrigger::DurationMs(
-                                                    target_duration_ms,
+                                            match &trigger {
+                                                Some((
+                                                    rlc::PlayTrigger::DurationMs(
+                                                        target_duration_ms,
+                                                    ),
+                                                    PlayMode::Fix,
                                                 )) => {
                                                     let original_duration_ms =
                                                         end_time.unwrap() - start_time.unwrap();
@@ -2177,13 +2228,15 @@ impl App {
                                                         }
                                                     }
                                                 }
-                                                // TODO this can be probably way more elegant. needs var as None in case None and Some(var) in case some var
-                                                _ => {
+                                                Some((
+                                                    rlc::PlayTrigger::Variable(var),
+                                                    PlayMode::Fix,
+                                                )) => {
                                                     for (_, wind) in wind_data {
                                                         let send = send_coordinator
                                                             .send(PacketKind::Wind {
                                                                 data: wind,
-                                                                at_var: var.clone(),
+                                                                at_var: Some(var.clone()),
                                                             })
                                                             .await;
                                                         match send {
@@ -2196,6 +2249,69 @@ impl App {
                                                             }
                                                         }
                                                     }
+                                                }
+                                                Some((
+                                                    rlc::PlayTrigger::Variable(var),
+                                                    PlayMode::Dynamic,
+                                                )) => {
+                                                    // save internally and send a message to coordinator to ask us when it arrives at this var.
+                                                    // when asked, we lookup the dynamic vars and trigger the pipeline to send this recursively but this time fixed.
+                                                    // the pipeline will then use the current cursor
+                                                    {
+                                                        let mut wc = wind_cursor.write().unwrap();
+                                                        let kind = match kind {
+                                                            PlayKindUnited::SensorCount {
+                                                                sensor,
+                                                                count,
+                                                                trigger: _,
+                                                                play_mode: _,
+                                                            } => PlayKindUnited::SensorCount {
+                                                                sensor: sensor.clone(),
+                                                                count: count.clone(),
+                                                                trigger: None,
+                                                                play_mode: PlayMode::Fix,
+                                                            },
+                                                            PlayKindUnited::UntilSensorCount {
+                                                                sending,
+                                                                until_sensor,
+                                                                until_count,
+                                                                trigger: _,
+                                                                play_mode: _,
+                                                            } => PlayKindUnited::UntilSensorCount {
+                                                                sending: sending.clone(),
+                                                                until_sensor: until_sensor.clone(),
+                                                                until_count: until_count.clone(),
+                                                                trigger: None,
+                                                                play_mode: PlayMode::Fix,
+                                                            },
+                                                        };
+                                                        if let Some(at_var) =
+                                                            wc.dynamic_vars.get_mut(var)
+                                                        {
+                                                            at_var.push(kind);
+                                                        } else {
+                                                            wc.dynamic_vars
+                                                                .insert(var.clone(), vec![kind]);
+                                                        }
+                                                    }
+
+                                                    let send = send_coordinator
+                                                        .send(PacketKind::WindDynamic(var.clone()))
+                                                        .await;
+                                                    match send {
+                                                        Ok(_) => {
+                                                            info!("Succ send dynamic to coord.");
+                                                        }
+                                                        Err(e) => {
+                                                            error!(
+                                                                "Could not send Wind to coordinator: {e}"
+                                                            );
+                                                            return;
+                                                        }
+                                                    }
+                                                }
+                                                _ => {
+                                                    unreachable!()
                                                 }
                                             }
                                         }
