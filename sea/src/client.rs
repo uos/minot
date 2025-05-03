@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use pnet::datalink::{self, NetworkInterface};
+use serde::Serialize;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -390,7 +391,7 @@ impl Client {
 
             match tim {
                 Err(_) => {
-                    info!("JoinRequest timed out..");
+                    debug!("JoinRequest timed out..");
                     continue;
                 }
                 Ok(None) => {
@@ -514,7 +515,7 @@ impl Client {
                                     warn!("Did not receive ack packet");
                                 }
                                 Err(_) => {
-                                    debug!(
+                                    warn!(
                                         "Timeout receiving ack to start sending from other client."
                                     );
                                 }
@@ -537,7 +538,78 @@ impl Client {
                         variable_type.into(),
                     ];
                     buffer.extend_from_slice(&data);
-                    stream.write_all(&buffer).await?;
+
+                    let expected_retry = crate::net::Packet {
+                        header: Header::default(),
+                        data: PacketKind::Retry,
+                    };
+                    let retry_data =
+                        bincode::serialize(&expected_retry).expect("non serializable retry");
+                    let mut recv_buf = vec![0; retry_data.len()];
+                    let mut send_buf = [0; 1024];
+                    let mut send_cursor = 0;
+
+                    let (mut stream_rx, mut stream_tx) = stream.split();
+                    loop {
+                        let mut sent_all = false;
+                        let mut last_i = 0;
+                        for i in 0..send_buf.len() {
+                            if send_cursor >= buffer.len() {
+                                sent_all = true;
+                                break;
+                            }
+                            last_i = i;
+                            send_buf[i] = buffer[send_cursor];
+                            send_cursor += 1;
+                        }
+
+                        if send_cursor == buffer.len() {
+                            sent_all = true;
+                        }
+
+                        // truncating buffer to not send trash bytes
+                        let send_buf = if sent_all && last_i + 1 < send_buf.len() {
+                            &send_buf[0..last_i + 1]
+                        } else {
+                            &send_buf
+                        };
+                        tokio::select! {
+                            fd_recv = stream_rx.read_exact(&mut recv_buf) => {
+                                let n = fd_recv.expect("Could not read from tcp stream.");
+                                if n == 0 {
+                                    debug!("read empty stream while sending to other client.");
+                                    continue;
+                                }
+                                    let received_packet =
+                                        bincode::deserialize::<crate::net::Packet>(&recv_buf)?;
+                                    if matches!(
+                                        received_packet.data,
+                                        crate::net::PacketKind::Retry
+                                    ) {
+                                        send_cursor = 0;
+                                        continue;
+                                    }
+                                    warn!("Received something else than retry packet mid-stream.");
+                            },
+                            fd_sent = stream_tx.write(&send_buf) => {
+                                let n = fd_sent.expect("Could not write to tcp stream.");
+                                if n == 0 {
+                                    error!("written 0 bytes to other client?");
+                                    break;
+                                }
+                                debug!("written");
+                            }
+                        };
+                        if sent_all {
+                            stream_tx.flush().await?;
+                            break;
+                        }
+                    }
+
+                    // TODO in the current impl, the last packet can not be retried. maybe we could wait for an ack or retry here in loop and wait until we get one
+                    // TODO maybe change every stream for rule conversation etc. to use this communication pattern
+
+                    // stream.write_all(&buffer).await?;
                     debug!("written all");
                     return Ok(());
                 }
@@ -641,14 +713,23 @@ impl Client {
                         };
 
                         if n == 0 {
-                            return Err(anyhow!(
-                                "Stream seems to be broken while expecting the data."
-                            ));
+                            continue;
                         }
 
                         if first {
                             if buf[0] != PROTO_IDENTIFIER {
-                                return Err(anyhow!("Other client sent unexpected start token."));
+                                let retry_packet = crate::net::Packet {
+                                    header: Header::default(),
+                                    data: PacketKind::Retry,
+                                };
+                                let retry_packet_data = bincode::serialize(&retry_packet)
+                                    .expect("non serializable retry");
+
+                                stream.write_all(&retry_packet_data).await?;
+                                buffer.clear();
+                                first = true;
+                                // warn!("Unexpected start token, asking for retry");
+                                continue;
                             } else {
                                 // read 4 bytes into u32 for length of rest message
                                 let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];

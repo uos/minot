@@ -1,15 +1,9 @@
-# Wind settings (where they publish)
+# Wind settings (xdwhere they publish)
 <- ./wind_ros2.rl
-
 _bag.{
 	imu.topic = /ouster/imu
 	lidar.topic = /ouster/points
 }
-
 reset! ./dlg_cut
-
-# pf! il 2 10s # check if there are really only 9 msgs before the first 2 lidar frames
-
-# pf! il 2 10s
-pf! l 1 var1 d
+pf! il 2 var1 f
 

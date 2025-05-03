@@ -28,6 +28,7 @@ pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
+    Retry,
     RequestVarSend(String),
     JoinRequest(u16, u16, ShipKind),
     Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat

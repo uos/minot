@@ -239,6 +239,7 @@ pub struct Bagfile {
     metadata: Option<Metadata>,
 }
 
+#[derive(Debug)]
 pub enum BagMsg {
     Cloud(PointCloud2Msg),
     Imu(ImuMsg),

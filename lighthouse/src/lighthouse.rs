@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use log::{error, info};
+use log::{error, info, warn};
 use rlc::COMPARE_NODE_NAME;
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 
@@ -37,12 +37,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rules = match &file {
         Some(path) => {
+            println!("Compiling {:#?}", &path);
             let rats = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
             rats.rules
         }
         None => rlc::Rules::new(),
     };
 
+    println!("Searching for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init
     let comparer =
         sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)
             .await?;
@@ -141,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         lock_until_ack: _,
                     } => {
                         if let crate::Action::Catch { source } = action {
+                            // info!("received catch: {source:?}");
                             match comparer.get_cannon().catch_dyn(&source).await {
                                 Ok((strrep, _var_type, var_name)) => {
                                     let name = match &source.kind {
@@ -175,6 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new(tx, ndata_rx, dyn_wind_rx, file).await;
 
+    info!("Welcome to Lighthouse TUI. Have fun!");
     let backend = CrosstermBackend::new(std::io::stdout());
     let terminal = Terminal::new(backend)?;
     let events = EventHandler::new(250);
