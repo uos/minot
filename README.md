@@ -69,7 +69,7 @@ RUST_LOG=debug ./rat2
 
 **Swap Compare Buffers** = <kbd>Shift</kbd>+f
 
-**mMove Through Rats at Current Var** = <kbd>PageUp</kbd> / <kbd>PageDown</kbd>
+**Move Through Rats at Current Var** = <kbd>PageUp</kbd> / <kbd>PageDown</kbd>
 
 <br>
 
