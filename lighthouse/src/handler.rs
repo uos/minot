@@ -8,18 +8,22 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
     match key_event.code {
         // Exit application on `ESC` or `q`
         KeyCode::Esc | KeyCode::Char('q') => {
-            if app.wind_mode() && app.wind_cursor.read().unwrap().showing_popup {
-                let mut wind_cursor = app.wind_cursor.write().unwrap();
-                wind_cursor.showing_popup = false;
-                wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
-                wind_cursor.popup_buffer.clear();
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_cols_ref(crate::app::VerticalDirection::Up);
             } else {
-                if app.compare.show_line_input_popup {
-                    app.compare.show_line_input_popup = false;
-                    app.compare.popup_title = COMPARE_POPUP_TITLE_NOERR;
-                    app.compare.popup_buffer.clear();
+                if app.wind_mode() && app.wind_cursor.read().unwrap().showing_popup {
+                    let mut wind_cursor = app.wind_cursor.write().unwrap();
+                    wind_cursor.showing_popup = false;
+                    wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
+                    wind_cursor.popup_buffer.clear();
                 } else {
-                    app.quit();
+                    if app.compare.show_line_input_popup {
+                        app.compare.show_line_input_popup = false;
+                        app.compare.popup_title = COMPARE_POPUP_TITLE_NOERR;
+                        app.compare.popup_buffer.clear();
+                    } else {
+                        app.quit();
+                    }
                 }
             }
         }
@@ -50,11 +54,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
         }
         KeyCode::Char('h') => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.change_history(crate::app::HorizontalDirection::Left);
-            } else {
-                app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
-            }
+            app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
         }
         KeyCode::Left => {
             app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
@@ -74,7 +74,11 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             }
         }
         KeyCode::Char('w') => {
-            app.wind_toggle_mode();
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_cols_diff(crate::app::VerticalDirection::Up);
+            } else {
+                app.wind_toggle_mode();
+            }
         }
         KeyCode::Char('t') => {
             app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Down);
@@ -86,18 +90,15 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             app.change_tolerance_cursor(crate::app::HorizontalDirection::Left);
         }
 
-        // TODO non-freedom chars
-        KeyCode::Char('ü') => {
-            app.change_cols_ref(crate::app::VerticalDirection::Up);
+        KeyCode::Char('a') => {
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_cols_ref(crate::app::VerticalDirection::Down);
+            }
         }
-        KeyCode::Char('ä') => {
-            app.change_cols_ref(crate::app::VerticalDirection::Down);
-        }
-        KeyCode::Char('+') => {
-            app.change_cols_diff(crate::app::VerticalDirection::Up);
-        }
-        KeyCode::Char('#') => {
-            app.change_cols_diff(crate::app::VerticalDirection::Down);
+        KeyCode::Char('s') => {
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_cols_diff(crate::app::VerticalDirection::Down);
+            }
         }
 
         KeyCode::Char('P') => {
