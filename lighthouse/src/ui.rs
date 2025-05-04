@@ -15,7 +15,7 @@ use crate::app::App;
 pub fn render(app: &mut App, frame: &mut Frame) {
     let outer = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title_top(app.render_coordinator())
+        .title_top(app.render_var_locked())
         .title_top(Line::from(app.render_vs_overview()).centered())
         .title_top(Line::from(app.render_history()).right_aligned())
         .title_bottom(app.render_tolerance())

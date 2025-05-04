@@ -5,8 +5,7 @@ turbine_ros2.{
 	}
 
 	_lidar.{
-		topic = wind_cloudbla
+		topic = wind_cloud
 		qos = sensor
 	}
-
 }

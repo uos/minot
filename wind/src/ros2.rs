@@ -187,76 +187,78 @@ async fn main() -> anyhow::Result<()> {
 
     let mut wind_receiver = wind(&wind_name).await?;
 
-    while let Some(data) = wind_receiver.recv().await {
-        match data {
-            wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
-                let msg: PointCloud2 = point_cloud2_msg.into();
-                cloud_publisher.publish(msg)?;
-                info!("published cloud");
-            }
-            wind::sea::WindData::Imu(imu_msg) => {
-                let msg = Imu {
-                    header: Header {
-                        stamp: Time {
-                            sec: imu_msg.header.stamp.sec,
-                            nanosec: imu_msg.header.stamp.nanosec,
+    while let Some(wind_data) = wind_receiver.recv().await {
+        for data in wind_data {
+            match data {
+                wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
+                    let msg: PointCloud2 = point_cloud2_msg.into();
+                    cloud_publisher.publish(msg)?;
+                    info!("published cloud");
+                }
+                wind::sea::WindData::Imu(imu_msg) => {
+                    let msg = Imu {
+                        header: Header {
+                            stamp: Time {
+                                sec: imu_msg.header.stamp.sec,
+                                nanosec: imu_msg.header.stamp.nanosec,
+                            },
+                            frame_id: imu_msg.header.frame_id,
                         },
-                        frame_id: imu_msg.header.frame_id,
-                    },
-                    orientation: {
-                        Quaternion {
-                            x: imu_msg.orientation.i,
-                            y: imu_msg.orientation.j,
-                            z: imu_msg.orientation.k,
-                            w: imu_msg.orientation.w,
-                        }
-                    },
-                    orientation_covariance: [
-                        imu_msg.orientation_covariance[0],
-                        imu_msg.orientation_covariance[1],
-                        imu_msg.orientation_covariance[2],
-                        imu_msg.orientation_covariance[3],
-                        imu_msg.orientation_covariance[4],
-                        imu_msg.orientation_covariance[5],
-                        imu_msg.orientation_covariance[6],
-                        imu_msg.orientation_covariance[7],
-                        imu_msg.orientation_covariance[8],
-                    ],
-                    angular_velocity: Vector3 {
-                        x: imu_msg.angular_velocity.x,
-                        y: imu_msg.angular_velocity.y,
-                        z: imu_msg.angular_velocity.z,
-                    },
-                    angular_velocity_covariance: [
-                        imu_msg.angular_velocity_covariance[0],
-                        imu_msg.angular_velocity_covariance[1],
-                        imu_msg.angular_velocity_covariance[2],
-                        imu_msg.angular_velocity_covariance[3],
-                        imu_msg.angular_velocity_covariance[4],
-                        imu_msg.angular_velocity_covariance[5],
-                        imu_msg.angular_velocity_covariance[6],
-                        imu_msg.angular_velocity_covariance[7],
-                        imu_msg.angular_velocity_covariance[8],
-                    ],
-                    linear_acceleration: Vector3 {
-                        x: imu_msg.linear_acceleration.x,
-                        y: imu_msg.linear_acceleration.y,
-                        z: imu_msg.linear_acceleration.z,
-                    },
-                    linear_acceleration_covariance: [
-                        imu_msg.linear_acceleration_covariance[0],
-                        imu_msg.linear_acceleration_covariance[1],
-                        imu_msg.linear_acceleration_covariance[2],
-                        imu_msg.linear_acceleration_covariance[3],
-                        imu_msg.linear_acceleration_covariance[4],
-                        imu_msg.linear_acceleration_covariance[5],
-                        imu_msg.linear_acceleration_covariance[6],
-                        imu_msg.linear_acceleration_covariance[7],
-                        imu_msg.linear_acceleration_covariance[8],
-                    ],
-                };
-                imu_publisher.publish(msg)?;
-                info!("published imu");
+                        orientation: {
+                            Quaternion {
+                                x: imu_msg.orientation.i,
+                                y: imu_msg.orientation.j,
+                                z: imu_msg.orientation.k,
+                                w: imu_msg.orientation.w,
+                            }
+                        },
+                        orientation_covariance: [
+                            imu_msg.orientation_covariance[0],
+                            imu_msg.orientation_covariance[1],
+                            imu_msg.orientation_covariance[2],
+                            imu_msg.orientation_covariance[3],
+                            imu_msg.orientation_covariance[4],
+                            imu_msg.orientation_covariance[5],
+                            imu_msg.orientation_covariance[6],
+                            imu_msg.orientation_covariance[7],
+                            imu_msg.orientation_covariance[8],
+                        ],
+                        angular_velocity: Vector3 {
+                            x: imu_msg.angular_velocity.x,
+                            y: imu_msg.angular_velocity.y,
+                            z: imu_msg.angular_velocity.z,
+                        },
+                        angular_velocity_covariance: [
+                            imu_msg.angular_velocity_covariance[0],
+                            imu_msg.angular_velocity_covariance[1],
+                            imu_msg.angular_velocity_covariance[2],
+                            imu_msg.angular_velocity_covariance[3],
+                            imu_msg.angular_velocity_covariance[4],
+                            imu_msg.angular_velocity_covariance[5],
+                            imu_msg.angular_velocity_covariance[6],
+                            imu_msg.angular_velocity_covariance[7],
+                            imu_msg.angular_velocity_covariance[8],
+                        ],
+                        linear_acceleration: Vector3 {
+                            x: imu_msg.linear_acceleration.x,
+                            y: imu_msg.linear_acceleration.y,
+                            z: imu_msg.linear_acceleration.z,
+                        },
+                        linear_acceleration_covariance: [
+                            imu_msg.linear_acceleration_covariance[0],
+                            imu_msg.linear_acceleration_covariance[1],
+                            imu_msg.linear_acceleration_covariance[2],
+                            imu_msg.linear_acceleration_covariance[3],
+                            imu_msg.linear_acceleration_covariance[4],
+                            imu_msg.linear_acceleration_covariance[5],
+                            imu_msg.linear_acceleration_covariance[6],
+                            imu_msg.linear_acceleration_covariance[7],
+                            imu_msg.linear_acceleration_covariance[8],
+                        ],
+                    };
+                    imu_publisher.publish(msg)?;
+                    info!("published imu");
+                }
             }
         }
     }

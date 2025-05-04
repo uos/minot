@@ -1,6 +1,6 @@
 use core::panic;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     fmt::Display,
     i8, io,
     path::PathBuf,
@@ -20,7 +20,10 @@ use ratatui::{
 use rlc::{
     Evaluated, PlayKindUnited, PlayMode, PlayTrigger, Rhs, Rules, VariableHistory, WindFunction,
 };
-use sea::{WindData, net::PacketKind};
+use sea::{
+    WindData,
+    net::{PacketKind, WindAt},
+};
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn core::error::Error>>;
@@ -29,14 +32,29 @@ pub type AppResult<T> = std::result::Result<T, Box<dyn core::error::Error>>;
 pub enum Mode {
     Wind,
     #[default]
-    Visual,
+    Compare,
 }
 
 impl Display for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Mode::Wind => f.write_str("Wind"),
-            Mode::Visual => f.write_str("Visual"),
+            Mode::Compare => f.write_str("Compare"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum LockedState {
+    Locked,
+    Unlocked,
+}
+
+impl Display for LockedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            &LockedState::Locked => f.write_str("🔒"),
+            &LockedState::Unlocked => f.write_str("🔓"),
         }
     }
 }
@@ -689,14 +707,14 @@ pub enum WindMode {
 
 #[derive(Debug)]
 pub struct WindCursor {
-    line_start: u32,
-    line_end: u32,
+    line_start: Option<u32>,
+    line_end: Option<u32>,
     pub showing_popup: bool,
     mode: WindMode,
     pub popup_title: &'static str,
     pub popup_buffer: Vec<char>,
     wind_send_state: WindSendState,
-    wind_work_queue: VecDeque<Evaluated>,
+    wind_work_queue: usize,
     compile_state: WindCompile,
     wind_file_path: PathBuf,
     bagfile: Arc<RwLock<bagread::Bagfile>>,
@@ -707,8 +725,8 @@ pub struct WindCursor {
 impl Default for WindCursor {
     fn default() -> Self {
         Self {
-            line_start: 1,
-            line_end: 1,
+            line_start: None,
+            line_end: None,
             wind_send_state: WindSendState::default(),
             showing_popup: false,
             popup_buffer: Vec::new(),
@@ -717,7 +735,7 @@ impl Default for WindCursor {
             wind_file_path: PathBuf::from("./wind.rl"),
             bagfile: Arc::new(RwLock::new(bagread::Bagfile::default())),
             variable_cache: HashMap::new(),
-            wind_work_queue: VecDeque::new(),
+            wind_work_queue: 0,
             compile_state: WindCompile::default(),
             dynamic_vars: HashMap::new(),
         }
@@ -731,20 +749,27 @@ impl Display for WindCursor {
                 f.write_str("W")?;
             }
             WindMode::Active => {
-                f.write_str("|W")?;
+                f.write_str("W")?;
             }
             WindMode::ActiveSelect => {
                 f.write_str("[W]")?;
             }
         }
 
-        let lines = if self.line_start == self.line_end {
-            format!("{}", self.line_start)
-        } else {
-            format!("{}-{}", self.line_start, self.line_end)
+        let lines = match (self.line_start, self.line_end) {
+            (Some(line_start), Some(line_end)) => {
+                if line_start == line_end {
+                    format!("{}", line_start)
+                } else {
+                    format!("{}-{}", line_start, line_end)
+                }
+            }
+            _ => {
+                format!("*")
+            }
         };
 
-        let queue_len = self.wind_work_queue.len();
+        let queue_len = self.wind_work_queue;
         let queue_len_present = if queue_len == 0 {
             "".to_owned()
         } else {
@@ -771,7 +796,10 @@ impl Display for WindCursor {
 
 impl WindCursor {
     fn selected_lines(&self) -> Vec<u32> {
-        (self.line_start..self.line_end + 1).map(|i| i).collect()
+        match (self.line_start, self.line_end) {
+            (Some(line_start), Some(line_end)) => (line_start..line_end + 1).map(|i| i).collect(),
+            _ => vec![],
+        }
     }
 
     fn with_rats(mut self, wind_file_path: PathBuf) -> Self {
@@ -1539,7 +1567,6 @@ impl ClientCompare {
                     }
                     None => 1,
                 };
-                // self.right_state.select_column(Some(i));
                 self.left_state.select_column(Some(i));
                 self.horizontal_scroll_state = self
                     .horizontal_scroll_state
@@ -1616,8 +1643,10 @@ impl InfoView {
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
+    pub var_locked: Option<LockedState>,
     pub info_view: Arc<RwLock<InfoView>>,
     pub coordinator: Coordinator,
+    pub wind_worker_tx: tokio::sync::mpsc::UnboundedSender<Evaluated>,
     pub history: Arc<RwLock<History>>, // 0 var1; -1 var2 etc.
     pub wind_cursor: Arc<RwLock<WindCursor>>,
     pub mode: Mode,
@@ -1664,7 +1693,11 @@ impl App {
 
         let wind_update = Arc::clone(&wind_cursor);
         let wind_answer_sender = sender.clone();
+        let (wind_worker_tx, mut wind_worker_rx) =
+            tokio::sync::mpsc::unbounded_channel::<Evaluated>();
+        let wind_worker_dynvars = wind_worker_tx.clone();
         tokio::spawn(async move {
+            let wind_worker_sender = wind_worker_dynvars.clone();
             while let Some(var) = dyn_wind_receiver.recv().await {
                 let wd = {
                     let wc = wind_update.write().unwrap();
@@ -1684,9 +1717,438 @@ impl App {
                 App::wind_fire_at_current_cursor(
                     wind_answer_sender.clone(),
                     Arc::clone(&wind_update),
+                    wind_worker_sender.clone(),
                     Some(wd),
                 )
                 .await;
+            }
+        });
+
+        // let wind_cursor_states_worker = Arc::clone(&wind_cursor);
+        let wind_cursor_worker = Arc::clone(&wind_cursor);
+        let sender_worker = sender.clone();
+        tokio::spawn(async move {
+            let wind_cursor_outer = Arc::clone(&wind_cursor_worker);
+            let sender_worker_inner = sender_worker.clone();
+            while let Some(eval) = wind_worker_rx.recv().await {
+                let send_coordinator = sender_worker_inner.clone();
+                let wind_cursor_worker = Arc::clone(&wind_cursor_outer);
+                {
+                    // decrease the indicator counter in the TUI
+                    let mut wc = wind_cursor_worker.write().unwrap();
+                    wc.wind_work_queue = wc.wind_work_queue.saturating_sub(1);
+                };
+                let fun = async move {
+                    for windfn in eval.wind.iter() {
+                        match windfn {
+                            rlc::WindFunction::Reset(path) => {
+                                let bag_blocking = {
+                                    let wc = wind_cursor_worker.read().unwrap();
+                                    Arc::clone(&wc.bagfile)
+                                };
+
+                                match bag_blocking.write().unwrap().reset(Some(path)) {
+                                    Err(e) => {
+                                        error!("Could not reset bagfile path {path:?}: {e}");
+
+                                        return;
+                                    }
+                                    Ok(_) => {
+                                        info!("read bag {path}");
+                                    }
+                                }
+                            }
+                            rlc::WindFunction::SendFrames(kind) => {
+                                let (sending_lidar_topic_cache, sending_imu_topic_cache) = {
+                                    let wc = wind_cursor_worker.read().unwrap();
+                                    let lt = wc
+                                        .variable_cache
+                                        .get(&rlc::Var::User {
+                                            name: "topic".to_owned(),
+                                            namespace: vec!["_bag".to_owned(), "lidar".to_owned()],
+                                        })
+                                        .map(|rhs| match rhs {
+                                            Rhs::Path(v) => Ok(v.clone()),
+                                            Rhs::Val(rlc::Val::StringVal(v)) => Ok(v.clone()),
+                                            _ => Err(anyhow!("Variable has unexpected type.")),
+                                        });
+                                    let it = wc
+                                        .variable_cache
+                                        .get(&rlc::Var::User {
+                                            name: "topic".to_owned(),
+                                            namespace: vec!["_bag".to_owned(), "imu".to_owned()],
+                                        })
+                                        .map(|rhs| match rhs {
+                                            Rhs::Path(v) => Ok(v.clone()),
+                                            Rhs::Val(rlc::Val::StringVal(v)) => Ok(v.clone()),
+                                            _ => Err(anyhow!("Variable has unexpected type.")),
+                                        });
+                                    (lt, it)
+                                };
+
+                                let sending_lidar_topic =
+                                    if let Some(ltc) = sending_lidar_topic_cache {
+                                        match ltc {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                error!("{e}");
+                                                return;
+                                            }
+                                        }
+                                    } else {
+                                        match crate::coord::topic_from_eval_or_default(
+                                            &eval,
+                                            "_bag.lidar.topic",
+                                            "/cloud",
+                                        ) {
+                                            Ok(topic) => topic,
+                                            Err(e) => {
+                                                error!("{e}");
+                                                return;
+                                            }
+                                        }
+                                    };
+
+                                let sending_imu_topic = if let Some(ltc) = sending_imu_topic_cache {
+                                    match ltc {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            error!("{e}");
+                                            return;
+                                        }
+                                    }
+                                } else {
+                                    match crate::coord::topic_from_eval_or_default(
+                                        &eval,
+                                        "_bag.imu.topic",
+                                        "/imu",
+                                    ) {
+                                        Ok(topic) => topic,
+                                        Err(e) => {
+                                            error!("{e}");
+                                            return;
+                                        }
+                                    }
+                                };
+
+                                let proc_kind = PlayKindUnitedRich::with_topic(
+                                    kind.clone(),
+                                    &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
+                                );
+
+                                match kind {
+                                    PlayKindUnited::SensorCount {
+                                        sensor: _,
+                                        count: _,
+                                        trigger: Some(PlayTrigger::Variable(var)),
+                                        play_mode: PlayMode::Dynamic,
+                                    }
+                                    | PlayKindUnited::UntilSensorCount {
+                                        sending: _,
+                                        until_sensor: _,
+                                        until_count: _,
+                                        trigger: Some(PlayTrigger::Variable(var)),
+                                        play_mode: PlayMode::Dynamic,
+                                    } => {
+                                        {
+                                            let mut wc = wind_cursor_worker.write().unwrap();
+                                            let kind = match kind {
+                                                PlayKindUnited::SensorCount {
+                                                    sensor,
+                                                    count,
+                                                    trigger: _,
+                                                    play_mode: _,
+                                                } => PlayKindUnited::SensorCount {
+                                                    sensor: sensor.clone(),
+                                                    count: count.clone(),
+                                                    trigger: None,
+                                                    play_mode: PlayMode::Fix,
+                                                },
+                                                PlayKindUnited::UntilSensorCount {
+                                                    sending,
+                                                    until_sensor,
+                                                    until_count,
+                                                    trigger: _,
+                                                    play_mode: _,
+                                                } => PlayKindUnited::UntilSensorCount {
+                                                    sending: sending.clone(),
+                                                    until_sensor: until_sensor.clone(),
+                                                    until_count: until_count.clone(),
+                                                    trigger: None,
+                                                    play_mode: PlayMode::Fix,
+                                                },
+                                            };
+                                            if let Some(at_var) = wc.dynamic_vars.get_mut(var) {
+                                                at_var.push(kind);
+                                            } else {
+                                                wc.dynamic_vars.insert(var.clone(), vec![kind]);
+                                            }
+                                        }
+
+                                        let send = send_coordinator
+                                            .send(PacketKind::WindDynamic(var.clone()))
+                                            .await;
+                                        match send {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                error!("Could not send Wind to coordinator: {e}");
+                                                return;
+                                            }
+                                        }
+                                        continue; // early exit from fn so dynamic vars do not iterate in bagfile
+                                    }
+                                    _ => {}
+                                };
+
+                                let bag_blocking = {
+                                    let wc = wind_cursor_worker.read().unwrap();
+                                    Arc::clone(&wc.bagfile)
+                                };
+                                let start_bag_read = Instant::now();
+                                info!("iterating on bagfile...");
+                                let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+                                std::thread::spawn(move || {
+                                    let r = bag_blocking.write().unwrap().next(&proc_kind);
+                                    res_tx.send(r).unwrap();
+                                });
+
+                                let bagmsgs = match res_rx.await {
+                                    Ok(Ok(msgs)) => msgs,
+                                    Err(e) => {
+                                        error!("{e}");
+                                        return;
+                                    }
+                                    Ok(Err(e)) => {
+                                        error!("{e}");
+                                        return;
+                                    }
+                                };
+                                info!("iteration done in {:?}", start_bag_read.elapsed());
+
+                                let mut wind_data = Vec::with_capacity(bagmsgs.len());
+                                let mut start_time = None;
+                                let mut end_time = None;
+                                for msg in bagmsgs {
+                                    let wind = match msg {
+                                        bagread::BagMsg::Cloud(point_cloud2_msg) => {
+                                            let t = Self::timestamp_to_millis_rpcl2(
+                                                &point_cloud2_msg.header.stamp,
+                                            );
+                                            if start_time.is_none() {
+                                                start_time.replace(t);
+                                            }
+
+                                            end_time.replace(t);
+
+                                            (
+                                                end_time.unwrap() - start_time.unwrap(),
+                                                WindData::Pointcloud(point_cloud2_msg),
+                                            )
+                                        }
+                                        bagread::BagMsg::Imu(imu_msg) => {
+                                            let t =
+                                                Self::timestamp_to_millis(&imu_msg.header.stamp);
+                                            if start_time.is_none() {
+                                                start_time.replace(t);
+                                            }
+
+                                            end_time.replace(t);
+
+                                            (
+                                                end_time.unwrap() - start_time.unwrap(),
+                                                WindData::Imu(sea::ImuMsg {
+                                                    header: sea::Header {
+                                                        seq: imu_msg.header.seq,
+                                                        stamp: sea::TimeMsg {
+                                                            sec: imu_msg.header.stamp.sec,
+                                                            nanosec: imu_msg.header.stamp.nanosec,
+                                                        },
+                                                        frame_id: imu_msg.header.frame_id,
+                                                    },
+                                                    timestamp_sec: sea::TimeMsg {
+                                                        sec: imu_msg.timestamp_sec.sec,
+                                                        nanosec: imu_msg.timestamp_sec.nanosec,
+                                                    },
+                                                    orientation: imu_msg.orientation,
+                                                    orientation_covariance: imu_msg
+                                                        .orientation_covariance,
+                                                    angular_velocity: imu_msg.angular_velocity,
+                                                    angular_velocity_covariance: imu_msg
+                                                        .angular_velocity_covariance,
+                                                    linear_acceleration: imu_msg
+                                                        .linear_acceleration,
+                                                    linear_acceleration_covariance: imu_msg
+                                                        .linear_acceleration_covariance,
+                                                }),
+                                            )
+                                        }
+                                    };
+
+                                    wind_data.push(wind);
+                                }
+
+                                if wind_data.is_empty() {
+                                    warn!("query returned empty data");
+                                    return;
+                                }
+
+                                let trigger = match &kind {
+                                    rlc::PlayKindUnited::SensorCount {
+                                        sensor: _,
+                                        count: _,
+                                        trigger,
+                                        play_mode,
+                                    } => trigger.as_ref().map(|trigger| match trigger {
+                                        rlc::PlayTrigger::DurationRelFactor(factor) => {
+                                            let original_duration_ms =
+                                                end_time.unwrap() - start_time.unwrap();
+                                            let scaled_dur = original_duration_ms as f64 * factor;
+                                            (
+                                                rlc::PlayTrigger::DurationMs(
+                                                    scaled_dur.round() as u64
+                                                ),
+                                                play_mode,
+                                            )
+                                        }
+                                        _ => (trigger.clone(), play_mode),
+                                    }),
+                                    rlc::PlayKindUnited::UntilSensorCount {
+                                        sending: _,
+                                        until_sensor: _,
+                                        until_count: _,
+                                        trigger,
+                                        play_mode,
+                                    } => trigger.as_ref().map(|trigger| match trigger {
+                                        rlc::PlayTrigger::DurationRelFactor(factor) => {
+                                            let original_duration_ms =
+                                                end_time.unwrap() - start_time.unwrap();
+                                            let scaled_dur = original_duration_ms as f64 * factor;
+                                            (
+                                                rlc::PlayTrigger::DurationMs(
+                                                    scaled_dur.round() as u64
+                                                ),
+                                                play_mode,
+                                            )
+                                        }
+                                        _ => (trigger.clone(), play_mode),
+                                    }),
+                                };
+
+                                match &trigger {
+                                    Some((
+                                        rlc::PlayTrigger::DurationMs(target_duration_ms),
+                                        PlayMode::Fix,
+                                    )) => {
+                                        let original_duration_ms =
+                                            end_time.unwrap() - start_time.unwrap();
+                                        let scale = *target_duration_ms as f64
+                                            / original_duration_ms as f64;
+
+                                        let start_time = Instant::now();
+
+                                        for (original_ts, wind) in wind_data {
+                                            let scaled_ts = original_ts as f64 * scale;
+                                            let target_offset =
+                                                Duration::from_secs_f64(scaled_ts / 1000.0);
+                                            let target_wall_time = start_time + target_offset;
+                                            let sleep_duration = target_wall_time
+                                                .saturating_duration_since(Instant::now());
+                                            tokio::time::sleep(sleep_duration).await;
+
+                                            let send = send_coordinator
+                                                .send(PacketKind::Wind(vec![WindAt {
+                                                    data: wind,
+                                                    at_var: None,
+                                                }]))
+                                                .await;
+                                            match send {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    error!(
+                                                        "Could not send Wind to coordinator: {e}"
+                                                    );
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Some((rlc::PlayTrigger::Variable(var), PlayMode::Fix)) => {
+                                        let wd = wind_data
+                                            .into_iter()
+                                            .map(|(_, wind)| WindAt {
+                                                data: wind,
+                                                at_var: Some(var.clone()),
+                                            })
+                                            .collect::<Vec<_>>();
+
+                                        let send =
+                                            send_coordinator.send(PacketKind::Wind(wd)).await;
+                                        match send {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                error!("Could not send Wind to coordinator: {e}");
+                                                return;
+                                            }
+                                        }
+                                    }
+
+                                    Some((rlc::PlayTrigger::Variable(_), PlayMode::Dynamic)) => {
+                                        panic!("Dynamic variables should be resolved here");
+                                    }
+                                    Some((PlayTrigger::DurationRelFactor(_), _)) => {
+                                        panic!("Must be converted to relative time before");
+                                    }
+                                    Some((PlayTrigger::DurationMs(_), PlayMode::Dynamic)) => {
+                                        error!(
+                                            "Combinating a fixed millisecond span dynamically is not supported."
+                                        );
+                                    }
+                                    None => {
+                                        // publish immediately
+                                        let wd = wind_data
+                                            .into_iter()
+                                            .map(|(_, wind)| WindAt {
+                                                data: wind,
+                                                at_var: None,
+                                            })
+                                            .collect::<Vec<_>>();
+
+                                        let send =
+                                            send_coordinator.send(PacketKind::Wind(wd)).await;
+                                        match send {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                error!("Could not send Wind to coordinator: {e}");
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                // run function and always close by setting the acked state to wind
+                fun.await;
+                {
+                    let mut wind_cursor = wind_cursor_outer.write().unwrap();
+                    wind_cursor.wind_send_state = WindSendState::Acked;
+                }
+
+                let wind_cursor_state_reset = Arc::clone(&wind_cursor_outer);
+                tokio::spawn(async move {
+                    // reset state after
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let mut wind_cursor = wind_cursor_state_reset.write().unwrap();
+                    match wind_cursor.wind_send_state {
+                        WindSendState::Acked => {
+                            wind_cursor.wind_send_state = WindSendState::NotRun;
+                        }
+                        WindSendState::Sent => {}
+                        WindSendState::NotRun => {}
+                    };
+                });
             }
         });
 
@@ -1697,12 +2159,14 @@ impl App {
             coordinator: Coordinator::default(),
             history,
             wind_cursor,
+            wind_worker_tx,
             mode: Mode::default(),
             tolerance: Tolerance::default(),
             compare: ClientCompare::default(),
             send_coordinator: sender,
             rats_file: rats,
             info_view: Arc::new(RwLock::new(InfoView::default())),
+            var_locked: None,
         }
     }
 
@@ -1740,6 +2204,22 @@ impl App {
         self.info_view.write().unwrap().toggle();
     }
 
+    pub fn set_var_locked(&mut self) {
+        self.var_locked = Some(LockedState::Locked);
+    }
+
+    pub fn render_var_locked(&mut self) -> String {
+        if let Some(vl) = self.var_locked.as_ref() {
+            format!("{}", vl)
+        } else {
+            "".to_owned()
+        }
+    }
+
+    pub fn set_var_unlocked(&mut self) {
+        self.var_locked = Some(LockedState::Unlocked);
+    }
+
     pub fn focus_right_rat(&mut self) {
         self.history.write().unwrap().diff_to_ref()
     }
@@ -1748,11 +2228,12 @@ impl App {
         self.history.write().unwrap().diff_scroll(direction)
     }
 
-    pub async fn send_lock_next(&mut self) {
+    pub async fn send_lock_next(&mut self, unlock_first: bool) {
         self.send_coordinator
-            .send(PacketKind::LockNext)
+            .send(PacketKind::LockNext { unlock_first })
             .await
             .unwrap();
+        info!("sent lock next");
     }
 
     pub async fn send_unlock(&mut self) {
@@ -1760,6 +2241,7 @@ impl App {
             .send(PacketKind::Unlock)
             .await
             .unwrap();
+        info!("sent unlock");
     }
 
     pub fn change_tolerance_at_current_cursor(&mut self, direction: VerticalDirection) {
@@ -1835,73 +2317,76 @@ impl App {
         }
     }
 
-    pub fn wind_cursor(&mut self, direction: VerticalDirection) {
+    pub fn wind_cursor(&mut self, direction: Option<VerticalDirection>) {
         let mut wind_cursor = self.wind_cursor.write().unwrap();
         match wind_cursor.mode {
             WindMode::Active => match direction {
-                VerticalDirection::Up => {
-                    wind_cursor.line_start = wind_cursor.line_start.saturating_sub(1);
-                    if wind_cursor.line_start == 0 {
-                        wind_cursor.line_start = 1;
+                Some(VerticalDirection::Up) => {
+                    wind_cursor.line_start = Some(wind_cursor.line_start.unwrap_or(1));
+                    wind_cursor.line_start =
+                        Some(wind_cursor.line_start.unwrap().saturating_sub(1));
+                    if wind_cursor.line_start.unwrap() == 0 {
+                        wind_cursor.line_start.replace(1);
                     }
                     wind_cursor.line_end = wind_cursor.line_start;
                 }
-                VerticalDirection::Down => {
-                    wind_cursor.line_start = wind_cursor.line_start.saturating_add(1);
+                Some(VerticalDirection::Down) => {
+                    wind_cursor.line_start = Some(wind_cursor.line_start.unwrap_or(1));
+                    wind_cursor.line_start =
+                        Some(wind_cursor.line_start.unwrap().saturating_add(1));
                     wind_cursor.line_end = wind_cursor.line_start;
                 }
-                VerticalDirection::Row(line) => {
-                    wind_cursor.line_end = line
+                Some(VerticalDirection::Row(line)) => {
+                    let lineu32 = line
                         .clamp(0, u32::MAX as usize)
                         .try_into()
                         .expect("just clamped");
+                    wind_cursor.line_start = Some(lineu32);
                     wind_cursor.line_end = wind_cursor.line_start;
+                }
+                None => {
+                    wind_cursor.line_start = None;
+                    wind_cursor.line_end = None;
                 }
             },
             WindMode::ActiveSelect => match direction {
-                VerticalDirection::Up => {
+                Some(VerticalDirection::Up) => {
+                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(1));
                     if wind_cursor.line_end == wind_cursor.line_start {
-                        wind_cursor.line_start = wind_cursor.line_start.saturating_sub(1);
-                        if wind_cursor.line_start == 0 {
-                            wind_cursor.line_start = 1;
+                        wind_cursor.line_start =
+                            Some(wind_cursor.line_start.unwrap().saturating_sub(1));
+                        if wind_cursor.line_start.unwrap() == 0 {
+                            wind_cursor.line_start.replace(1);
                         }
                     } else {
-                        wind_cursor.line_end = wind_cursor.line_end.saturating_sub(1);
-                        if wind_cursor.line_end == 0 {
-                            wind_cursor.line_end = 1;
+                        wind_cursor.line_end =
+                            Some(wind_cursor.line_end.unwrap().saturating_sub(1));
+                        if wind_cursor.line_end.unwrap() == 0 {
+                            wind_cursor.line_end.replace(1);
                         }
                     }
                 }
-                VerticalDirection::Down => {
-                    wind_cursor.line_end = wind_cursor.line_end.saturating_add(1);
+                Some(VerticalDirection::Down) => {
+                    if wind_cursor.line_start.is_none() {
+                        wind_cursor.line_start = Some(1);
+                    }
+                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(1));
+                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap().saturating_add(1));
                 }
-                VerticalDirection::Row(line) => {
-                    wind_cursor.line_end = line
-                        .clamp(1, u32::MAX as usize)
+                Some(VerticalDirection::Row(line)) => {
+                    let lineu32 = line
+                        .clamp(0, u32::MAX as usize)
                         .try_into()
                         .expect("just clamped");
+                    wind_cursor.line_end = Some(lineu32);
+                }
+                None => {
+                    wind_cursor.line_start = None;
+                    wind_cursor.line_end = None;
                 }
             },
             _ => {}
         };
-    }
-
-    fn topic_from_eval_or_default(
-        eval: &rlc::Evaluated,
-        path: &str,
-        default: &str,
-    ) -> anyhow::Result<String> {
-        let topic = eval.vars.resolve(path)?;
-        if let Some(topic) = topic {
-            match topic {
-                Rhs::Path(topic) | Rhs::Val(rlc::Val::StringVal(topic)) => Ok(topic),
-                _ => {
-                    return Err(anyhow!("Expected String or Path for sending lidar topic"));
-                }
-            }
-        } else {
-            Ok(default.to_owned())
-        }
     }
 
     fn timestamp_to_millis(t: &bagread::TimeMsg) -> u64 {
@@ -1915,6 +2400,7 @@ impl App {
     pub async fn wind_fire_at_current_cursor(
         send_coordinator: tokio::sync::mpsc::Sender<PacketKind>,
         wind_cursor_states: Arc<RwLock<WindCursor>>,
+        wind_queue: tokio::sync::mpsc::UnboundedSender<Evaluated>,
         state: Option<Vec<PlayKindUnited>>,
     ) {
         let state = state.map(|pkus| {
@@ -1929,7 +2415,7 @@ impl App {
             }
         });
 
-        // task to not block the UI while compiling
+        // task to not block the runtime while compiling
         tokio::spawn(async move {
             let wind_cursor_outer = wind_cursor_states.clone();
 
@@ -1938,6 +2424,7 @@ impl App {
             } else {
                 let wind_cursor_in_blocking = Arc::clone(&wind_cursor_outer);
                 let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+                // thread to not block the UI
                 std::thread::spawn(move || {
                     let start_compile = Instant::now();
                     let var_state = {
@@ -1977,10 +2464,7 @@ impl App {
                         wc.variable_cache = eval.vars.var_cache.clone();
                         wc.compile_state = WindCompile::Done;
                     }
-                    info!(
-                        "compiled {start_line:?}-{end_line:?} in {:?}",
-                        start_compile.elapsed()
-                    );
+                    info!("compiled in {:?}", start_compile.elapsed());
                     res_tx.send(Ok(eval)).unwrap();
                 });
 
@@ -1997,509 +2481,37 @@ impl App {
                 }
             };
 
+            let mut vars = 0;
+            for (var, rules) in eval.rules.raw() {
+                vars += 1;
+                send_coordinator
+                    .send(PacketKind::RuleAppend {
+                        variable: var.clone(),
+                        commands: rules.clone(),
+                    })
+                    .await
+                    .unwrap();
+            }
+
+            if vars != 0 {
+                info!("sent {vars} new rules");
+            }
+
             {
                 let mut wind_cursor = wind_cursor_outer.write().unwrap();
                 match wind_cursor.wind_send_state {
                     WindSendState::Acked | WindSendState::Sent => {
-                        wind_cursor.wind_work_queue.push_back(eval);
+                        wind_queue.send(eval).unwrap();
+                        wind_cursor.wind_work_queue += 1;
                         return;
                     }
                     WindSendState::NotRun => {
-                        wind_cursor.wind_work_queue.push_back(eval);
+                        wind_queue.send(eval).unwrap();
+                        wind_cursor.wind_work_queue += 1;
                         wind_cursor.wind_send_state = WindSendState::Sent;
                     }
                 }
             }
-
-            // task for doing the task on the queue
-            tokio::spawn(async move {
-                let wind_cursor = wind_cursor_states.clone();
-                let fun = async move {
-                    loop {
-                        let eval = {
-                            let mut wc = wind_cursor.write().unwrap();
-                            wc.wind_work_queue.pop_front()
-                        };
-
-                        match eval {
-                            Some(eval) => {
-                                for windfn in eval.wind.iter() {
-                                    match windfn {
-                                        rlc::WindFunction::Reset(path) => {
-                                            let bag_blocking = {
-                                                let wc = wind_cursor.read().unwrap();
-                                                Arc::clone(&wc.bagfile)
-                                            };
-
-                                            match bag_blocking.write().unwrap().reset(Some(path)) {
-                                                Err(e) => {
-                                                    error!(
-                                                        "Could not reset bagfile path {path:?}: {e}"
-                                                    );
-
-                                                    return;
-                                                }
-                                                Ok(_) => {
-                                                    info!("read bag {path}");
-                                                }
-                                            }
-                                        }
-                                        rlc::WindFunction::SendFrames(kind) => {
-                                            let (
-                                                sending_lidar_topic_cache,
-                                                sending_imu_topic_cache,
-                                            ) = {
-                                                let wc = wind_cursor.read().unwrap();
-                                                let lt = wc
-                                                    .variable_cache
-                                                    .get(&rlc::Var::User {
-                                                        name: "topic".to_owned(),
-                                                        namespace: vec![
-                                                            "_bag".to_owned(),
-                                                            "lidar".to_owned(),
-                                                        ],
-                                                    })
-                                                    .map(|rhs| match rhs {
-                                                        Rhs::Path(v) => Ok(v.clone()),
-                                                        Rhs::Val(rlc::Val::StringVal(v)) => {
-                                                            Ok(v.clone())
-                                                        }
-                                                        _ => Err(anyhow!(
-                                                            "Variable has unexpected type."
-                                                        )),
-                                                    });
-                                                let it = wc
-                                                    .variable_cache
-                                                    .get(&rlc::Var::User {
-                                                        name: "topic".to_owned(),
-                                                        namespace: vec![
-                                                            "_bag".to_owned(),
-                                                            "imu".to_owned(),
-                                                        ],
-                                                    })
-                                                    .map(|rhs| match rhs {
-                                                        Rhs::Path(v) => Ok(v.clone()),
-                                                        Rhs::Val(rlc::Val::StringVal(v)) => {
-                                                            Ok(v.clone())
-                                                        }
-                                                        _ => Err(anyhow!(
-                                                            "Variable has unexpected type."
-                                                        )),
-                                                    });
-                                                (lt, it)
-                                            };
-
-                                            let sending_lidar_topic =
-                                                if let Some(ltc) = sending_lidar_topic_cache {
-                                                    match ltc {
-                                                        Ok(v) => v,
-                                                        Err(e) => {
-                                                            error!("{e}");
-                                                            return;
-                                                        }
-                                                    }
-                                                } else {
-                                                    match Self::topic_from_eval_or_default(
-                                                        &eval,
-                                                        "_bag.lidar.topic",
-                                                        "/cloud",
-                                                    ) {
-                                                        Ok(topic) => topic,
-                                                        Err(e) => {
-                                                            error!("{e}");
-                                                            return;
-                                                        }
-                                                    }
-                                                };
-
-                                            let sending_imu_topic =
-                                                if let Some(ltc) = sending_imu_topic_cache {
-                                                    match ltc {
-                                                        Ok(v) => v,
-                                                        Err(e) => {
-                                                            error!("{e}");
-                                                            return;
-                                                        }
-                                                    }
-                                                } else {
-                                                    match Self::topic_from_eval_or_default(
-                                                        &eval,
-                                                        "_bag.imu.topic",
-                                                        "/imu",
-                                                    ) {
-                                                        Ok(topic) => topic,
-                                                        Err(e) => {
-                                                            error!("{e}");
-                                                            return;
-                                                        }
-                                                    }
-                                                };
-
-                                            let proc_kind = PlayKindUnitedRich::with_topic(
-                                                kind.clone(),
-                                                &vec![
-                                                    sending_lidar_topic.as_str(),
-                                                    sending_imu_topic.as_str(),
-                                                ],
-                                            );
-
-                                            match kind {
-                                                PlayKindUnited::SensorCount {
-                                                    sensor: _,
-                                                    count: _,
-                                                    trigger: Some(PlayTrigger::Variable(var)),
-                                                    play_mode: PlayMode::Dynamic,
-                                                }
-                                                | PlayKindUnited::UntilSensorCount {
-                                                    sending: _,
-                                                    until_sensor: _,
-                                                    until_count: _,
-                                                    trigger: Some(PlayTrigger::Variable(var)),
-                                                    play_mode: PlayMode::Dynamic,
-                                                } => {
-                                                    {
-                                                        let mut wc = wind_cursor.write().unwrap();
-                                                        let kind = match kind {
-                                                            PlayKindUnited::SensorCount {
-                                                                sensor,
-                                                                count,
-                                                                trigger: _,
-                                                                play_mode: _,
-                                                            } => PlayKindUnited::SensorCount {
-                                                                sensor: sensor.clone(),
-                                                                count: count.clone(),
-                                                                trigger: None,
-                                                                play_mode: PlayMode::Fix,
-                                                            },
-                                                            PlayKindUnited::UntilSensorCount {
-                                                                sending,
-                                                                until_sensor,
-                                                                until_count,
-                                                                trigger: _,
-                                                                play_mode: _,
-                                                            } => PlayKindUnited::UntilSensorCount {
-                                                                sending: sending.clone(),
-                                                                until_sensor: until_sensor.clone(),
-                                                                until_count: until_count.clone(),
-                                                                trigger: None,
-                                                                play_mode: PlayMode::Fix,
-                                                            },
-                                                        };
-                                                        if let Some(at_var) =
-                                                            wc.dynamic_vars.get_mut(var)
-                                                        {
-                                                            at_var.push(kind);
-                                                        } else {
-                                                            wc.dynamic_vars
-                                                                .insert(var.clone(), vec![kind]);
-                                                        }
-                                                    }
-
-                                                    let send = send_coordinator
-                                                        .send(PacketKind::WindDynamic(var.clone()))
-                                                        .await;
-                                                    match send {
-                                                        Ok(_) => {}
-                                                        Err(e) => {
-                                                            error!(
-                                                                "Could not send Wind to coordinator: {e}"
-                                                            );
-                                                            return;
-                                                        }
-                                                    }
-                                                    return; // early exit from fn so dynamic vars do not iterate in bagfile
-                                                }
-                                                _ => {}
-                                            };
-
-                                            let bag_blocking = {
-                                                let wc = wind_cursor.read().unwrap();
-                                                Arc::clone(&wc.bagfile)
-                                            };
-                                            let start_bag_read = Instant::now();
-                                            info!("iterating on bagfile...");
-                                            let (res_tx, res_rx) = tokio::sync::oneshot::channel();
-                                            std::thread::spawn(move || {
-                                                let r =
-                                                    bag_blocking.write().unwrap().next(&proc_kind);
-                                                res_tx.send(r).unwrap();
-                                            });
-
-                                            let bagmsgs = match res_rx.await {
-                                                Ok(Ok(msgs)) => msgs,
-                                                Err(e) => {
-                                                    error!("{e}");
-                                                    return;
-                                                }
-                                                Ok(Err(e)) => {
-                                                    error!("{e}");
-                                                    return;
-                                                }
-                                            };
-                                            info!(
-                                                "iteration done in {:?}",
-                                                start_bag_read.elapsed()
-                                            );
-
-                                            let mut wind_data = Vec::with_capacity(bagmsgs.len());
-                                            let mut start_time = None;
-                                            let mut end_time = None;
-                                            for msg in bagmsgs {
-                                                let wind = match msg {
-                                                    bagread::BagMsg::Cloud(point_cloud2_msg) => {
-                                                        let t = Self::timestamp_to_millis_rpcl2(
-                                                            &point_cloud2_msg.header.stamp,
-                                                        );
-                                                        if start_time.is_none() {
-                                                            start_time.replace(t);
-                                                        }
-
-                                                        end_time.replace(t);
-
-                                                        (
-                                                            end_time.unwrap() - start_time.unwrap(),
-                                                            WindData::Pointcloud(point_cloud2_msg),
-                                                        )
-                                                    }
-                                                    bagread::BagMsg::Imu(imu_msg) => {
-                                                        let t = Self::timestamp_to_millis(
-                                                            &imu_msg.header.stamp,
-                                                        );
-                                                        if start_time.is_none() {
-                                                            start_time.replace(t);
-                                                        }
-
-                                                        end_time.replace(t);
-
-                                                        (
-                                            end_time.unwrap() - start_time.unwrap(),
-                                            WindData::Imu(sea::ImuMsg {
-                                                header: sea::Header {
-                                                    seq: imu_msg.header.seq,
-                                                    stamp: sea::TimeMsg {
-                                                        sec: imu_msg.header.stamp.sec,
-                                                        nanosec: imu_msg.header.stamp.nanosec,
-                                                    },
-                                                    frame_id: imu_msg.header.frame_id,
-                                                },
-                                                timestamp_sec: sea::TimeMsg {
-                                                    sec: imu_msg.timestamp_sec.sec,
-                                                    nanosec: imu_msg.timestamp_sec.nanosec,
-                                                },
-                                                orientation: imu_msg.orientation,
-                                                orientation_covariance: imu_msg
-                                                    .orientation_covariance,
-                                                angular_velocity: imu_msg.angular_velocity,
-                                                angular_velocity_covariance: imu_msg
-                                                    .angular_velocity_covariance,
-                                                linear_acceleration: imu_msg.linear_acceleration,
-                                                linear_acceleration_covariance: imu_msg
-                                                    .linear_acceleration_covariance,
-                                            }),
-                                        )
-                                                    }
-                                                };
-
-                                                wind_data.push(wind);
-                                            }
-
-                                            if wind_data.is_empty() {
-                                                warn!("query returned empty data");
-                                                return;
-                                            }
-
-                                            let trigger = match &kind {
-                                                rlc::PlayKindUnited::SensorCount {
-                                                    sensor: _,
-                                                    count: _,
-                                                    trigger,
-                                                    play_mode,
-                                                } => {
-                                                    trigger.as_ref().map(|trigger| match trigger {
-                                                        rlc::PlayTrigger::DurationRelFactor(
-                                                            factor,
-                                                        ) => {
-                                                            let original_duration_ms = end_time
-                                                                .unwrap()
-                                                                - start_time.unwrap();
-                                                            let scaled_dur = original_duration_ms
-                                                                as f64
-                                                                * factor;
-                                                            (
-                                                                rlc::PlayTrigger::DurationMs(
-                                                                    scaled_dur.round() as u64,
-                                                                ),
-                                                                play_mode,
-                                                            )
-                                                        }
-                                                        _ => (trigger.clone(), play_mode),
-                                                    })
-                                                }
-                                                rlc::PlayKindUnited::UntilSensorCount {
-                                                    sending: _,
-                                                    until_sensor: _,
-                                                    until_count: _,
-                                                    trigger,
-                                                    play_mode,
-                                                } => {
-                                                    trigger.as_ref().map(|trigger| match trigger {
-                                                        rlc::PlayTrigger::DurationRelFactor(
-                                                            factor,
-                                                        ) => {
-                                                            let original_duration_ms = end_time
-                                                                .unwrap()
-                                                                - start_time.unwrap();
-                                                            let scaled_dur = original_duration_ms
-                                                                as f64
-                                                                * factor;
-                                                            (
-                                                                rlc::PlayTrigger::DurationMs(
-                                                                    scaled_dur.round() as u64,
-                                                                ),
-                                                                play_mode,
-                                                            )
-                                                        }
-                                                        _ => (trigger.clone(), play_mode),
-                                                    })
-                                                }
-                                            };
-
-                                            match &trigger {
-                                                Some((
-                                                    rlc::PlayTrigger::DurationMs(
-                                                        target_duration_ms,
-                                                    ),
-                                                    PlayMode::Fix,
-                                                )) => {
-                                                    let original_duration_ms =
-                                                        end_time.unwrap() - start_time.unwrap();
-                                                    let scale = *target_duration_ms as f64
-                                                        / original_duration_ms as f64;
-
-                                                    let start_time = Instant::now();
-
-                                                    for (original_ts, wind) in wind_data {
-                                                        let scaled_ts = original_ts as f64 * scale;
-                                                        let target_offset = Duration::from_secs_f64(
-                                                            scaled_ts / 1000.0,
-                                                        );
-                                                        let target_wall_time =
-                                                            start_time + target_offset;
-                                                        let sleep_duration = target_wall_time
-                                                            .saturating_duration_since(
-                                                                Instant::now(),
-                                                            );
-                                                        tokio::time::sleep(sleep_duration).await;
-
-                                                        let send = send_coordinator
-                                                            .send(PacketKind::Wind {
-                                                                data: wind,
-                                                                at_var: None,
-                                                            })
-                                                            .await;
-                                                        match send {
-                                                            Ok(_) => {}
-                                                            Err(e) => {
-                                                                error!(
-                                                                    "Could not send Wind to coordinator: {e}"
-                                                                );
-                                                                return;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                Some((
-                                                    rlc::PlayTrigger::Variable(var),
-                                                    PlayMode::Fix,
-                                                )) => {
-                                                    for (_, wind) in wind_data {
-                                                        let send = send_coordinator
-                                                            .send(PacketKind::Wind {
-                                                                data: wind,
-                                                                at_var: Some(var.clone()),
-                                                            })
-                                                            .await;
-                                                        match send {
-                                                            Ok(_) => {}
-                                                            Err(e) => {
-                                                                error!(
-                                                                    "Could not send Wind to coordinator: {e}"
-                                                                );
-                                                                return;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                Some((
-                                                    rlc::PlayTrigger::Variable(_),
-                                                    PlayMode::Dynamic,
-                                                )) => {
-                                                    panic!(
-                                                        "Dynamic variables should be resolved here"
-                                                    );
-                                                }
-                                                Some((PlayTrigger::DurationRelFactor(_), _)) => {
-                                                    panic!(
-                                                        "Must be converted to relative time before"
-                                                    );
-                                                }
-                                                Some((
-                                                    PlayTrigger::DurationMs(_),
-                                                    PlayMode::Dynamic,
-                                                )) => {
-                                                    error!(
-                                                        "Combinating a fixed millisecond span dynamically is not supported."
-                                                    );
-                                                }
-                                                None => {
-                                                    // publish immediately
-                                                    for (_, wind) in wind_data {
-                                                        let send = send_coordinator
-                                                            .send(PacketKind::Wind {
-                                                                data: wind,
-                                                                at_var: None,
-                                                            })
-                                                            .await;
-                                                        match send {
-                                                            Ok(_) => {}
-                                                            Err(e) => {
-                                                                error!(
-                                                                    "Could not send Wind to coordinator: {e}"
-                                                                );
-                                                                return;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            None => break,
-                        }
-                        tokio::task::yield_now().await;
-                    }
-                };
-
-                // run function and always close by setting the acked state to wind
-                fun.await;
-                {
-                    let mut wind_cursor = wind_cursor_states.write().unwrap();
-                    wind_cursor.wind_send_state = WindSendState::Acked;
-                }
-
-                // reset state after
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                let mut wind_cursor = wind_cursor_states.write().unwrap();
-                match wind_cursor.wind_send_state {
-                    WindSendState::Acked => {
-                        wind_cursor.wind_send_state = WindSendState::NotRun;
-                    }
-                    WindSendState::Sent => {}
-                    WindSendState::NotRun => {}
-                };
-            });
         });
 
         tokio::task::yield_now().await; // needs to spawn the task
@@ -2518,18 +2530,34 @@ impl App {
         self.compare.show_line_input_popup = !self.compare.show_line_input_popup;
     }
 
+    pub async fn clear_rules(&mut self) {
+        self.send_coordinator
+            .send(PacketKind::RulesClear)
+            .await
+            .unwrap();
+        info!("sent clear rules");
+    }
+
     pub fn wind_toggle_mode(&mut self) {
-        let mut wind_cursor = self.wind_cursor.write().unwrap();
-        wind_cursor.mode = match wind_cursor.mode {
-            WindMode::Inactive => WindMode::Active,
-            WindMode::Active => WindMode::Inactive,
-            WindMode::ActiveSelect => {
-                wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
-                wind_cursor.popup_buffer.clear();
-                wind_cursor.showing_popup = false;
-                WindMode::Inactive
-            }
-        };
+        {
+            let mut wind_cursor = self.wind_cursor.write().unwrap();
+            wind_cursor.mode = match wind_cursor.mode {
+                WindMode::Inactive => WindMode::Active,
+                WindMode::Active => WindMode::Inactive,
+                WindMode::ActiveSelect => {
+                    wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
+                    wind_cursor.popup_buffer.clear();
+                    wind_cursor.showing_popup = false;
+                    WindMode::Inactive
+                }
+            };
+        }
+
+        if self.wind_mode() {
+            self.mode = Mode::Wind;
+        } else {
+            self.mode = Mode::Compare;
+        }
     }
 
     pub fn wind_mode(&mut self) -> bool {

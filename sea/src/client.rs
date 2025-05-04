@@ -3,7 +3,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use pnet::datalink::{self, NetworkInterface};
-use serde::Serialize;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -20,6 +19,7 @@ use crate::{
         Header, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
     },
 };
+const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
 
 #[derive(Debug)]
 pub struct Client {
@@ -238,23 +238,48 @@ impl Client {
         mut wh: OwnedWriteHalf,
     ) {
         while let Some(packet) = channel.recv().await {
-            let packet = bincode::serialize(&packet).expect("could not serialize packet");
-            let packet_size = packet.len() as u32;
-            let packet_size_buffer = packet_size.to_be_bytes();
-            let mut buffer = vec![
-                PROTO_IDENTIFIER,
-                packet_size_buffer[0],
-                packet_size_buffer[1],
-                packet_size_buffer[2],
-                packet_size_buffer[3],
-            ];
-            buffer.extend_from_slice(&packet);
+            let packet_bytes = match bincode::serialize(&packet) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    error!("Failed to serialize packet: {e}");
+                    // Log the error and skip sending this specific packet.
+                    // A serialization error doesn't necessarily mean the connection is broken.
+                    continue;
+                }
+            };
+
+            let packet_size = packet_bytes.len();
+
+            // Check if the packet size fits into a u32
+            if packet_size > u32::MAX as usize {
+                error!(
+                    "Packet size ({}) exceeds maximum allowed {} bytes for size header. Dropping packet.",
+                    packet_size,
+                    u32::MAX
+                );
+                continue; // Cannot send packets this large with this protocol
+            }
+
+            let packet_size_u32 = packet_size as u32;
+            let packet_size_buffer = packet_size_u32.to_be_bytes();
+            let mut buffer = Vec::with_capacity(COMM_HEADER_BYTES_N + packet_size);
+            buffer.push(PROTO_IDENTIFIER);
+            buffer.extend_from_slice(&packet_size_buffer);
+            buffer.extend_from_slice(&packet_bytes);
+
+            debug!(
+                "Attempting to send {} bytes (Packet size: {}).",
+                buffer.len(),
+                packet_size
+            );
+
             if let Err(e) = wh.write_all(&buffer).await {
-                error!("could not send to tcp socket: {e}");
+                error!("Failed to send data to TCP socket: {e}");
                 channel.close();
                 return;
             }
         }
+        info!("Send channel closed, send_to_socket task exiting.");
     }
 
     pub async fn receive_from_socket(
@@ -262,93 +287,127 @@ impl Client {
         channel: tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>,
         partner: Option<SocketAddr>,
     ) {
-        const COMM_HEADER_BYTES_N: usize = 5;
+        let mut received_data: Vec<u8> = Vec::new();
+        let mut temp_buffer = [0; 4096];
+
         loop {
-            tokio::task::yield_now().await;
-            let mut buffer = Vec::with_capacity(1024);
-            let mut first = true;
-            let mut msg_size = 0;
+            let n = match rh.read(&mut temp_buffer).await {
+                Ok(0) => {
+                    // Connection closed by peer
+                    info!("TCP connection closed by peer.");
+                    return;
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    error!("Failed to read from TCP stream: {}", e);
+                    return;
+                }
+            };
 
-            // collect parts to complete a single packet
-            let mut is_for_us = true;
-            loop {
-                debug!("reading");
-                let mut buf = [0; 1024];
-                let n = match rh.read(&mut buf).await {
-                    Err(e) => {
-                        error!(
-                            "Could not read from TCP stream in client connection to coordinator: {e}"
-                        );
-                        return;
-                    }
-                    Ok(n) => n,
-                };
+            debug!("Read {} bytes from socket for partner {:?}.", n, partner);
 
-                if n == 0 {
+            received_data.extend_from_slice(&temp_buffer[..n]);
+
+            // --- Packet Framing and Processing ---
+            // Process the accumulated data buffer. We loop because a single read() might
+            // contain multiple complete packets or the end of one packet and the start of another.
+            while received_data.len() >= COMM_HEADER_BYTES_N {
+                let identifier = received_data[0];
+                if identifier != PROTO_IDENTIFIER {
+                    error!(
+                        "Protocol identifier mismatch. Expected {}, got {}. Disconnecting.",
+                        PROTO_IDENTIFIER, identifier
+                    );
+                    // TODO maybe just drop the packet
                     return;
                 }
 
-                debug!("reading from buffer {n}");
-                // TODO test very large packets that do not fit into the 1024 buffer
-
-                // handles multiple packets in single buffer
-                let mut cursor = 0;
-                loop {
-                    if cursor >= buf.len() || cursor >= n {
-                        break;
+                let size_bytes: [u8; 4] = match received_data[1..COMM_HEADER_BYTES_N].try_into() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        error!(
+                            "Buffer too short to extract size bytes. Length: {}. Expected at least {}. Disconnecting.",
+                            received_data.len(),
+                            COMM_HEADER_BYTES_N
+                        );
+                        return;
                     }
-                    let max_buf;
-                    if first {
-                        if buf[cursor] != PROTO_IDENTIFIER {
-                            debug!("detected not for us at cursor {}", cursor);
-                            is_for_us = false;
-                            break;
-                        } else {
-                            is_for_us = true;
-                            cursor += COMM_HEADER_BYTES_N;
-                            let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                            // TODO usize vs u32 sizes?
-                            msg_size = u32::from_be_bytes(msg_size_buf) as usize;
-                            max_buf = std::cmp::min(msg_size + cursor, n);
-                            first = false;
-                            buffer.extend_from_slice(&buf[cursor..max_buf]);
+                };
+                let msg_size = u32::from_be_bytes(size_bytes) as usize;
+
+                debug!(
+                    "Found header for packet of size {} for partner {:?}. Total needed: {}.",
+                    msg_size,
+                    partner,
+                    COMM_HEADER_BYTES_N + msg_size
+                );
+
+                // Check if the accumulation buffer contains the complete packet (header + data)
+                let total_packet_size = COMM_HEADER_BYTES_N + msg_size;
+                if received_data.len() >= total_packet_size {
+                    // We have enough data for a complete packet!
+
+                    // Extract the packet data (excluding the header)
+                    let packet_bytes =
+                        received_data[COMM_HEADER_BYTES_N..total_packet_size].to_vec();
+                    debug!(
+                        "Extracted packet bytes ({} bytes) for partner {:?}.",
+                        packet_bytes.len(),
+                        partner
+                    );
+
+                    let packet: Packet = match bincode::deserialize(&packet_bytes) {
+                        Ok(packet) => packet,
+                        Err(e) => {
+                            error!(
+                                "Failed to deserialize packet for partner {:?}: {}. Discarding this packet.",
+                                partner, e
+                            );
+                            // Discard the bytes for the corrupted packet from the buffer
+                            received_data.drain(..total_packet_size);
+                            // Continue processing the *rest* of the buffer
+                            continue;
                         }
-                    } else {
-                        max_buf = std::cmp::min(msg_size + cursor, n);
-                        buffer.extend_from_slice(&buf[cursor..max_buf]);
-                    }
-                    cursor = max_buf;
-                    if msg_size == buffer.len() {
-                        debug!("got one msg in buffer, cntd");
-                        let packet: Packet = match bincode::deserialize(&buffer) {
-                            Err(e) => {
-                                error!("Received package is broken: {e}");
-                                continue;
-                            }
-                            Ok(packet) => packet,
-                        };
+                    };
 
-                        match channel.send((packet, partner.clone())) {
-                            Err(e) => {
-                                error!("TCP Listener could not send to internal channel: {e}");
-                            }
-                            _ => {}
-                        };
-                        buffer.clear();
-                        is_for_us = false;
-                        first = true;
-                        msg_size = 0;
-                    }
-                }
+                    debug!("Packet details: {:?}", packet);
 
-                // the entire buf was read into correctly sized chunks for packets
-                if !is_for_us || buffer.is_empty() {
-                    debug!("not for us or buffer empty");
+                    if let Err(e) = channel.send((packet, partner.clone())) {
+                        error!(
+                            "Could not send packet to internal broadcast channel for partner {:?}: {}",
+                            partner, e
+                        );
+                        // The channel is likely closed or has no active receivers.
+                        return;
+                    }
+                    debug!(
+                        "Sent packet to broadcast channel for partner {:?}.",
+                        partner
+                    );
+
+                    // Remove the processed packet (header + data) from the beginning of the buffer.
+                    received_data.drain(..total_packet_size);
+                    debug!(
+                        "Drained {} bytes from buffer. Remaining buffer size: {}.",
+                        total_packet_size,
+                        received_data.len(),
+                    );
+
+                    // Loop back to check if the next bytes in the buffer form another complete packet
+                } else {
+                    debug!(
+                        "Buffer incomplete for next packet. Needed: {}, Available: {}. Waiting for more data.",
+                        total_packet_size,
+                        received_data.len()
+                    );
                     break;
                 }
-
-                // last packet was not read completely into the buf size so rerun the read command
             }
+
+            // If the inner loop finished, we either processed all available complete packets
+            // or the remaining data in the buffer is less than the size of a header, or
+            // less than the size of the *next* expected packet.
+            // The outer loop continues to wait for more data from the socket.
         }
     }
 
@@ -465,7 +524,6 @@ impl Client {
                 }
                 Ok(Err(e)) => match e.kind() {
                     std::io::ErrorKind::ConnectionRefused => {
-                        // debug!("connection not yet ready, wait a bit");
                         tokio::task::yield_now().await;
                         continue;
                     }

@@ -126,7 +126,7 @@ pub trait Ship: Send + Sync + 'static {
 
     // async fn wait_for_action(&self) -> anyhow::Result<crate::Action>;
 
-    async fn wait_for_wind(&self) -> anyhow::Result<WindData>;
+    async fn wait_for_wind(&self) -> anyhow::Result<Vec<WindData>>;
 
     fn get_cannon(&self) -> &impl Cannon;
 }
@@ -227,7 +227,7 @@ pub trait Coordinator: Send + Sync + 'static {
         ship: String,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>>;
 
-    async fn blow_wind(&self, ship: String, data: WindData) -> anyhow::Result<()>;
+    async fn blow_wind(&self, ship: String, data: Vec<WindData>) -> anyhow::Result<()>;
 
     async fn rat_action_send(
         &self,

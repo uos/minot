@@ -39,15 +39,19 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('F') => {
             app.focus_right_rat();
         }
+        KeyCode::Char('.') => {
+            app.send_unlock().await;
+            app.set_var_unlocked();
+        }
+        KeyCode::Char('-') => {
+            app.send_lock_next(false).await;
+            app.set_var_locked();
+        }
         KeyCode::Char('l') => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.send_lock_next().await;
+            if app.wind_mode() {
+                app.wind_toggle_popup();
             } else {
-                if app.wind_mode() {
-                    app.wind_toggle_popup();
-                } else {
-                    app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
-                }
+                app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
             }
         }
         KeyCode::Right => {
@@ -60,18 +64,11 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
         }
         KeyCode::Char('L') => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.send_unlock().await;
-            } else {
-                app.compare_toggle_popup();
-            }
+            app.compare_toggle_popup();
         }
-        // unlock_until_next
-        KeyCode::Char('n') => {
-            if key_event.modifiers == KeyModifiers::CONTROL {
-                app.send_unlock().await;
-                app.send_lock_next().await;
-            }
+        KeyCode::Char(',') => {
+            app.send_lock_next(true).await;
+            app.set_var_locked();
         }
         KeyCode::Char('w') => {
             if key_event.modifiers == KeyModifiers::CONTROL {
@@ -107,7 +104,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('k') => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
             true => {
-                app.wind_cursor(crate::app::VerticalDirection::Up);
+                app.wind_cursor(Some(crate::app::VerticalDirection::Up));
             }
         },
         KeyCode::Tab => {
@@ -119,19 +116,19 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('j') => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
             true => {
-                app.wind_cursor(crate::app::VerticalDirection::Down);
+                app.wind_cursor(Some(crate::app::VerticalDirection::Down));
             }
         },
         KeyCode::Down => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Down)),
             true => {
-                app.wind_cursor(crate::app::VerticalDirection::Down);
+                app.wind_cursor(Some(crate::app::VerticalDirection::Down));
             }
         },
         KeyCode::Up => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
             true => {
-                app.wind_cursor(crate::app::VerticalDirection::Up);
+                app.wind_cursor(Some(crate::app::VerticalDirection::Up));
             }
         },
         KeyCode::Char('v') => {
@@ -139,13 +136,23 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
                 app.wind_toggle_select();
             }
         }
+        KeyCode::Char('*') => {
+            if app.wind_mode() {
+                app.wind_cursor(None);
+            }
+        }
         KeyCode::Char(' ') => {
-            App::wind_fire_at_current_cursor(
-                app.send_coordinator.clone(),
-                std::sync::Arc::clone(&app.wind_cursor),
-                None,
-            )
-            .await;
+            if app.wind_mode() {
+                App::wind_fire_at_current_cursor(
+                    app.send_coordinator.clone(),
+                    std::sync::Arc::clone(&app.wind_cursor),
+                    app.wind_worker_tx.clone(),
+                    None,
+                )
+                .await;
+            } else {
+                app.clear_rules().await;
+            }
         }
         KeyCode::PageUp => {
             app.change_diff_rat(crate::app::VerticalDirection::Up);
@@ -165,7 +172,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
 
                 match parsed {
                     Ok(p) => {
-                        app.wind_cursor(crate::app::VerticalDirection::Row(p));
+                        app.wind_cursor(Some(crate::app::VerticalDirection::Row(p)));
                         let mut wind_cursor = app.wind_cursor.write().unwrap();
                         wind_cursor.popup_title = WIND_POPUP_TITLE_NOERR;
                         wind_cursor.showing_popup = false;

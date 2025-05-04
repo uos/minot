@@ -42,75 +42,77 @@ async fn main() -> anyhow::Result<()> {
 
     let mut wind_receiver = wind(&wind_name).await?;
 
-    while let Some(data) = wind_receiver.recv().await {
-        match data {
-            wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
-                let msg: sensor_msgs::PointCloud2 = point_cloud2_msg.into();
-                cloud_publisher.publish(&msg).await?;
-            }
-            wind::sea::WindData::Imu(imu_msg) => {
-                let msg = sensor_msgs::Imu {
-                    header: std_msgs::Header {
-                        seq: imu_msg.header.seq,
-                        stamp: Time {
-                            secs: imu_msg.header.stamp.sec,
-                            nsecs: i32::try_from(imu_msg.header.stamp.nanosec)?,
+    while let Some(wind_data) = wind_receiver.recv().await {
+        for data in wind_data {
+            match data {
+                wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
+                    let msg: sensor_msgs::PointCloud2 = point_cloud2_msg.into();
+                    cloud_publisher.publish(&msg).await?;
+                }
+                wind::sea::WindData::Imu(imu_msg) => {
+                    let msg = sensor_msgs::Imu {
+                        header: std_msgs::Header {
+                            seq: imu_msg.header.seq,
+                            stamp: Time {
+                                secs: imu_msg.header.stamp.sec,
+                                nsecs: i32::try_from(imu_msg.header.stamp.nanosec)?,
+                            },
+                            frame_id: imu_msg.header.frame_id,
                         },
-                        frame_id: imu_msg.header.frame_id,
-                    },
-                    orientation: {
-                        geometry_msgs::Quaternion {
-                            x: imu_msg.orientation.i,
-                            y: imu_msg.orientation.j,
-                            z: imu_msg.orientation.k,
-                            w: imu_msg.orientation.w,
-                        }
-                    },
-                    orientation_covariance: [
-                        imu_msg.orientation_covariance[0],
-                        imu_msg.orientation_covariance[1],
-                        imu_msg.orientation_covariance[2],
-                        imu_msg.orientation_covariance[3],
-                        imu_msg.orientation_covariance[4],
-                        imu_msg.orientation_covariance[5],
-                        imu_msg.orientation_covariance[6],
-                        imu_msg.orientation_covariance[7],
-                        imu_msg.orientation_covariance[8],
-                    ],
-                    angular_velocity: geometry_msgs::Vector3 {
-                        x: imu_msg.angular_velocity.x,
-                        y: imu_msg.angular_velocity.y,
-                        z: imu_msg.angular_velocity.z,
-                    },
-                    angular_velocity_covariance: [
-                        imu_msg.angular_velocity[0],
-                        imu_msg.angular_velocity[1],
-                        imu_msg.angular_velocity[2],
-                        imu_msg.angular_velocity[3],
-                        imu_msg.angular_velocity[4],
-                        imu_msg.angular_velocity[5],
-                        imu_msg.angular_velocity[6],
-                        imu_msg.angular_velocity[7],
-                        imu_msg.angular_velocity[8],
-                    ],
-                    linear_acceleration: geometry_msgs::Vector3 {
-                        x: imu_msg.linear_acceleration.x,
-                        y: imu_msg.linear_acceleration.y,
-                        z: imu_msg.linear_acceleration.z,
-                    },
-                    linear_acceleration_covariance: [
-                        imu_msg.linear_acceleration_covariance[0],
-                        imu_msg.linear_acceleration_covariance[1],
-                        imu_msg.linear_acceleration_covariance[2],
-                        imu_msg.linear_acceleration_covariance[3],
-                        imu_msg.linear_acceleration_covariance[4],
-                        imu_msg.linear_acceleration_covariance[5],
-                        imu_msg.linear_acceleration_covariance[6],
-                        imu_msg.linear_acceleration_covariance[7],
-                        imu_msg.linear_acceleration_covariance[8],
-                    ],
-                };
-                imu_publisher.publish(&msg).await?;
+                        orientation: {
+                            geometry_msgs::Quaternion {
+                                x: imu_msg.orientation.i,
+                                y: imu_msg.orientation.j,
+                                z: imu_msg.orientation.k,
+                                w: imu_msg.orientation.w,
+                            }
+                        },
+                        orientation_covariance: [
+                            imu_msg.orientation_covariance[0],
+                            imu_msg.orientation_covariance[1],
+                            imu_msg.orientation_covariance[2],
+                            imu_msg.orientation_covariance[3],
+                            imu_msg.orientation_covariance[4],
+                            imu_msg.orientation_covariance[5],
+                            imu_msg.orientation_covariance[6],
+                            imu_msg.orientation_covariance[7],
+                            imu_msg.orientation_covariance[8],
+                        ],
+                        angular_velocity: geometry_msgs::Vector3 {
+                            x: imu_msg.angular_velocity.x,
+                            y: imu_msg.angular_velocity.y,
+                            z: imu_msg.angular_velocity.z,
+                        },
+                        angular_velocity_covariance: [
+                            imu_msg.angular_velocity[0],
+                            imu_msg.angular_velocity[1],
+                            imu_msg.angular_velocity[2],
+                            imu_msg.angular_velocity[3],
+                            imu_msg.angular_velocity[4],
+                            imu_msg.angular_velocity[5],
+                            imu_msg.angular_velocity[6],
+                            imu_msg.angular_velocity[7],
+                            imu_msg.angular_velocity[8],
+                        ],
+                        linear_acceleration: geometry_msgs::Vector3 {
+                            x: imu_msg.linear_acceleration.x,
+                            y: imu_msg.linear_acceleration.y,
+                            z: imu_msg.linear_acceleration.z,
+                        },
+                        linear_acceleration_covariance: [
+                            imu_msg.linear_acceleration_covariance[0],
+                            imu_msg.linear_acceleration_covariance[1],
+                            imu_msg.linear_acceleration_covariance[2],
+                            imu_msg.linear_acceleration_covariance[3],
+                            imu_msg.linear_acceleration_covariance[4],
+                            imu_msg.linear_acceleration_covariance[5],
+                            imu_msg.linear_acceleration_covariance[6],
+                            imu_msg.linear_acceleration_covariance[7],
+                            imu_msg.linear_acceleration_covariance[8],
+                        ],
+                    };
+                    imu_publisher.publish(&msg).await?;
+                }
             }
         }
     }

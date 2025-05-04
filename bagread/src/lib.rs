@@ -168,7 +168,7 @@ pub struct File {
     pub path: String,
     pub starting_time: NanosecondsSinceEpoch,
     pub duration: Nanoseconds,
-    pub message_count: i64, // Changed to i64
+    pub message_count: i64,
 }
 
 /// Custom deserializer for the `offered_qos_profiles` field.
@@ -186,16 +186,13 @@ where
             formatter.write_str("a string containing YAML data for QoS profiles")
         }
 
-        // Process the string value obtained from the YAML field
         fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
         where
             E: de::Error,
         {
-            // Use serde_yaml to parse the *content* of the string
             serde_yml::from_str(value).map_err(de::Error::custom)
         }
 
-        // Handle cases where the YAML might surprisingly contain a sequence directly
         fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
         where
             A: de::SeqAccess<'de>,
@@ -502,7 +499,6 @@ fn collect_until(
 }
 
 impl Bagfile {
-    // TODO handle trigger and play_mode outside
     pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<BagMsg>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
@@ -577,81 +573,8 @@ impl Bagfile {
 
         self.cursor = 0;
         Ok(())
-
-        // let bag_duration = std::time::Duration::from_nanos(
-        //     bag_info.rosbag2_bagfile_information.duration.nanoseconds,
-        // );
-
-        // let bag_start_time_since_epoch_duration = Duration::from_nanos(
-        //     bag_info
-        //         .rosbag2_bagfile_information
-        //         .starting_time
-        //         .nanoseconds_since_epoch,
-        // );
-        // let bag_start_time = std::time::UNIX_EPOCH
-        //     .checked_add(bag_start_time_since_epoch_duration)
-        //     .ok_or_else(|| anyhow!("nanoseconds_since_epoch unreasonable large."))?;
-
-        // let mapped_b = borrow_with_lifetime(&mapped);
-        // let stream = mcap::MessageStream::new(&mapped)?;
-
-        // for message in mcap::MessageStream::new(&mapped)? {
-        //     let msg = message?;
-
-        //     dbg!(msg.channel, msg.sequence, msg.publish_time);
-        //     // match msg.channel {}
-        //     // Or whatever else you'd like to do...
-        // }
     }
 }
-
-// fn read(path: impl AsRef<Path>) -> anyhow::Result<Bagfile> {
-//     let path = path.as_ref().to_path_buf();
-//     let metapath = path.join("metadata.yaml");
-
-//     let metadata_contents = fs::read_to_string(metapath).unwrap();
-//     let bag_info: Metadata = serde_yml::from_str(&metadata_contents)?;
-//     validate_support(&bag_info)?;
-
-//     let bag_duration =
-//         std::time::Duration::from_nanos(bag_info.rosbag2_bagfile_information.duration.nanoseconds);
-
-//     let bag_start_time_since_epoch_duration = Duration::from_nanos(
-//         bag_info
-//             .rosbag2_bagfile_information
-//             .starting_time
-//             .nanoseconds_since_epoch,
-//     );
-//     let bag_start_time = std::time::UNIX_EPOCH
-//         .checked_add(bag_start_time_since_epoch_duration)
-//         .ok_or_else(|| anyhow!("nanoseconds_since_epoch unreasonable large."))?;
-
-//     let mcap_file = bag_info
-//         .rosbag2_bagfile_information
-//         .files
-//         .first()
-//         .expect("Validated after deserialisation.");
-
-//     let mcap_path = path.join(&mcap_file.path);
-//     let fd = fs::File::open(mcap_path).context("Couldn't open MCAP file")?;
-//     let mapped = unsafe { Mmap::map(&fd) }.context("Couldn't map MCAP file")?;
-
-//     let stream = mcap::MessageStream::new(&mapped)?;
-
-//     // for message in mcap::MessageStream::new(&mapped)? {
-//     //     let msg = message?;
-
-//     //     dbg!(msg.channel, msg.sequence, msg.publish_time);
-//     //     // match msg.channel {}
-//     //     // Or whatever else you'd like to do...
-//     // }
-//     Ok(Bagfile {
-//         bagfile_name: Some(mcap_path),
-//         cursor: 0,
-//         buffer: None,
-//         metadata: None,
-//     })
-// }
 
 #[cfg(test)]
 mod tests {
@@ -659,7 +582,6 @@ mod tests {
 
     #[test]
     fn bag_read_simple() {
-        // TODO add trigger
         let path = "../dlg_cut";
         let mut bag = Bagfile::default();
         let res = bag.reset(Some(path));

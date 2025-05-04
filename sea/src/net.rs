@@ -15,7 +15,7 @@ use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client}
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
 pub const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
-pub const CLIENT_LISTEN_PORT: u16 = 6969;
+pub const CLIENT_LISTEN_PORT: u16 = 6594;
 pub const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 pub const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
@@ -24,6 +24,12 @@ pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WindAt {
+    pub data: WindData,
+    pub at_var: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PacketKind {
@@ -39,7 +45,9 @@ pub enum PacketKind {
         commands: Vec<VariableHuman>,
     },
     RulesClear,
-    LockNext, // TODO lock next variable so after a client does catch/shoot, it blocks until receiving an ack. The initial ack is sent from lh to the coordinator, that then sends ack to all connected clients
+    LockNext {
+        unlock_first: bool,
+    },
     Unlock,
     RawDataf64(nalgebra::DMatrix<f64>),
     RawDataf32(nalgebra::DMatrix<f32>),
@@ -50,10 +58,7 @@ pub enum PacketKind {
         action: Action,
         lock_until_ack: bool,
     },
-    Wind {
-        data: WindData,
-        at_var: Option<String>,
-    },
+    Wind(Vec<WindAt>),
     WindDynamic(String),
 }
 

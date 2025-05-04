@@ -5,7 +5,7 @@ use log::{debug, error};
 
 use crate::{
     NetworkShipAddress, ShipName,
-    net::{Packet, PacketKind},
+    net::{Packet, PacketKind, WindAt},
 };
 
 pub struct ClientInfo {
@@ -37,11 +37,18 @@ impl crate::Coordinator for CoordinatorImpl {
         return Box::pin(self.rat_action_request_queue(ship)).await;
     }
 
-    async fn blow_wind(&self, ship: String, data: crate::WindData) -> anyhow::Result<()> {
+    async fn blow_wind(&self, ship: String, data: Vec<crate::WindData>) -> anyhow::Result<()> {
         if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
             let paket = Packet {
                 header: crate::net::Header::default(),
-                data: PacketKind::Wind { data, at_var: None },
+                data: PacketKind::Wind(
+                    data.into_iter()
+                        .map(|wd| WindAt {
+                            data: wd,
+                            at_var: None,
+                        })
+                        .collect::<Vec<_>>(),
+                ),
             };
             return client_info
                 .sender
@@ -49,6 +56,7 @@ impl crate::Coordinator for CoordinatorImpl {
                 .await
                 .map_err(|e| anyhow!("Error while sending rat action: {e}"));
         }
+        log::info!("waiting.. ");
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         return Box::pin(self.blow_wind(ship, data)).await;

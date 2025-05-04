@@ -44,13 +44,21 @@ RUST_LOG=debug ./rat2
 
 <br>
 
+**Select Entire File** = *
+
 **Toggle Select Mode** (in wind mode) = v
 
 **Compile and Run Wind Selection** (in wind mode) = <kbd>Space</kbd>
 
+### Rules
+
+**Clear** = <kbd>Space</kbd> (in compare mode)
+
+Adding new ones happens automatically when firing the .rl file if it contains some.
+
 ### Matrix Compare Window
 
-**Move Cursor** (*not* in wind mode)
+**Move Cursor** (in compare mode)
 - **left** = h *or* <kbd>←</kbd>
 - **up** = k *or* <kbd>↑</kbd>
 - **down** = j *or* <kbd>↓</kbd>
@@ -74,11 +82,11 @@ RUST_LOG=debug ./rat2
 <br>
 
 
-**unlock next var** = <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+l
+**Unlock Next Var** = <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+l
 
-**lock next var** = <kbd>Ctrl</kbd>+l
+**Lock Next Var** = <kbd>Ctrl</kbd>+l
 
-**unlock until next var** = <kbd>Ctrl</kbd>+n
+**Unlock Until Next Var** = <kbd>Ctrl</kbd>+n
 
 #### Difference Tolerance
 

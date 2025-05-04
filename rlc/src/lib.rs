@@ -15,7 +15,7 @@ use chumsky::{
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rules(std::collections::HashMap<String, Vec<VariableHuman>>);
 
-pub const COMPARE_NODE_NAME: &'static str = "#compare";
+pub const COMPARE_NODE_NAME: &'static str = "#lhtui";
 
 impl Rules {
     pub fn new() -> Self {
@@ -434,6 +434,7 @@ pub enum Val {
     UnitedVal(UnitVal),
     NumVal(NumVal),
     StringVal(String),
+    BoolVal(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1052,6 +1053,8 @@ where
             Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i))),
             Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
             Token::String(s) => Rhs::Val(Val::StringVal(s.to_owned())),
+            Token::True => Rhs::Val(Val::BoolVal(true)),
+            Token::False => Rhs::Val(Val::BoolVal(false)),
     }
     .labelled("value");
 
@@ -1402,14 +1405,6 @@ where
     )
     .map(
         |(((pt, arg), trigger), mode): (((PlayType, Rhs), Option<Rhs>), Option<String>)| {
-            let play_mode = mode
-                .map(|mode| match mode.as_str() {
-                    "f" => PlayMode::Fix,
-                    "d" => PlayMode::Dynamic,
-                    _ => unreachable!(),
-                })
-                .unwrap_or(PlayMode::Dynamic);
-
             let trigger = trigger.map(|trigger| match trigger {
                 Rhs::Val(Val::UnitedVal(UnitVal {
                     val,
@@ -1419,6 +1414,17 @@ where
                 Rhs::Val(Val::NumVal(NumVal::Floating(f))) => PlayTrigger::DurationRelFactor(f),
                 _ => unreachable!(),
             });
+
+            let play_mode = mode.map(|mode| match mode.as_str() {
+                "f" => PlayMode::Fix,
+                "d" => PlayMode::Dynamic,
+                _ => unreachable!(),
+            });
+            let default_play_mode = match trigger.as_ref() {
+                Some(PlayTrigger::Variable(_)) => PlayMode::Dynamic,
+                _ => PlayMode::Fix,
+            };
+            let play_mode = play_mode.unwrap_or(default_play_mode);
 
             let pku = match pt {
                 PlayType::SensorCount { sensor } => match arg {
@@ -1768,7 +1774,8 @@ pub fn compile_file_with_state(
         .skip(start_line)
         .take(end_line + 1 - start_line)
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+        + "\n"; // append newline as funny hack to fix one-line problems
 
     let dir = path.parent().ok_or(anyhow!(
         "Could not get parent directory of source code file."
@@ -2345,7 +2352,13 @@ fn resolve_stmt(
 
 pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     let currdir = std::env::current_dir()?;
-    compile_code_with_state(source_code_raw, &currdir, None, std::io::stderr(), true)
+    compile_code_with_state(
+        &(source_code_raw.to_owned() + "\n"), // hack to fix one-line token problems
+        &currdir,
+        None,
+        std::io::stderr(),
+        true,
+    )
 }
 
 pub fn compile_code_with_state(
@@ -2544,11 +2557,7 @@ mod tests {
         let eval = compile_code(SRC0);
         assert!(eval.is_ok());
 
-        const SRC1: &str = r"# blub
-        ";
-        // let mut a = Token::lexer(SRC1);
-        // let b = a.next();
-        // dbg!(b);
+        const SRC1: &str = r"# blub";
         let eval = compile_code(SRC1);
         assert!(eval.is_ok());
     }

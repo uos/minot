@@ -140,13 +140,13 @@ impl crate::Ship for NetworkShipImpl {
         self
     }
 
-    async fn wait_for_wind(&self) -> anyhow::Result<crate::WindData> {
+    async fn wait_for_wind(&self) -> anyhow::Result<Vec<crate::WindData>> {
         let client = self.client.lock().await;
         let coord_receive = { client.coordinator_receive.read().unwrap().clone() };
         if let Some(receiver) = coord_receive {
             let mut sub = receiver.subscribe();
             while let Ok((packet, _)) = sub.recv().await {
-                if let PacketKind::Wind { data, at_var: _ } = packet.data {
+                if let PacketKind::Wind(bwd) = packet.data {
                     // send ack to coordinator
                     let sender = {
                         let coord_read = client.coordinator_send.read().unwrap();
@@ -159,7 +159,7 @@ impl crate::Ship for NetworkShipImpl {
                         })
                         .await
                         .unwrap();
-                    return Ok(data);
+                    return Ok(bwd.into_iter().map(|wa| wa.data).collect::<Vec<_>>());
                 }
             }
             return Err(anyhow!(

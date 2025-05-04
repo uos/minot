@@ -4,7 +4,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 pub use sea;
 
-pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<sea::WindData>> {
+pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
     let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
     info!("Wind initialized with ship {:?}", kind);
