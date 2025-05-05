@@ -1314,7 +1314,8 @@ where
                 Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i as i64))), // (until) number of frames
             },
         ))
-        .labelled("int number for count, relative time from now or absolute timespan"),
+        .labelled("int number for count, relative time from now or absolute timespan")
+        .boxed(),
     )
     .then(
         choice((
@@ -1361,6 +1362,7 @@ where
                 Token::FloatingNumber(f) => Rhs::Val(Val::NumVal(NumVal::Floating(f))),
             },
         ))
+        .boxed()
         .or_not()
         .labelled("trigger"),
     )
