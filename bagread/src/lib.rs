@@ -4,9 +4,8 @@ use anyhow::{Context, Result, anyhow};
 use mcap::{McapError, Message};
 use memmap2::Mmap;
 use nalgebra::{UnitQuaternion, Vector3};
-use rlc::{AbsTimeRange, PlayCount, PlayKindUnited, PlayMode, PlayTrigger, SensorType};
+use rlc::{AbsTimeRange, PlayCount, PlayMode, PlayTrigger, SensorType};
 pub use ros_pointcloud2::PointCloud2Msg;
-use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
@@ -34,46 +33,6 @@ pub struct ImuMsg {
     pub angular_velocity_covariance: [f64; 9],
     pub linear_acceleration: Vector3<f64>,
     pub linear_acceleration_covariance: [f64; 9],
-}
-
-impl From<Imu> for ImuMsg {
-    fn from(value: Imu) -> Self {
-        Self {
-            header: Header {
-                seq: 0,
-                stamp: TimeMsg {
-                    sec: value.header.stamp.sec,
-                    nanosec: value.header.stamp.nanosec,
-                },
-                frame_id: value.header.frame_id,
-            },
-            timestamp_sec: TimeMsg {
-                sec: value.header.stamp.sec,
-                nanosec: value.header.stamp.nanosec,
-            },
-            orientation: nalgebra::Unit::from_quaternion(nalgebra::Quaternion::from_vector(
-                nalgebra::Vector4::new(
-                    value.orientation.x,
-                    value.orientation.y,
-                    value.orientation.z,
-                    value.orientation.w,
-                ),
-            )),
-            orientation_covariance: value.orientation_covariance,
-            angular_velocity: nalgebra::Vector3::new(
-                value.angular_velocity.x,
-                value.angular_velocity.y,
-                value.angular_velocity.z,
-            ),
-            angular_velocity_covariance: value.angular_velocity_covariance,
-            linear_acceleration: nalgebra::Vector3::new(
-                value.linear_acceleration.x,
-                value.linear_acceleration.y,
-                value.linear_acceleration.z,
-            ),
-            linear_acceleration_covariance: value.linear_acceleration_covariance,
-        }
-    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -237,93 +196,111 @@ pub struct Bagfile {
 }
 
 #[derive(Debug)]
-pub enum BagMsg {
-    Cloud(PointCloud2Msg),
-    Imu(ImuMsg),
+pub struct BagMsg {
+    topic: String,
+    msg_type: String,
+    data: SensorTypeMapped,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum PlayKindUnitedRich {
     SensorCount {
-        sensor: SensorTypeRich,
+        sensor: Vec<AnySensor>,
         count: PlayCount,
         trigger: Option<PlayTrigger>,
         play_mode: PlayMode,
     },
     UntilSensorCount {
-        sending: SensorTypeRich,
-        until_sensor: SensorTypeRich,
+        sending: Vec<AnySensor>,
+        until_sensor: Vec<AnySensor>,
         until_count: PlayCount,
         trigger: Option<PlayTrigger>,
         play_mode: PlayMode,
     },
 }
 
-impl PlayKindUnitedRich {
-    pub fn with_topic(src: PlayKindUnited, topics: &[&str]) -> Self {
-        match src {
-            PlayKindUnited::SensorCount {
-                sensor,
-                count,
-                trigger,
-                play_mode,
-            } => PlayKindUnitedRich::SensorCount {
-                sensor: SensorTypeRich::with_topic(&sensor, topics),
-                count,
-                trigger,
-                play_mode,
-            },
-            PlayKindUnited::UntilSensorCount {
-                sending,
-                until_sensor,
-                until_count,
-                trigger,
-                play_mode,
-            } => PlayKindUnitedRich::UntilSensorCount {
-                sending: SensorTypeRich::with_topic(&sending, topics),
-                until_sensor: SensorTypeRich::with_topic(&until_sensor, topics),
-                until_count,
-                trigger,
-                play_mode,
-            },
-        }
-    }
+// impl PlayKindUnitedRich {
+//     pub fn with_topic(src: PlayKindUnited, topics: &[&str]) -> Self {
+//         match src {
+//             PlayKindUnited::SensorCount {
+//                 sensor,
+//                 count,
+//                 trigger,
+//                 play_mode,
+//             } => PlayKindUnitedRich::SensorCount {
+//                 sensor: SensorTypeRich::with_topic(&sensor, topics),
+//                 count,
+//                 trigger,
+//                 play_mode,
+//             },
+//             PlayKindUnited::UntilSensorCount {
+//                 sending,
+//                 until_sensor,
+//                 until_count,
+//                 trigger,
+//                 play_mode,
+//             } => PlayKindUnitedRich::UntilSensorCount {
+//                 sending: SensorTypeRich::with_topic(&sending, topics),
+//                 until_sensor: SensorTypeRich::with_topic(&until_sensor, topics),
+//                 until_count,
+//                 trigger,
+//                 play_mode,
+//             },
+//         }
+//     }
+// }
+
+#[derive(Debug, Clone)]
+pub enum SensorTypeMapped {
+    Lidar(PointCloud2Msg),
+    Imu(ImuMsg),
+    Any,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum SensorTypeRich {
-    Lidar { topic: String },
-    Imu { topic: String },
-    Mixed { topics: Vec<String> },
+pub enum SensorIdentification {
+    Topics(Vec<String>), // no type given, compare by topics
+    Type(String),        // type given but no topics, check for types
+    TopicsAndType {
+        topics: Vec<String>,
+        msg_type: String,
+    }, // both given but only use topics for collect until because it is more fine grained
 }
 
-impl SensorTypeRich {
-    pub fn with_topic(src: &SensorType, topics: &[&str]) -> Self {
-        match src {
-            SensorType::Lidar => SensorTypeRich::Lidar {
-                topic: (*topics[0]).to_owned(),
-            },
-            SensorType::Imu => SensorTypeRich::Imu {
-                topic: (*topics[1]).to_owned(),
-            },
-            SensorType::Mixed => SensorTypeRich::Mixed {
-                topics: topics
-                    .into_iter()
-                    .map(|a| (*a).to_owned())
-                    .collect::<Vec<_>>(),
-            },
-        }
-    }
+#[derive(Debug, PartialEq, Clone)]
+pub struct AnySensor {
+    pub name: String, // custom name given by config
+    pub id: SensorIdentification,
+    pub short: Option<String>, // to be used while parsing to not write so much
 }
+
+// impl SensorTypeRich {
+//     pub fn with_topic(src: &SensorType, topics: &[&str]) -> Self {
+//         match src {
+//             SensorType::Lidar => SensorTypeRich::Lidar {
+//                 topic: (*topics[0]).to_owned(),
+//             },
+//             SensorType::Imu => SensorTypeRich::Imu {
+//                 topic: (*topics[1]).to_owned(),
+//             },
+//             SensorType::Mixed => SensorTypeRich::Mixed {
+//                 topics: topics
+//                     .into_iter()
+//                     .map(|a| (*a).to_owned())
+//                     .collect::<Vec<_>>(),
+//             },
+//         }
+//     }
+// }
 
 fn collect_until(
     iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
     cursor: &mut usize,
     metadata: &Metadata,
-    send_sensor: &SensorTypeRich,
-    until_sensor: Option<(&SensorTypeRich, &PlayCount)>,
+    send_sensor: &Vec<AnySensor>,
+    until_sensor: Option<(&Vec<AnySensor>, &PlayCount)>,
     until: Option<&PlayCount>,
-) -> anyhow::Result<Vec<BagMsg>> {
+) -> anyhow::Result<Vec<(u64, BagMsg)>> {
     let mut rel_since_begin = 0;
     let mut until_sensor_counter = 0;
     let mut msgs = Vec::new();
@@ -375,35 +352,35 @@ fn collect_until(
 
                 match until {
                     Some(PlayCount::TimeRelativeMs(rel_dur)) => {
-                        let rel_dur = (*rel_dur as u128) * 1_000_000;
+                        let rel_dur = rel_dur * 1_000_000;
                         if let Some(tstart) = start_time {
-                            if msg.publish_time as u128 > tstart + rel_dur {
+                            if msg.publish_time > tstart + rel_dur {
                                 return Ok(msgs);
                             }
                         } else {
-                            start_time.replace(msg.publish_time as u128);
+                            start_time.replace(msg.publish_time);
                         }
                     }
                     Some(PlayCount::TimeRangeMs(AbsTimeRange::Closed((min, max)))) => {
-                        let min = (*min as u128) * 1_000_000;
-                        let max = (*max as u128) * 1_000_000;
+                        let min = min * 1_000_000;
+                        let max = max * 1_000_000;
                         let rel_dur = max - min;
                         if let Some(tstart) = start_time {
-                            if tstart + rel_dur < msg.publish_time as u128 {
+                            if tstart + rel_dur < msg.publish_time {
                                 return Ok(msgs);
                             }
                         } else {
-                            start_time.replace(msg.publish_time as u128);
+                            start_time.replace(msg.publish_time);
                         }
                     }
                     Some(PlayCount::TimeRangeMs(AbsTimeRange::LowerOpen(max))) => {
-                        let max = (*max as u128) * 1_000_000;
+                        let max = max * 1_000_000;
                         if let Some(tstart) = start_time {
-                            if tstart + max < msg.publish_time as u128 {
+                            if tstart + max < msg.publish_time {
                                 return Ok(msgs);
                             }
                         } else {
-                            start_time.replace(msg.publish_time as u128);
+                            start_time.replace(msg.publish_time);
                         }
                     }
                     Some(PlayCount::Amount(count)) => {
@@ -414,26 +391,35 @@ fn collect_until(
                     _ => {}
                 }
 
-                match until_sensor {
-                    Some((until_sensor, until)) => {
-                        let stop_topics = match until_sensor {
-                            SensorTypeRich::Lidar { topic } => vec![topic.clone()],
-                            SensorTypeRich::Imu { topic } => vec![topic.clone()],
-                            SensorTypeRich::Mixed { topics } => topics.clone(),
-                        };
-
-                        if stop_topics.contains(&msg.channel.topic) {
-                            until_sensor_counter += 1;
-                            match until {
-                                PlayCount::Amount(uc) => {
-                                    if until_sensor_counter >= *uc {
-                                        return Ok(msgs);
-                                    }
+                match &until_sensor {
+                    Some((until_sensors, pc)) => {
+                        for us in *until_sensors {
+                            let pass = match &us.id {
+                                SensorIdentification::Topics(items) => {
+                                    items.contains(&msg.channel.topic)
                                 }
-                                _ => {
-                                    return Err(anyhow!(
-                                        "Can only mix until_sensor with an amount. Timings are not specified to a sensor, use them in the stop criteria without a sensor."
-                                    ));
+                                SensorIdentification::Type(t) => {
+                                    t.as_str() == msg.channel.topic.as_str()
+                                }
+                                SensorIdentification::TopicsAndType {
+                                    topics,
+                                    msg_type: _,
+                                } => topics.contains(&msg.channel.topic),
+                            };
+
+                            if pass {
+                                until_sensor_counter += 1;
+                                match pc {
+                                    PlayCount::Amount(uc) => {
+                                        if until_sensor_counter >= *uc {
+                                            return Ok(msgs);
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(anyhow!(
+                                            "Can only mix until_sensor with an amount. Timings are not specified to a sensor, use them in the stop criteria without a sensor."
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -445,47 +431,26 @@ fn collect_until(
                     .get_topic_meta(&msg.channel.topic)
                     .ok_or(anyhow!("Topic does not exist."))?;
 
-                let send_topics = match &send_sensor {
-                    SensorTypeRich::Lidar { topic } => vec![topic.clone()],
-                    SensorTypeRich::Imu { topic } => vec![topic.clone()],
-                    SensorTypeRich::Mixed { topics } => topics.clone(),
-                };
+                let pass = send_sensor.iter().any(|a| match &a.id {
+                    SensorIdentification::Topics(items) => items.contains(&msg.channel.topic),
+                    SensorIdentification::Type(t) => t.as_str() == msg.channel.topic.as_str(),
+                    SensorIdentification::TopicsAndType {
+                        topics,
+                        msg_type: _,
+                    } => topics.contains(&msg.channel.topic),
+                });
+                let len_before = msgs.len();
 
-                if send_topics.contains(&msgtype.name) {
-                    // TODO compression very likely not supported since no dep. maybe still needs rustdds? how to use the deserializer? or just decomp manually before deserialize?
-                    let len_before = msgs.len();
-                    match send_sensor {
-                        SensorTypeRich::Lidar { topic: _ } => {
-                            let dec = cdr::deserialize::<PointCloud2>(&msg.data)
-                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-                            msgs.push(BagMsg::Cloud(dec.into()));
-                        }
-                        SensorTypeRich::Imu { topic: _ } => {
-                            let dec = cdr::deserialize::<Imu>(&msg.data)
-                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-
-                            msgs.push(BagMsg::Imu(dec.into()));
-                        }
-                        SensorTypeRich::Mixed { topics: _ } => match msgtype.topic_type.as_str() {
-                            "sensor_msgs/msg/Imu" => {
-                                let dec = cdr::deserialize::<Imu>(&msg.data)
-                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-
-                                msgs.push(BagMsg::Imu(dec.into()));
-                            }
-                            "sensor_msgs/msg/PointCloud2" => {
-                                let dec = cdr::deserialize::<PointCloud2>(&msg.data)
-                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-
-                                msgs.push(BagMsg::Cloud(dec.into()));
-                            }
-                            _ => {}
-                        },
-                    }
-
-                    if len_before != msgs.len() {
-                        rel_since_begin += 1;
-                    }
+                if pass {
+                    let enc = BagMsg::Any {
+                        topic: msgtype.name.clone(),
+                        msg_type: msgtype.topic_type.clone(),
+                        data: msg.data.to_vec(),
+                    };
+                    msgs.push((msg.publish_time, enc));
+                }
+                if len_before != msgs.len() {
+                    rel_since_begin += 1;
                 }
             }
             None => break,
@@ -499,7 +464,7 @@ fn collect_until(
 }
 
 impl Bagfile {
-    pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<BagMsg>> {
+    pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<(u64, BagMsg)>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
                 let stream = mcap::MessageStream::new(buffer)?;
@@ -588,9 +553,11 @@ mod tests {
         assert!(res.is_ok());
 
         let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
-            sensor: SensorTypeRich::Lidar {
-                topic: "/ouster/points".to_owned(),
-            },
+            sensor: vec![AnySensor {
+                name: "".to_owned(),
+                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                short: None,
+            }],
             count: PlayCount::Amount(1),
             trigger: None,
             play_mode: PlayMode::Fix,
@@ -609,9 +576,11 @@ mod tests {
         assert!(res.is_ok());
 
         let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
-            sensor: SensorTypeRich::Lidar {
-                topic: "/ouster/points".to_owned(),
-            },
+            sensor: vec![AnySensor {
+                name: "".to_owned(),
+                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                short: None,
+            }],
             trigger: None,
             count: PlayCount::TimeRelativeMs(50),
             play_mode: PlayMode::Fix,
@@ -622,9 +591,11 @@ mod tests {
         assert_eq!(clouds.len(), 1);
 
         let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
-            sensor: SensorTypeRich::Lidar {
-                topic: "/ouster/points".to_owned(),
-            },
+            sensor: vec![AnySensor {
+                name: "".to_owned(),
+                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                short: None,
+            }],
             trigger: None,
             count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((50, 100))),
             play_mode: PlayMode::Fix,
@@ -635,9 +606,11 @@ mod tests {
         assert_eq!(clouds.len(), 1);
 
         let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
-            sensor: SensorTypeRich::Lidar {
-                topic: "/ouster/points".to_owned(),
-            },
+            sensor: vec![AnySensor {
+                name: "".to_owned(),
+                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                short: None,
+            }],
             trigger: None,
             count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((0, 100))),
             play_mode: PlayMode::Fix,

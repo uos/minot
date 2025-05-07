@@ -185,6 +185,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .unwrap();
 
+    let any_publisher = node
+        .create_publisher(
+            &node
+                .create_topic(
+                    &ros2_client::Name::new(&namespace, &imu_topic).unwrap(),
+                    ros2_client::MessageTypeName::new("sensor_msgs", "Imu"),
+                    &imu_qos.into(),
+                )
+                .unwrap(),
+            None,
+        )
+        .unwrap();
+
     let mut wind_receiver = wind(&wind_name).await?;
 
     while let Some(wind_data) = wind_receiver.recv().await {
@@ -192,7 +205,9 @@ async fn main() -> anyhow::Result<()> {
             match data {
                 wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
                     let msg: PointCloud2 = point_cloud2_msg.into();
-                    cloud_publisher.publish(msg)?;
+                    cloud_publisher.async_publish(msg).await?;
+                    let buff = vec![1 as u8];
+                    any_publisher.async_publish(buff).await?;
                     info!("published cloud");
                 }
                 wind::sea::WindData::Imu(imu_msg) => {
@@ -256,7 +271,7 @@ async fn main() -> anyhow::Result<()> {
                             imu_msg.linear_acceleration_covariance[8],
                         ],
                     };
-                    imu_publisher.publish(msg)?;
+                    imu_publisher.async_publish(msg).await?;
                     info!("published imu");
                 }
             }
