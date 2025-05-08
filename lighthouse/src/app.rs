@@ -1831,11 +1831,13 @@ impl App {
                                     }
                                 };
 
-                                let proc_kind = PlayKindUnitedRich::with_topic(
-                                    kind.clone(),
-                                    &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
-                                );
+                                // let proc_kind = PlayKindUnitedRich::with_topic(
+                                //     kind.clone(),
+                                //     &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
+                                // );
 
+                                kind
+                                
                                 match kind {
                                     PlayKindUnited::SensorCount {
                                         sensor: _,
@@ -1908,7 +1910,7 @@ impl App {
                                 info!("iterating on bagfile...");
                                 let (res_tx, res_rx) = tokio::sync::oneshot::channel();
                                 std::thread::spawn(move || {
-                                    let r = bag_blocking.write().unwrap().next(&proc_kind);
+                                    let r = bag_blocking.write().unwrap().next(&kind.clone());
                                     res_tx.send(r).unwrap();
                                 });
 

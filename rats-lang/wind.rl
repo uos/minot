@@ -1,11 +1,17 @@
 _bag.{
 	lidar.{
-		short = l
-		topic = /ouster/points
+		_short = l
+		_topic = /ouster/points
+		_type = Pointcloud2
 	}
 	imu.{
-		short = i
-		topic = /ouster/imu
+		_short = i
+		_topic = /ouster/imu
+		_type = Imu
+	}
+	odom.{
+		_short = o
+		_topic = /odom
 	}
 	# imu.topic = /ouster/imu
 	# lidar.topic = /ouster/points
@@ -20,6 +26,8 @@ _bag.{
 reset! ./../../bags/dlg_cut
 
 pf! m ..1s 3s
+
+pf! [l, i], i 2
 
 # start doing things with the bagfile
 # pf! il 1 var4

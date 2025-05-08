@@ -3,9 +3,9 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, anyhow};
 use mcap::{McapError, Message};
 use memmap2::Mmap;
-use nalgebra::{UnitQuaternion, Vector3};
-use rlc::{AbsTimeRange, PlayCount, PlayMode, PlayTrigger, SensorType};
+use rlc::{AbsTimeRange, AnySensor, PlayCount, PlayKindUnited, PlayTrigger, SensorIdentification};
 pub use ros_pointcloud2::PointCloud2Msg;
+use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
@@ -21,18 +21,6 @@ pub struct Header {
     pub seq: u32,
     pub stamp: TimeMsg,
     pub frame_id: String,
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ImuMsg {
-    pub header: Header,
-    pub timestamp_sec: TimeMsg,
-    pub orientation: UnitQuaternion<f64>,
-    pub orientation_covariance: [f64; 9],
-    pub angular_velocity: Vector3<f64>,
-    pub angular_velocity_covariance: [f64; 9],
-    pub linear_acceleration: Vector3<f64>,
-    pub linear_acceleration_covariance: [f64; 9],
 }
 
 #[derive(Deserialize, Debug)]
@@ -197,26 +185,9 @@ pub struct Bagfile {
 
 #[derive(Debug)]
 pub struct BagMsg {
-    topic: String,
-    msg_type: String,
-    data: SensorTypeMapped,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum PlayKindUnitedRich {
-    SensorCount {
-        sensor: Vec<AnySensor>,
-        count: PlayCount,
-        trigger: Option<PlayTrigger>,
-        play_mode: PlayMode,
-    },
-    UntilSensorCount {
-        sending: Vec<AnySensor>,
-        until_sensor: Vec<AnySensor>,
-        until_count: PlayCount,
-        trigger: Option<PlayTrigger>,
-        play_mode: PlayMode,
-    },
+    pub topic: String,
+    pub msg_type: String,
+    pub data: SensorTypeMapped,
 }
 
 // impl PlayKindUnitedRich {
@@ -252,26 +223,9 @@ pub enum PlayKindUnitedRich {
 
 #[derive(Debug, Clone)]
 pub enum SensorTypeMapped {
-    Lidar(PointCloud2Msg),
-    Imu(ImuMsg),
-    Any,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum SensorIdentification {
-    Topics(Vec<String>), // no type given, compare by topics
-    Type(String),        // type given but no topics, check for types
-    TopicsAndType {
-        topics: Vec<String>,
-        msg_type: String,
-    }, // both given but only use topics for collect until because it is more fine grained
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct AnySensor {
-    pub name: String, // custom name given by config
-    pub id: SensorIdentification,
-    pub short: Option<String>, // to be used while parsing to not write so much
+    Lidar(PointCloud2),
+    Imu(Imu),
+    Any(Vec<u8>),
 }
 
 // impl SensorTypeRich {
@@ -442,10 +396,24 @@ fn collect_until(
                 let len_before = msgs.len();
 
                 if pass {
-                    let enc = BagMsg::Any {
+                    let data = match msgtype.topic_type.as_str() {
+                        "sensor_msgs/msg/PointCloud2" => {
+                            let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                            SensorTypeMapped::Lidar(dec)
+                        }
+                        "sensor_msgs/msg/Imu" => {
+                            let dec = cdr::deserialize::<Imu>(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            SensorTypeMapped::Imu(dec)
+                        }
+                        _ => SensorTypeMapped::Any(msg.data.to_vec()),
+                    };
+                    let enc = BagMsg {
                         topic: msgtype.name.clone(),
                         msg_type: msgtype.topic_type.clone(),
-                        data: msg.data.to_vec(),
+                        data,
                     };
                     msgs.push((msg.publish_time, enc));
                 }
@@ -464,14 +432,14 @@ fn collect_until(
 }
 
 impl Bagfile {
-    pub fn next(&mut self, kind: &PlayKindUnitedRich) -> anyhow::Result<Vec<(u64, BagMsg)>> {
+    pub fn next(&mut self, kind: &PlayKindUnited) -> anyhow::Result<Vec<(u64, BagMsg)>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
                 let stream = mcap::MessageStream::new(buffer)?;
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
                 match kind {
-                    PlayKindUnitedRich::SensorCount {
-                        sensor,
+                    PlayKindUnited::SensorCount {
+                        sensors,
                         count,
                         trigger: _,
                         play_mode: _,
@@ -479,13 +447,13 @@ impl Bagfile {
                         stream,
                         &mut self.cursor,
                         metadata,
-                        sensor,
+                        sensors,
                         None,
                         Some(count),
                     ),
-                    PlayKindUnitedRich::UntilSensorCount {
+                    PlayKindUnited::UntilSensorCount {
                         sending,
-                        until_sensor,
+                        until_sensors,
                         until_count,
                         trigger: _,
                         play_mode: _,
@@ -494,7 +462,7 @@ impl Bagfile {
                         &mut self.cursor,
                         metadata,
                         sending,
-                        Some((until_sensor, until_count)),
+                        Some((until_sensors, until_count)),
                         None,
                     ),
                 }
@@ -552,7 +520,7 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
+        let clouds = bag.next(&PlayKindUnited::SensorCount {
             sensor: vec![AnySensor {
                 name: "".to_owned(),
                 id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
@@ -575,7 +543,7 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
+        let clouds = bag.next(&PlayKindUnited::SensorCount {
             sensor: vec![AnySensor {
                 name: "".to_owned(),
                 id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
@@ -590,7 +558,7 @@ mod tests {
         let clouds = clouds.unwrap();
         assert_eq!(clouds.len(), 1);
 
-        let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
+        let clouds = bag.next(&PlayKindUnited::SensorCount {
             sensor: vec![AnySensor {
                 name: "".to_owned(),
                 id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
@@ -605,7 +573,7 @@ mod tests {
         let clouds = clouds.unwrap();
         assert_eq!(clouds.len(), 1);
 
-        let clouds = bag.next(&PlayKindUnitedRich::SensorCount {
+        let clouds = bag.next(&PlayKindUnited::SensorCount {
             sensor: vec![AnySensor {
                 name: "".to_owned(),
                 id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
