@@ -1,17 +1,17 @@
 _bag.{
 	lidar.{
 		_short = l
-		_topic = /ouster/points
+		_topics = /ouster/points
 		_type = Pointcloud2
 	}
 	imu.{
 		_short = i
-		_topic = /ouster/imu
+		_topics = /ouster/imu
 		_type = Imu
 	}
 	odom.{
 		_short = o
-		_topic = /odom
+		_topics = /odom
 	}
 	# imu.topic = /ouster/imu
 	# lidar.topic = /ouster/points

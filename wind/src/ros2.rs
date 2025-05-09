@@ -1,17 +1,14 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use ros2_client::ros2;
 use ros2_client::{NodeName, NodeOptions};
-use ros2_interfaces_jazzy::geometry_msgs::msg::Vector3;
+use ros2_client::{Publisher, ros2};
 use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
-use ros2_interfaces_jazzy::{
-    builtin_interfaces::msg::Time, geometry_msgs::msg::Quaternion, sensor_msgs::msg::PointCloud2,
-    std_msgs::msg::Header,
-};
+use ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2;
 
 use anyhow::anyhow;
 use log::{error, info};
+use sea::SensorTypeMapped;
 use wind::wind;
 
 fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
@@ -75,6 +72,32 @@ impl From<crate::Qos> for ros2::QosPolicies {
     }
 }
 
+pub fn split_path(path: &str) -> (String, String) {
+    let components: Vec<&str> = path.split('/').collect();
+
+    if components.is_empty() || (components.len() == 1 && components[0].is_empty()) {
+        return ("/".to_string(), "".to_string());
+    }
+
+    let last_element = components.last().unwrap_or(&"").to_string();
+
+    let dir_components = &components[0..components.len().saturating_sub(1)];
+
+    let directory_path = if path.starts_with('/') {
+        dir_components.join("/")
+    } else {
+        format!("/{}", dir_components.join("/"))
+    };
+
+    let final_directory_path = if directory_path.is_empty() {
+        "/".to_string()
+    } else {
+        directory_path
+    };
+
+    (final_directory_path, last_element)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let env = env_logger::Env::new().filter_or("WIND_LOG", "off");
@@ -91,18 +114,6 @@ async fn main() -> anyhow::Result<()> {
 
     let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
 
-    let imu_topic =
-        rlc_wind_ns
-            .resolve("_imu.topic")?
-            .map_or(Ok("wind_imu".to_owned()), |rhs| {
-                Ok(match rhs {
-                    rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
-                    _ => {
-                        return Err(anyhow!("Unexpected type for _imu.topic"));
-                    }
-                })
-            })?;
-
     let imu_qos = Qos::try_from(rlc_wind_ns.resolve("_imu.qos")?.map_or(
         Ok("sensor".to_owned()),
         |rhs| {
@@ -114,20 +125,6 @@ async fn main() -> anyhow::Result<()> {
             })
         },
     )?)?;
-
-    let cloud_topic =
-        rlc_wind_ns
-            .resolve("_lidar.topic")?
-            .map_or(Ok("wind_lidar".to_owned()), |rhs| {
-                Ok(match rhs {
-                    rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
-                    _ => {
-                        return Err(anyhow!(
-                            "Unexpected type for _lidar.topic, expected String."
-                        ));
-                    }
-                })
-            })?;
 
     let cloud_qos = Qos::try_from(rlc_wind_ns.resolve("_lidar.qos")?.map_or(
         Ok("sensor".to_owned()),
@@ -159,121 +156,78 @@ async fn main() -> anyhow::Result<()> {
         NodeOptions::new().enable_rosout(true),
     )?;
 
-    let cloud_publisher = node
-        .create_publisher(
-            &node
-                .create_topic(
-                    &ros2_client::Name::new(&namespace, &cloud_topic).unwrap(),
-                    ros2_client::MessageTypeName::new("sensor_msgs", "PointCloud2"),
-                    &cloud_qos.into(),
-                )
-                .unwrap(),
-            None,
-        )
-        .unwrap();
+    // let mut publisher = HashMap::new();
 
-    let imu_publisher = node
-        .create_publisher(
-            &node
-                .create_topic(
-                    &ros2_client::Name::new(&namespace, &imu_topic).unwrap(),
-                    ros2_client::MessageTypeName::new("sensor_msgs", "Imu"),
-                    &imu_qos.into(),
-                )
-                .unwrap(),
-            None,
-        )
-        .unwrap();
+    let mut cloud_publisher: Option<Publisher<PointCloud2>> = None;
+    let mut current_cloud_topic = ros2_client::Name::new("/wind", "wind_cloud").unwrap();
 
-    let any_publisher = node
-        .create_publisher(
-            &node
-                .create_topic(
-                    &ros2_client::Name::new(&namespace, &imu_topic).unwrap(),
-                    ros2_client::MessageTypeName::new("sensor_msgs", "Imu"),
-                    &imu_qos.into(),
-                )
-                .unwrap(),
-            None,
-        )
-        .unwrap();
+    let mut imu_publisher: Option<Publisher<Imu>> = None;
+    let mut current_imu_topic = ros2_client::Name::new("/wind", "wind_imu").unwrap();
 
     let mut wind_receiver = wind(&wind_name).await?;
 
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
-            match data {
-                wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
-                    let msg: PointCloud2 = point_cloud2_msg.into();
-                    cloud_publisher.async_publish(msg).await?;
-                    let buff = vec![1 as u8];
-                    any_publisher.async_publish(buff).await?;
+            let topic_parse = split_path(&data.topic);
+            let wanted_topic = ros2_client::Name::new(&topic_parse.0, &topic_parse.1).unwrap();
+            match data.data {
+                SensorTypeMapped::Lidar(l) => {
+                    let mut trigger_repub = false;
+                    if wanted_topic != current_cloud_topic {
+                        current_cloud_topic = wanted_topic;
+                        trigger_repub = true;
+                    }
+                    if cloud_publisher.is_none() {
+                        trigger_repub = true;
+                    }
+                    if trigger_repub {
+                        cloud_publisher = Some(
+                            node.create_publisher(
+                                &node
+                                    .create_topic(
+                                        &current_cloud_topic,
+                                        ros2_client::MessageTypeName::new(
+                                            "sensor_msgs",
+                                            "PointCloud2",
+                                        ),
+                                        &cloud_qos.into(),
+                                    )
+                                    .unwrap(),
+                                None,
+                            )
+                            .unwrap(),
+                        );
+                    }
+                    cloud_publisher.as_ref().unwrap().async_publish(l).await?;
                     info!("published cloud");
                 }
-                wind::sea::WindData::Imu(imu_msg) => {
-                    let msg = Imu {
-                        header: Header {
-                            stamp: Time {
-                                sec: imu_msg.header.stamp.sec,
-                                nanosec: imu_msg.header.stamp.nanosec,
-                            },
-                            frame_id: imu_msg.header.frame_id,
-                        },
-                        orientation: {
-                            Quaternion {
-                                x: imu_msg.orientation.i,
-                                y: imu_msg.orientation.j,
-                                z: imu_msg.orientation.k,
-                                w: imu_msg.orientation.w,
-                            }
-                        },
-                        orientation_covariance: [
-                            imu_msg.orientation_covariance[0],
-                            imu_msg.orientation_covariance[1],
-                            imu_msg.orientation_covariance[2],
-                            imu_msg.orientation_covariance[3],
-                            imu_msg.orientation_covariance[4],
-                            imu_msg.orientation_covariance[5],
-                            imu_msg.orientation_covariance[6],
-                            imu_msg.orientation_covariance[7],
-                            imu_msg.orientation_covariance[8],
-                        ],
-                        angular_velocity: Vector3 {
-                            x: imu_msg.angular_velocity.x,
-                            y: imu_msg.angular_velocity.y,
-                            z: imu_msg.angular_velocity.z,
-                        },
-                        angular_velocity_covariance: [
-                            imu_msg.angular_velocity_covariance[0],
-                            imu_msg.angular_velocity_covariance[1],
-                            imu_msg.angular_velocity_covariance[2],
-                            imu_msg.angular_velocity_covariance[3],
-                            imu_msg.angular_velocity_covariance[4],
-                            imu_msg.angular_velocity_covariance[5],
-                            imu_msg.angular_velocity_covariance[6],
-                            imu_msg.angular_velocity_covariance[7],
-                            imu_msg.angular_velocity_covariance[8],
-                        ],
-                        linear_acceleration: Vector3 {
-                            x: imu_msg.linear_acceleration.x,
-                            y: imu_msg.linear_acceleration.y,
-                            z: imu_msg.linear_acceleration.z,
-                        },
-                        linear_acceleration_covariance: [
-                            imu_msg.linear_acceleration_covariance[0],
-                            imu_msg.linear_acceleration_covariance[1],
-                            imu_msg.linear_acceleration_covariance[2],
-                            imu_msg.linear_acceleration_covariance[3],
-                            imu_msg.linear_acceleration_covariance[4],
-                            imu_msg.linear_acceleration_covariance[5],
-                            imu_msg.linear_acceleration_covariance[6],
-                            imu_msg.linear_acceleration_covariance[7],
-                            imu_msg.linear_acceleration_covariance[8],
-                        ],
-                    };
-                    imu_publisher.async_publish(msg).await?;
-                    info!("published imu");
+                SensorTypeMapped::Imu(imu) => {
+                    let mut trigger_repub = false;
+                    if wanted_topic != current_imu_topic {
+                        current_imu_topic = wanted_topic;
+                        trigger_repub = true;
+                    }
+                    if imu_publisher.is_none() {
+                        trigger_repub = true;
+                    }
+                    if trigger_repub {
+                        imu_publisher = Some(
+                            node.create_publisher(
+                                &node
+                                    .create_topic(
+                                        &current_imu_topic,
+                                        ros2_client::MessageTypeName::new("sensor_msgs", "Imu"),
+                                        &imu_qos.into(),
+                                    )
+                                    .unwrap(),
+                                None,
+                            )
+                            .unwrap(),
+                        );
+                    }
+                    imu_publisher.as_ref().unwrap().async_publish(imu).await?;
                 }
+                SensorTypeMapped::Any(_) => todo!(), // TODO raw publish, then always manually encode the imu and laser messages as well and use hashmap over raw publishers for managing new ones
             }
         }
     }

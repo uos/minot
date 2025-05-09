@@ -171,6 +171,33 @@ pub enum SensorType {
     Any,
 }
 
+impl FromStr for SensorType {
+    type Err = std::io::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "lidar" => Self::Lidar,
+            "imu" => Self::Imu,
+            "mixed" => Self::Mixed,
+            _ => Self::Any,
+        })
+    }
+}
+
+pub const POINTCLOUD_ROS2_TYPE: &'static str = "sensor_msgs/msg/PointCloud2";
+pub const IMU_ROS2_TYPE: &'static str = "sensor_msgs/msg/Imu";
+
+impl SensorType {
+    pub fn is(&self, query: &str) -> bool {
+        match self {
+            SensorType::Lidar => query == POINTCLOUD_ROS2_TYPE,
+            SensorType::Imu => query == IMU_ROS2_TYPE,
+            SensorType::Mixed => query == POINTCLOUD_ROS2_TYPE || query == IMU_ROS2_TYPE,
+            SensorType::Any => true,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 enum PlayType {
     SensorCount {
@@ -535,12 +562,9 @@ pub enum PlayCount {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum SensorIdentification {
-    Topics(Vec<String>), // no type given, compare by topics
-    Type(String),        // type given but no topics, check for types
-    TopicsAndType {
-        topics: Vec<String>,
-        msg_type: String,
-    }, // both given but only use topics for collect until because it is more fine grained
+    Topic(String),    // no type given, compare by topics
+    Type(SensorType), // type given but no topics, check for types
+    TopicAndType { topic: String, msg_type: SensorType }, // both given but only use topics for collect until because it is more fine grained
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1295,8 +1319,22 @@ where
         .labelled("reset");
 
     let str_only = select! {
-            Token::String(s) => s,
-    };
+            Token::String(s) => s.to_owned(),
+    }
+    .or(variable.clone().try_map(|v, span| match v {
+        Rhs::Var(Var::User {
+            name,
+            namespace: ns,
+        }) => {
+            if !ns.is_empty() {
+                return Err(Rich::custom(span, "Found namespace in implicit string."));
+            }
+            Ok(name)
+        }
+        _ => {
+            return Err(Rich::custom(span, "Expected implicit string."));
+        }
+    }));
     let str_array = str_only
         .clone()
         .separated_by(just(Token::Comma).then_ignore(just(Token::NewLine).repeated()))
@@ -1311,7 +1349,7 @@ where
         .ignore_then(one_or_more_str.clone())
         .then((just(Token::Comma).ignore_then(one_or_more_str)).or_not())
         .map(
-            |(play_sensors, stop_sensors): (Vec<&str>, Option<Vec<&str>>)| match stop_sensors {
+            |(play_sensors, stop_sensors): (Vec<String>, Option<Vec<String>>)| match stop_sensors {
                 Some(stop_sensors) => PlayType::UntilSensorCount {
                     sending: play_sensors
                         .into_iter()
@@ -1876,7 +1914,7 @@ fn truncate_namespace_var(ns: &[String], var: &Var) -> Var {
             namespace: { remove_prefix_from_target(ns, namespace) },
         },
         Var::Log => Var::Log,
-        Var::Predef { name, namespace } => Var::User {
+        Var::Predef { name, namespace } => Var::Predef {
             name: name.clone(),
             namespace: { remove_prefix_from_target(ns, namespace) },
         },
@@ -2402,6 +2440,119 @@ pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     )
 }
 
+fn resolve_struct_in_ns(user_ns: &Vec<(Var, Rhs)>, var: &str) -> Option<AnySensor> {
+    // var is the first namespace for the vars, so gather all and find _name, _type and _short in them.
+    let name = var.to_owned();
+    let mut short = None;
+    let mut topic: Option<String> = None;
+    let mut msg_type = None;
+    let mut short_lookup: HashMap<String, String> = HashMap::new();
+
+    for (v, rhs) in user_ns.iter() {
+        match v {
+            Var::Predef { name, namespace } => {
+                if (*name).as_str() == "short" {
+                    let val = match rhs {
+                        Rhs::Val(Val::StringVal(s)) => s.clone(),
+                        _ => {
+                            return None;
+                        }
+                    };
+                    short_lookup.insert(val, namespace.first()?.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    for (v, rhs) in user_ns.iter() {
+        match v {
+            Var::Log => {}
+            Var::Predef {
+                name: predef_var_name,
+                namespace,
+            } => {
+                let found_by_name = namespace
+                    .first()
+                    .map(|s| {
+                        let long_name = (*s).as_str() == var;
+                        if long_name {
+                            return true;
+                        }
+                        let found_by_short = short_lookup.get(var);
+                        if let Some(short_name) = found_by_short {
+                            return (*short_name).as_str() == (*s).as_str();
+                        } else {
+                            return false;
+                        }
+                    })
+                    .unwrap_or_default();
+
+                if !found_by_name {
+                    continue;
+                }
+
+                match predef_var_name.as_str() {
+                    "short" => match rhs {
+                        Rhs::Val(Val::StringVal(s)) => {
+                            short = Some((*s).clone());
+                        }
+                        _ => {
+                            return None;
+                        }
+                    },
+                    "topic" => match rhs {
+                        Rhs::Val(Val::StringVal(s)) | Rhs::Path(s) => {
+                            topic = Some((*s).clone());
+                        }
+                        _ => {
+                            return None;
+                        }
+                    },
+                    "type" => match rhs {
+                        Rhs::Val(Val::StringVal(s)) => {
+                            let typed = SensorType::from_str(s.as_str())
+                                .expect("No error in impl, falls back to any");
+                            msg_type = Some(typed);
+                        }
+                        _ => {
+                            return None;
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            Var::User {
+                name: _,
+                namespace: _,
+            } => {}
+        }
+    }
+
+    let id = match (topic, msg_type) {
+        (Some(t), None) => SensorIdentification::Topic(t),
+        (None, Some(t)) => SensorIdentification::Type(t),
+        (Some(topic), Some(msg_type)) => SensorIdentification::TopicAndType { topic, msg_type },
+        _ => {
+            return None;
+        }
+    };
+
+    Some(AnySensor { name, id, short })
+}
+
+fn resolve_sensors(
+    user_ns: &Vec<(Var, Rhs)>,
+    sensors: &[String],
+) -> anyhow::Result<Vec<AnySensor>> {
+    let mut mapped = vec![];
+    for sensor in sensors {
+        let any = resolve_struct_in_ns(&user_ns, &sensor)
+            .ok_or(anyhow!("Could not find sensor: {}", &sensor))?;
+        mapped.push(any);
+    }
+    Ok(mapped)
+}
+
 pub fn compile_code_with_state(
     source_code_raw: &str,
     source_code_parent_dir: &std::path::Path,
@@ -2475,31 +2626,9 @@ pub fn compile_code_with_state(
                 }
             }
 
-            // Ext. Pass 3 -- TODO resolve the wind fns to anysensor to check if short or long form etc.
+            // Ext. Pass 3 -- resolve the wind fns to anysensor to check if short or long form etc.
             let vars = VariableHistory::new(ast.clone()).with_state(var_state.unwrap_or_default());
             let bag_ns = vars.resolve_ns(&["_bag"]);
-            let user_nss: HashMap<String, AnySensor> = HashMap::new();
-
-            fn resolve_struct_in_ns(
-                user_ns: &HashMap<String, AnySensor>,
-                var: &str,
-            ) -> Option<AnySensor> {
-                todo!() // TODO
-            }
-
-            fn resolve_sensors(
-                user_ns: &HashMap<String, AnySensor>,
-                sensors: &[String],
-            ) -> anyhow::Result<Vec<AnySensor>> {
-                let mut mapped = vec![];
-                for sensor in sensors {
-                    let any = resolve_struct_in_ns(&user_ns, &sensor)
-                        .ok_or(anyhow!("Could not find sensor: {}", &sensor))?;
-                    mapped.push(any);
-                }
-                Ok(mapped)
-            }
-
             let mut wind = Vec::new();
             for node in ast.into_iter() {
                 match node {
@@ -2510,7 +2639,7 @@ pub fn compile_code_with_state(
                             trigger,
                             play_mode,
                         } => {
-                            let sensors = resolve_sensors(&user_nss, &sensors)?;
+                            let sensors = resolve_sensors(&bag_ns, &sensors)?;
                             wind.push(WindFunction::SendFrames(PlayKindUnitedPass3::SensorCount {
                                 sensors,
                                 count,
@@ -2525,8 +2654,8 @@ pub fn compile_code_with_state(
                             trigger,
                             play_mode,
                         } => {
-                            let until_sensors = resolve_sensors(&user_nss, &until_sensors)?;
-                            let sending = resolve_sensors(&user_nss, &sending)?;
+                            let until_sensors = resolve_sensors(&bag_ns, &until_sensors)?;
+                            let sending = resolve_sensors(&bag_ns, &sending)?;
                             wind.push(WindFunction::SendFrames(
                                 PlayKindUnitedPass3::UntilSensorCount {
                                     sending,
@@ -2663,18 +2792,29 @@ mod tests {
 
     #[test]
     fn minimal_wind() {
-        const SRC: &str = r"
+        const SRC: &str = r#"
         reset! ./bag_file_name
 
+        _bag.{
+            lidar.{
+                _short = l
+                _type = Pointcloud2
+            }
+            imu.{
+                _short = i
+                _type = Imu
+            }
+        }
+
         pf! l 10s var1
-        pf! il 5 var1
+        pf! i, l 5 var1
         pf! l 10 var1
 
         rule!(var1
             testRat1 -> testRat2
         )
         pf! l 10s var1
-        ";
+        "#;
 
         let eval = compile_code(SRC);
         assert!(eval.is_ok());
@@ -2700,14 +2840,14 @@ mod tests {
         const SRC: &str = r"
         # bla,.
         # ups /// \masd
-        pf! l 10s var1 # yo
+        a = 1 # yo
         ";
 
         let eval = compile_code(SRC);
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         assert!(eval.rules.raw().is_empty());
-        assert!(!eval.wind.is_empty());
+        assert!(eval.wind.is_empty());
     }
 
     #[test]
@@ -2891,6 +3031,17 @@ mod tests {
             testRat1 -> testRat2, a.c
             a.b <- 5
         )
+
+        _bag.{
+            lidar.{
+                short = l
+                type = Pointcloud2
+            }
+            imu.{
+                _short = i
+                _type = Imu
+            }
+        }
         ";
 
         let eval = compile_code(SRC);
@@ -2901,6 +3052,9 @@ mod tests {
         let (var, rhs) = &e[1];
         assert_eq!(*var, Var::from_str("b").unwrap());
         assert_eq!(*rhs, Rhs::Val(Val::NumVal(NumVal::Integer(5))));
+
+        let e = eval.vars.resolve_ns(&["_bag"]);
+        assert_eq!(e.len(), 4);
     }
 
     #[test]
@@ -2989,8 +3143,6 @@ mod tests {
     //     const SRC: &str = "a = Sensor::Lidar";
 
     // TODO Give Enum to parser function that has all possible variants as trait. so fn variants(self--impl display) -> [impl FromStr]. Then call that in parser and pass type through to AST. If parser finds Sensor type, that has the same name as one of the enums in display. so it calls the parse function on that variant.
-    // }
-
     #[test]
     fn vec_mat_vals() {
         const SRC: &str = r"
@@ -3035,6 +3187,17 @@ mod tests {
         const SRC: &str = r"
         reset! ./bag_file_name
 
+        _bag.{
+            lidar.{
+                _short = l
+                _type = Pointcloud2
+            }
+            imu.{
+                _short = i
+                _type = Imu
+            }
+        }
+
         # send all lidar frames between the absolute 10s and 20s of the bagfile immediately
         pf! l 10s..20s
 
@@ -3045,10 +3208,10 @@ mod tests {
         pf! l 10s..20s 2mins
 
         # send imu frames until 2 lidar frames are encountered
-        pf! il 2
+        pf! i,l 2
 
         # send imu frames until 2 lidar frames are encountered but spread over 8s real time
-        pf! il 2 8s
+        pf! i,l 2 8s
 
         # send 10 lidar frames but spread them out over 20s
         pf! l 10 20s
@@ -3064,15 +3227,6 @@ mod tests {
 
         # implicit dynamic var
         pf! l 10s..20s var1
-
-        # rosbag play with filters :)
-        pf! m .. 1.
-
-        # fixed start until open end
-        pf! m 5s.. 1.0
-
-        # start until 20s
-        pf! m ..5s .5
 
         # relative play time
         pf! l 10s..20s 1.

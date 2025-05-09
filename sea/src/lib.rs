@@ -5,10 +5,10 @@ pub mod coordinator;
 pub mod net;
 pub mod ship;
 
+pub use bagread::SensorTypeMapped;
 use nalgebra::{UnitQuaternion, Vector3};
 use net::SeaSendableBuffer;
 use rlc::{ActionPlan, VariableHuman};
-use ros_pointcloud2::PointCloud2Msg;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Hash, Eq, PartialOrd, Ord)]
@@ -214,11 +214,7 @@ pub struct ImuMsg {
     pub linear_acceleration_covariance: [f64; 9],
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WindData {
-    Pointcloud(PointCloud2Msg),
-    Imu(ImuMsg),
-}
+pub type WindData = bagread::BagMsg;
 
 #[async_trait::async_trait]
 pub trait Coordinator: Send + Sync + 'static {

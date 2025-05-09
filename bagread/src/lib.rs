@@ -3,7 +3,10 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, anyhow};
 use mcap::{McapError, Message};
 use memmap2::Mmap;
-use rlc::{AbsTimeRange, AnySensor, PlayCount, PlayKindUnited, PlayTrigger, SensorIdentification};
+use rlc::{
+    AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
+    SensorIdentification, SensorType,
+};
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
@@ -183,7 +186,7 @@ pub struct Bagfile {
     metadata: Option<Metadata>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BagMsg {
     pub topic: String,
     pub msg_type: String,
@@ -221,31 +224,12 @@ pub struct BagMsg {
 //     }
 // }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SensorTypeMapped {
     Lidar(PointCloud2),
     Imu(Imu),
     Any(Vec<u8>),
 }
-
-// impl SensorTypeRich {
-//     pub fn with_topic(src: &SensorType, topics: &[&str]) -> Self {
-//         match src {
-//             SensorType::Lidar => SensorTypeRich::Lidar {
-//                 topic: (*topics[0]).to_owned(),
-//             },
-//             SensorType::Imu => SensorTypeRich::Imu {
-//                 topic: (*topics[1]).to_owned(),
-//             },
-//             SensorType::Mixed => SensorTypeRich::Mixed {
-//                 topics: topics
-//                     .into_iter()
-//                     .map(|a| (*a).to_owned())
-//                     .collect::<Vec<_>>(),
-//             },
-//         }
-//     }
-// }
 
 fn collect_until(
     iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
@@ -349,16 +333,13 @@ fn collect_until(
                     Some((until_sensors, pc)) => {
                         for us in *until_sensors {
                             let pass = match &us.id {
-                                SensorIdentification::Topics(items) => {
-                                    items.contains(&msg.channel.topic)
+                                SensorIdentification::Topic(items) => {
+                                    items.as_str() == &msg.channel.topic
                                 }
-                                SensorIdentification::Type(t) => {
-                                    t.as_str() == msg.channel.topic.as_str()
+                                SensorIdentification::Type(t) => t.is(msg.channel.topic.as_str()),
+                                SensorIdentification::TopicAndType { topic, msg_type: _ } => {
+                                    topic.as_str() == &msg.channel.topic
                                 }
-                                SensorIdentification::TopicsAndType {
-                                    topics,
-                                    msg_type: _,
-                                } => topics.contains(&msg.channel.topic),
                             };
 
                             if pass {
@@ -385,30 +366,58 @@ fn collect_until(
                     .get_topic_meta(&msg.channel.topic)
                     .ok_or(anyhow!("Topic does not exist."))?;
 
-                let pass = send_sensor.iter().any(|a| match &a.id {
-                    SensorIdentification::Topics(items) => items.contains(&msg.channel.topic),
-                    SensorIdentification::Type(t) => t.as_str() == msg.channel.topic.as_str(),
-                    SensorIdentification::TopicsAndType {
-                        topics,
-                        msg_type: _,
-                    } => topics.contains(&msg.channel.topic),
-                });
+                let mut send_type = SensorType::Any;
+                let mut pass = false;
+                for sensor in send_sensor.iter() {
+                    let (n_pass, n_send_type) = match &sensor.id {
+                        SensorIdentification::Topic(item) => {
+                            (item.as_str() == &msg.channel.topic, SensorType::Any)
+                        }
+                        SensorIdentification::Type(t) => {
+                            (t.is(msg.channel.topic.as_str()), t.clone())
+                        }
+                        SensorIdentification::TopicAndType { topic, msg_type: t } => {
+                            (topic.as_str() == &msg.channel.topic, t.clone())
+                        }
+                    };
+
+                    send_type = n_send_type;
+                    pass = n_pass;
+                    if n_pass {
+                        break;
+                    }
+                }
+
                 let len_before = msgs.len();
 
                 if pass {
-                    let data = match msgtype.topic_type.as_str() {
-                        "sensor_msgs/msg/PointCloud2" => {
+                    let data = match send_type {
+                        SensorType::Lidar => {
                             let dec = cdr::deserialize::<PointCloud2>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                             SensorTypeMapped::Lidar(dec)
                         }
-                        "sensor_msgs/msg/Imu" => {
+                        SensorType::Imu => {
                             let dec = cdr::deserialize::<Imu>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             SensorTypeMapped::Imu(dec)
                         }
-                        _ => SensorTypeMapped::Any(msg.data.to_vec()),
+                        SensorType::Mixed => match msgtype.topic_type.as_str() {
+                            POINTCLOUD_ROS2_TYPE => {
+                                let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+
+                                SensorTypeMapped::Lidar(dec)
+                            }
+                            IMU_ROS2_TYPE => {
+                                let dec = cdr::deserialize::<Imu>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                SensorTypeMapped::Imu(dec)
+                            }
+                            _ => SensorTypeMapped::Any(msg.data.to_vec()),
+                        },
+                        SensorType::Any => SensorTypeMapped::Any(msg.data.to_vec()),
                     };
                     let enc = BagMsg {
                         topic: msgtype.name.clone(),
@@ -432,13 +441,13 @@ fn collect_until(
 }
 
 impl Bagfile {
-    pub fn next(&mut self, kind: &PlayKindUnited) -> anyhow::Result<Vec<(u64, BagMsg)>> {
+    pub fn next(&mut self, kind: &PlayKindUnitedPass3) -> anyhow::Result<Vec<(u64, BagMsg)>> {
         match self.buffer.as_ref() {
             Some(buffer) => {
                 let stream = mcap::MessageStream::new(buffer)?;
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
                 match kind {
-                    PlayKindUnited::SensorCount {
+                    PlayKindUnitedPass3::SensorCount {
                         sensors,
                         count,
                         trigger: _,
@@ -451,7 +460,7 @@ impl Bagfile {
                         None,
                         Some(count),
                     ),
-                    PlayKindUnited::UntilSensorCount {
+                    PlayKindUnitedPass3::UntilSensorCount {
                         sending,
                         until_sensors,
                         until_count,
@@ -511,6 +520,8 @@ impl Bagfile {
 
 #[cfg(test)]
 mod tests {
+    use rlc::PlayMode;
+
     use super::*;
 
     #[test]
@@ -520,10 +531,10 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(&PlayKindUnited::SensorCount {
-            sensor: vec![AnySensor {
+        let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
+            sensors: vec![AnySensor {
                 name: "".to_owned(),
-                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                id: SensorIdentification::Topic("/ouster/points".to_owned()),
                 short: None,
             }],
             count: PlayCount::Amount(1),
@@ -543,10 +554,10 @@ mod tests {
         let res = bag.reset(Some(path));
         assert!(res.is_ok());
 
-        let clouds = bag.next(&PlayKindUnited::SensorCount {
-            sensor: vec![AnySensor {
+        let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
+            sensors: vec![AnySensor {
                 name: "".to_owned(),
-                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                id: SensorIdentification::Topic("/ouster/points".to_owned()),
                 short: None,
             }],
             trigger: None,
@@ -558,10 +569,10 @@ mod tests {
         let clouds = clouds.unwrap();
         assert_eq!(clouds.len(), 1);
 
-        let clouds = bag.next(&PlayKindUnited::SensorCount {
-            sensor: vec![AnySensor {
+        let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
+            sensors: vec![AnySensor {
                 name: "".to_owned(),
-                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                id: SensorIdentification::Topic("/ouster/points".to_owned()),
                 short: None,
             }],
             trigger: None,
@@ -573,10 +584,10 @@ mod tests {
         let clouds = clouds.unwrap();
         assert_eq!(clouds.len(), 1);
 
-        let clouds = bag.next(&PlayKindUnited::SensorCount {
-            sensor: vec![AnySensor {
+        let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
+            sensors: vec![AnySensor {
                 name: "".to_owned(),
-                id: SensorIdentification::Topics(vec!["/ouster/points".to_owned()]),
+                id: SensorIdentification::Topic("/ouster/points".to_owned()),
                 short: None,
             }],
             trigger: None,

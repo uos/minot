@@ -10,7 +10,6 @@ use std::{
 };
 
 use anyhow::{Error, anyhow};
-use bagread::PlayKindUnitedRich;
 use log::{error, info, warn};
 use ratatui::{
     layout::Constraint,
@@ -18,12 +17,9 @@ use ratatui::{
     widgets::{Cell, Paragraph, Row, ScrollbarState, Table, TableState},
 };
 use rlc::{
-    Evaluated, PlayKindUnited, PlayMode, PlayTrigger, Rhs, Rules, VariableHistory, WindFunction,
+    Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, Rules, VariableHistory, WindFunction,
 };
-use sea::{
-    WindData,
-    net::{PacketKind, WindAt},
-};
+use sea::net::{PacketKind, WindAt};
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn core::error::Error>>;
@@ -719,7 +715,7 @@ pub struct WindCursor {
     wind_file_path: PathBuf,
     bagfile: Arc<RwLock<bagread::Bagfile>>,
     variable_cache: HashMap<rlc::Var, rlc::Rhs>,
-    dynamic_vars: HashMap<String, Vec<PlayKindUnited>>,
+    dynamic_vars: HashMap<String, Vec<PlayKindUnitedPass3>>,
 }
 
 impl Default for WindCursor {
@@ -1759,95 +1755,16 @@ impl App {
                                 }
                             }
                             rlc::WindFunction::SendFrames(kind) => {
-                                let (sending_lidar_topic_cache, sending_imu_topic_cache) = {
-                                    let wc = wind_cursor_worker.read().unwrap();
-                                    let lt = wc
-                                        .variable_cache
-                                        .get(&rlc::Var::User {
-                                            name: "topic".to_owned(),
-                                            namespace: vec!["_bag".to_owned(), "lidar".to_owned()],
-                                        })
-                                        .map(|rhs| match rhs {
-                                            Rhs::Path(v) => Ok(v.clone()),
-                                            Rhs::Val(rlc::Val::StringVal(v)) => Ok(v.clone()),
-                                            _ => Err(anyhow!("Variable has unexpected type.")),
-                                        });
-                                    let it = wc
-                                        .variable_cache
-                                        .get(&rlc::Var::User {
-                                            name: "topic".to_owned(),
-                                            namespace: vec!["_bag".to_owned(), "imu".to_owned()],
-                                        })
-                                        .map(|rhs| match rhs {
-                                            Rhs::Path(v) => Ok(v.clone()),
-                                            Rhs::Val(rlc::Val::StringVal(v)) => Ok(v.clone()),
-                                            _ => Err(anyhow!("Variable has unexpected type.")),
-                                        });
-                                    (lt, it)
-                                };
-
-                                let sending_lidar_topic =
-                                    if let Some(ltc) = sending_lidar_topic_cache {
-                                        match ltc {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                error!("{e}");
-                                                return;
-                                            }
-                                        }
-                                    } else {
-                                        match crate::coord::topic_from_eval_or_default(
-                                            &eval,
-                                            "_bag.lidar.topic",
-                                            "/cloud",
-                                        ) {
-                                            Ok(topic) => topic,
-                                            Err(e) => {
-                                                error!("{e}");
-                                                return;
-                                            }
-                                        }
-                                    };
-
-                                let sending_imu_topic = if let Some(ltc) = sending_imu_topic_cache {
-                                    match ltc {
-                                        Ok(v) => v,
-                                        Err(e) => {
-                                            error!("{e}");
-                                            return;
-                                        }
-                                    }
-                                } else {
-                                    match crate::coord::topic_from_eval_or_default(
-                                        &eval,
-                                        "_bag.imu.topic",
-                                        "/imu",
-                                    ) {
-                                        Ok(topic) => topic,
-                                        Err(e) => {
-                                            error!("{e}");
-                                            return;
-                                        }
-                                    }
-                                };
-
-                                // let proc_kind = PlayKindUnitedRich::with_topic(
-                                //     kind.clone(),
-                                //     &vec![sending_lidar_topic.as_str(), sending_imu_topic.as_str()],
-                                // );
-
-                                kind
-                                
                                 match kind {
-                                    PlayKindUnited::SensorCount {
-                                        sensor: _,
+                                    PlayKindUnitedPass3::SensorCount {
+                                        sensors: _,
                                         count: _,
                                         trigger: Some(PlayTrigger::Variable(var)),
                                         play_mode: PlayMode::Dynamic,
                                     }
-                                    | PlayKindUnited::UntilSensorCount {
+                                    | PlayKindUnitedPass3::UntilSensorCount {
                                         sending: _,
-                                        until_sensor: _,
+                                        until_sensors: _,
                                         until_count: _,
                                         trigger: Some(PlayTrigger::Variable(var)),
                                         play_mode: PlayMode::Dynamic,
@@ -1855,26 +1772,26 @@ impl App {
                                         {
                                             let mut wc = wind_cursor_worker.write().unwrap();
                                             let kind = match kind {
-                                                PlayKindUnited::SensorCount {
-                                                    sensor,
+                                                PlayKindUnitedPass3::SensorCount {
+                                                    sensors,
                                                     count,
                                                     trigger: _,
                                                     play_mode: _,
-                                                } => PlayKindUnited::SensorCount {
-                                                    sensor: sensor.clone(),
+                                                } => PlayKindUnitedPass3::SensorCount {
+                                                    sensors: sensors.clone(),
                                                     count: count.clone(),
                                                     trigger: None,
                                                     play_mode: PlayMode::Fix,
                                                 },
-                                                PlayKindUnited::UntilSensorCount {
+                                                PlayKindUnitedPass3::UntilSensorCount {
                                                     sending,
-                                                    until_sensor,
+                                                    until_sensors,
                                                     until_count,
                                                     trigger: _,
                                                     play_mode: _,
-                                                } => PlayKindUnited::UntilSensorCount {
+                                                } => PlayKindUnitedPass3::UntilSensorCount {
                                                     sending: sending.clone(),
-                                                    until_sensor: until_sensor.clone(),
+                                                    until_sensors: until_sensors.clone(),
                                                     until_count: until_count.clone(),
                                                     trigger: None,
                                                     play_mode: PlayMode::Fix,
@@ -1909,8 +1826,9 @@ impl App {
                                 let start_bag_read = Instant::now();
                                 info!("iterating on bagfile...");
                                 let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+                                let ka = kind.clone();
                                 std::thread::spawn(move || {
-                                    let r = bag_blocking.write().unwrap().next(&kind.clone());
+                                    let r = bag_blocking.write().unwrap().next(&ka);
                                     res_tx.send(r).unwrap();
                                 });
 
@@ -1938,39 +1856,39 @@ impl App {
                                     end_time.replace(t);
 
                                     let diff = end_time.unwrap() - start_time.unwrap();
-                                    let wind = match msg {
-                                        bagread::BagMsg::Cloud(point_cloud2_msg) => {
-                                            (diff, WindData::Pointcloud(point_cloud2_msg))
-                                        }
-                                        bagread::BagMsg::Imu(imu_msg) => (
-                                            diff,
-                                            WindData::Imu(sea::ImuMsg {
-                                                header: sea::Header {
-                                                    seq: imu_msg.header.seq,
-                                                    stamp: sea::TimeMsg {
-                                                        sec: imu_msg.header.stamp.sec,
-                                                        nanosec: imu_msg.header.stamp.nanosec,
-                                                    },
-                                                    frame_id: imu_msg.header.frame_id,
-                                                },
-                                                timestamp_sec: sea::TimeMsg {
-                                                    sec: imu_msg.timestamp_sec.sec,
-                                                    nanosec: imu_msg.timestamp_sec.nanosec,
-                                                },
-                                                orientation: imu_msg.orientation,
-                                                orientation_covariance: imu_msg
-                                                    .orientation_covariance,
-                                                angular_velocity: imu_msg.angular_velocity,
-                                                angular_velocity_covariance: imu_msg
-                                                    .angular_velocity_covariance,
-                                                linear_acceleration: imu_msg.linear_acceleration,
-                                                linear_acceleration_covariance: imu_msg
-                                                    .linear_acceleration_covariance,
-                                            }),
-                                        ),
-                                    };
+                                    // let wind = match msg {
+                                    //     bagread::BagMsg::Cloud(point_cloud2_msg) => {
+                                    //         (diff, WindData::Pointcloud(point_cloud2_msg))
+                                    //     }
+                                    //     bagread::BagMsg::Imu(imu_msg) => (
+                                    //         diff,
+                                    //         WindData::Imu(sea::ImuMsg {
+                                    //             header: sea::Header {
+                                    //                 seq: imu_msg.header.seq,
+                                    //                 stamp: sea::TimeMsg {
+                                    //                     sec: imu_msg.header.stamp.sec,
+                                    //                     nanosec: imu_msg.header.stamp.nanosec,
+                                    //                 },
+                                    //                 frame_id: imu_msg.header.frame_id,
+                                    //             },
+                                    //             timestamp_sec: sea::TimeMsg {
+                                    //                 sec: imu_msg.timestamp_sec.sec,
+                                    //                 nanosec: imu_msg.timestamp_sec.nanosec,
+                                    //             },
+                                    //             orientation: imu_msg.orientation,
+                                    //             orientation_covariance: imu_msg
+                                    //                 .orientation_covariance,
+                                    //             angular_velocity: imu_msg.angular_velocity,
+                                    //             angular_velocity_covariance: imu_msg
+                                    //                 .angular_velocity_covariance,
+                                    //             linear_acceleration: imu_msg.linear_acceleration,
+                                    //             linear_acceleration_covariance: imu_msg
+                                    //                 .linear_acceleration_covariance,
+                                    //         }),
+                                    //     ),
+                                    // };
 
-                                    wind_data.push(wind);
+                                    wind_data.push((diff, msg));
                                 }
 
                                 if wind_data.is_empty() {
@@ -1979,15 +1897,15 @@ impl App {
                                 }
 
                                 let trigger = match &kind {
-                                    rlc::PlayKindUnited::SensorCount {
-                                        sensor: _,
+                                    rlc::PlayKindUnitedPass3::SensorCount {
+                                        sensors: _,
                                         count: _,
                                         trigger,
                                         play_mode,
                                     }
-                                    | rlc::PlayKindUnited::UntilSensorCount {
+                                    | rlc::PlayKindUnitedPass3::UntilSensorCount {
                                         sending: _,
-                                        until_sensor: _,
+                                        until_sensors: _,
                                         until_count: _,
                                         trigger,
                                         play_mode,
@@ -2363,19 +2281,19 @@ impl App {
         };
     }
 
-    fn timestamp_to_millis(t: &bagread::TimeMsg) -> u64 {
-        t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
-    }
+    // fn timestamp_to_millis(t: &bagread::TimeMsg) -> u64 {
+    //     t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
+    // }
 
-    fn timestamp_to_millis_rpcl2(t: &ros_pointcloud2::ros::TimeMsg) -> u64 {
-        t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
-    }
+    // fn timestamp_to_millis_rpcl2(t: &ros_pointcloud2::ros::TimeMsg) -> u64 {
+    //     t.sec as u64 * 1_000 + t.nanosec as u64 / 1_000_000
+    // }
 
     pub async fn wind_fire_at_current_cursor(
         send_coordinator: tokio::sync::mpsc::Sender<PacketKind>,
         wind_cursor_states: Arc<RwLock<WindCursor>>,
         wind_queue: tokio::sync::mpsc::UnboundedSender<Evaluated>,
-        state: Option<Vec<PlayKindUnited>>,
+        state: Option<Vec<PlayKindUnitedPass3>>,
     ) {
         let state = state.map(|pkus| {
             let wf = pkus

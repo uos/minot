@@ -2739,6 +2739,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bagread",
  "bimap",
  "bincode",
  "env_logger",
