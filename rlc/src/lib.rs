@@ -2585,7 +2585,7 @@ pub fn compile_code_with_state(
                 .map(|kind| kind.into())
                 .collect::<Vec<StatementKindOwnedPass1>>();
 
-            // Pass 1
+            // Pass 1 -- parsing included files and expanding namespaces
             let mut ast = do_pass1(owned, source_code_parent_dir)?; // could print parse errors from included files
 
             let mut rules = Vec::new();

@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use byteorder::LittleEndian;
+use ros2_client::ros2;
 use ros2_client::{NodeName, NodeOptions};
-use ros2_client::{Publisher, ros2};
 use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
 use ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2;
 
@@ -72,6 +74,16 @@ impl From<crate::Qos> for ros2::QosPolicies {
     }
 }
 
+pub fn split_package_type(path: &str) -> (String, String) {
+    let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    let package_name = components.first().unwrap_or(&"").to_string();
+
+    let type_name = components.last().unwrap_or(&"").to_string();
+
+    (package_name, type_name)
+}
+
 pub fn split_path(path: &str) -> (String, String) {
     let components: Vec<&str> = path.split('/').collect();
 
@@ -114,18 +126,6 @@ async fn main() -> anyhow::Result<()> {
 
     let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
 
-    let imu_qos = Qos::try_from(rlc_wind_ns.resolve("_imu.qos")?.map_or(
-        Ok("sensor".to_owned()),
-        |rhs| {
-            Ok(match rhs {
-                rlc::Rhs::Val(rlc::Val::StringVal(topic)) => topic,
-                _ => {
-                    return Err(anyhow!("Unexpected type for _imu.qos"));
-                }
-            })
-        },
-    )?)?;
-
     let cloud_qos = Qos::try_from(rlc_wind_ns.resolve("_lidar.qos")?.map_or(
         Ok("sensor".to_owned()),
         |rhs| {
@@ -156,13 +156,7 @@ async fn main() -> anyhow::Result<()> {
         NodeOptions::new().enable_rosout(true),
     )?;
 
-    // let mut publisher = HashMap::new();
-
-    let mut cloud_publisher: Option<Publisher<PointCloud2>> = None;
-    let mut current_cloud_topic = ros2_client::Name::new("/wind", "wind_cloud").unwrap();
-
-    let mut imu_publisher: Option<Publisher<Imu>> = None;
-    let mut current_imu_topic = ros2_client::Name::new("/wind", "wind_imu").unwrap();
+    let mut publishers: HashMap<(String, String), ros2_client::PublisherRaw> = HashMap::new();
 
     let mut wind_receiver = wind(&wind_name).await?;
 
@@ -170,64 +164,50 @@ async fn main() -> anyhow::Result<()> {
         for data in wind_data {
             let topic_parse = split_path(&data.topic);
             let wanted_topic = ros2_client::Name::new(&topic_parse.0, &topic_parse.1).unwrap();
-            match data.data {
-                SensorTypeMapped::Lidar(l) => {
-                    let mut trigger_repub = false;
-                    if wanted_topic != current_cloud_topic {
-                        current_cloud_topic = wanted_topic;
-                        trigger_repub = true;
-                    }
-                    if cloud_publisher.is_none() {
-                        trigger_repub = true;
-                    }
-                    if trigger_repub {
-                        cloud_publisher = Some(
-                            node.create_publisher(
-                                &node
-                                    .create_topic(
-                                        &current_cloud_topic,
-                                        ros2_client::MessageTypeName::new(
-                                            "sensor_msgs",
-                                            "PointCloud2",
-                                        ),
-                                        &cloud_qos.into(),
-                                    )
-                                    .unwrap(),
-                                None,
+            let (package_name, type_name) = split_package_type(&data.msg_type);
+            let pub_type = ros2_client::MessageTypeName::new(&package_name, &type_name);
+            let mut existing_pubber = publishers.get(&topic_parse);
+            if existing_pubber.is_none() {
+                let pubber = node
+                    .create_publisher_raw(
+                        &node
+                            .create_topic(
+                                &wanted_topic,
+                                pub_type,
+                                &cloud_qos.into(), // TODO use QOS from message metadata
                             )
                             .unwrap(),
-                        );
-                    }
-                    cloud_publisher.as_ref().unwrap().async_publish(l).await?;
+                        None,
+                    )
+                    .unwrap();
+                publishers.insert(topic_parse.clone(), pubber);
+                existing_pubber = Some(
+                    publishers
+                        .get(&topic_parse)
+                        .expect("Just inserted the line before"),
+                );
+            }
+            let pubber = existing_pubber.expect("Should be inserted manually if not exists.");
+            match data.data {
+                SensorTypeMapped::Lidar(l) => {
+                    let raw = cdr_encoding::to_vec::<PointCloud2, LittleEndian>(&l)
+                        .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
+
+                    pubber.async_publish(raw).await?;
+
                     info!("published cloud");
                 }
                 SensorTypeMapped::Imu(imu) => {
-                    let mut trigger_repub = false;
-                    if wanted_topic != current_imu_topic {
-                        current_imu_topic = wanted_topic;
-                        trigger_repub = true;
-                    }
-                    if imu_publisher.is_none() {
-                        trigger_repub = true;
-                    }
-                    if trigger_repub {
-                        imu_publisher = Some(
-                            node.create_publisher(
-                                &node
-                                    .create_topic(
-                                        &current_imu_topic,
-                                        ros2_client::MessageTypeName::new("sensor_msgs", "Imu"),
-                                        &imu_qos.into(),
-                                    )
-                                    .unwrap(),
-                                None,
-                            )
-                            .unwrap(),
-                        );
-                    }
-                    imu_publisher.as_ref().unwrap().async_publish(imu).await?;
+                    let raw = cdr_encoding::to_vec::<Imu, LittleEndian>(&imu)
+                        .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
+
+                    pubber.async_publish(raw).await?;
+                    info!("published imu");
                 }
-                SensorTypeMapped::Any(_) => todo!(), // TODO raw publish, then always manually encode the imu and laser messages as well and use hashmap over raw publishers for managing new ones
+                SensorTypeMapped::Any(raw_data) => {
+                    pubber.async_publish(raw_data).await?;
+                    info!("published raw");
+                }
             }
         }
     }

@@ -3,7 +3,7 @@ mod roslibrustcloud;
 use anyhow::anyhow;
 use log::error;
 use roslibrust::{codegen::Time, ros1::NodeHandle};
-use roslibrustcloud::*;
+use roslibrustcloud::{sensor_msgs::PointField, *};
 use wind::wind;
 
 fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
@@ -44,15 +44,41 @@ async fn main() -> anyhow::Result<()> {
 
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
-            match data {
-                wind::sea::WindData::Pointcloud(point_cloud2_msg) => {
-                    let msg: sensor_msgs::PointCloud2 = point_cloud2_msg.into();
+            match data.data {
+                sea::SensorTypeMapped::Lidar(cloud_msg) => {
+                    let msg = sensor_msgs::PointCloud2 {
+                        header: std_msgs::Header {
+                            seq: 0,
+                            stamp: Time {
+                                secs: cloud_msg.header.stamp.sec,
+                                nsecs: i32::try_from(cloud_msg.header.stamp.nanosec)?,
+                            },
+                            frame_id: cloud_msg.header.frame_id,
+                        },
+                        height: cloud_msg.height,
+                        width: cloud_msg.width,
+                        fields: cloud_msg
+                            .fields
+                            .into_iter()
+                            .map(|pf| PointField {
+                                name: pf.name,
+                                offset: pf.offset,
+                                datatype: pf.datatype,
+                                count: pf.count,
+                            })
+                            .collect::<Vec<_>>(),
+                        is_bigendian: cloud_msg.is_bigendian,
+                        point_step: cloud_msg.point_step,
+                        row_step: cloud_msg.row_step,
+                        data: cloud_msg.data,
+                        is_dense: cloud_msg.is_dense,
+                    };
                     cloud_publisher.publish(&msg).await?;
                 }
-                wind::sea::WindData::Imu(imu_msg) => {
+                sea::SensorTypeMapped::Imu(imu_msg) => {
                     let msg = sensor_msgs::Imu {
                         header: std_msgs::Header {
-                            seq: imu_msg.header.seq,
+                            seq: 0,
                             stamp: Time {
                                 secs: imu_msg.header.stamp.sec,
                                 nsecs: i32::try_from(imu_msg.header.stamp.nanosec)?,
@@ -61,9 +87,9 @@ async fn main() -> anyhow::Result<()> {
                         },
                         orientation: {
                             geometry_msgs::Quaternion {
-                                x: imu_msg.orientation.i,
-                                y: imu_msg.orientation.j,
-                                z: imu_msg.orientation.k,
+                                x: imu_msg.orientation.x,
+                                y: imu_msg.orientation.y,
+                                z: imu_msg.orientation.z,
                                 w: imu_msg.orientation.w,
                             }
                         },
@@ -84,15 +110,15 @@ async fn main() -> anyhow::Result<()> {
                             z: imu_msg.angular_velocity.z,
                         },
                         angular_velocity_covariance: [
-                            imu_msg.angular_velocity[0],
-                            imu_msg.angular_velocity[1],
-                            imu_msg.angular_velocity[2],
-                            imu_msg.angular_velocity[3],
-                            imu_msg.angular_velocity[4],
-                            imu_msg.angular_velocity[5],
-                            imu_msg.angular_velocity[6],
-                            imu_msg.angular_velocity[7],
-                            imu_msg.angular_velocity[8],
+                            imu_msg.angular_velocity_covariance[0],
+                            imu_msg.angular_velocity_covariance[1],
+                            imu_msg.angular_velocity_covariance[2],
+                            imu_msg.angular_velocity_covariance[3],
+                            imu_msg.angular_velocity_covariance[4],
+                            imu_msg.angular_velocity_covariance[5],
+                            imu_msg.angular_velocity_covariance[6],
+                            imu_msg.angular_velocity_covariance[7],
+                            imu_msg.angular_velocity_covariance[8],
                         ],
                         linear_acceleration: geometry_msgs::Vector3 {
                             x: imu_msg.linear_acceleration.x,
@@ -112,6 +138,9 @@ async fn main() -> anyhow::Result<()> {
                         ],
                     };
                     imu_publisher.publish(&msg).await?;
+                }
+                sea::SensorTypeMapped::Any(_) => {
+                    error!("Any-Types are not supported for ROS1.")
                 }
             }
         }

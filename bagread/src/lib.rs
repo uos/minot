@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, anyhow};
+use byteorder::LittleEndian;
 use mcap::{McapError, Message};
 use memmap2::Mmap;
 use rlc::{
@@ -393,26 +394,31 @@ fn collect_until(
                 if pass {
                     let data = match send_type {
                         SensorType::Lidar => {
-                            let dec = cdr::deserialize::<PointCloud2>(&msg.data)
-                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            let (dec, _) =
+                                cdr_encoding::from_bytes::<PointCloud2, LittleEndian>(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                             SensorTypeMapped::Lidar(dec)
                         }
                         SensorType::Imu => {
-                            let dec = cdr::deserialize::<Imu>(&msg.data)
+                            let (dec, _) = cdr_encoding::from_bytes::<Imu, LittleEndian>(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             SensorTypeMapped::Imu(dec)
                         }
                         SensorType::Mixed => match msgtype.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
-                                let dec = cdr::deserialize::<PointCloud2>(&msg.data)
+                                let (dec, _) =
+                                    cdr_encoding::from_bytes::<PointCloud2, LittleEndian>(
+                                        &msg.data,
+                                    )
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                                 SensorTypeMapped::Lidar(dec)
                             }
                             IMU_ROS2_TYPE => {
-                                let dec = cdr::deserialize::<Imu>(&msg.data)
-                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                let (dec, _) =
+                                    cdr_encoding::from_bytes::<Imu, LittleEndian>(&msg.data)
+                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 SensorTypeMapped::Imu(dec)
                             }
                             _ => SensorTypeMapped::Any(msg.data.to_vec()),

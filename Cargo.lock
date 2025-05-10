@@ -204,8 +204,9 @@ name = "bagread"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "camino",
- "cdr",
+ "cdr-encoding",
  "mcap",
  "memmap2",
  "nalgebra",
@@ -360,16 +361,6 @@ dependencies = [
  "jobserver",
  "libc",
  "shlex",
-]
-
-[[package]]
-name = "cdr"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9617422bf43fde9280707a7e90f8f7494389c182f5c70b0f67592d0f06d41dfa"
-dependencies = [
- "byteorder",
- "serde",
 ]
 
 [[package]]
@@ -1371,6 +1362,15 @@ name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -2450,12 +2450,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "ros2-client"
+version = "0.8.1"
+source = "git+https://github.com/stelzo/ros2-client?branch=raw#087a4f6c09daf53c3aac7172d65cf373aaa015da"
+dependencies = [
+ "async-channel",
+ "bstr",
+ "bytes",
+ "cdr-encoding-size",
+ "chrono",
+ "clap",
+ "futures",
+ "itertools 0.14.0",
+ "lazy_static",
+ "libc",
+ "log",
+ "mio 0.6.23",
+ "mio-extras",
+ "nom 8.0.0",
+ "pin-utils",
+ "rustdds",
+ "serde",
+ "serde_repr",
+ "tracing",
+ "uuid",
+ "widestring",
+]
+
+[[package]]
 name = "ros2-interfaces-jazzy"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db1c0fc5acca5204f07f9812edccff8757a308a90773d292ea8d6723a6afcaa7"
 dependencies = [
- "ros2-client",
+ "ros2-client 0.7.6",
  "serde",
  "serde_with",
 ]
@@ -3345,7 +3373,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "395ae124c09f9e6918a2310af6038fba074bcf474ac352496d5910dd59a2226d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
 ]
 
 [[package]]
@@ -3712,11 +3752,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
+ "byteorder",
+ "cdr-encoding",
  "env_logger",
  "log",
  "nalgebra",
  "rlc",
- "ros2-client",
+ "ros2-client 0.8.1",
  "ros2-interfaces-jazzy",
  "ros_pointcloud2",
  "roslibrust",
