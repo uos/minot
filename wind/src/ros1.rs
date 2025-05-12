@@ -1,10 +1,37 @@
 mod roslibrustcloud;
 
 use anyhow::anyhow;
-use log::error;
+use log::{error, info};
 use roslibrust::{codegen::Time, ros1::NodeHandle};
 use roslibrustcloud::{sensor_msgs::PointField, *};
-use wind::wind;
+use sea::{Ship, ShipKind};
+use tokio::sync::mpsc::UnboundedReceiver;
+
+pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
+    let kind = ShipKind::Wind(name.to_string());
+    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
+    info!("Wind initialized with ship {:?}", kind);
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    tokio::spawn(async move {
+        loop {
+            match ship.wait_for_wind().await {
+                Ok(wind_data) => {
+                    tx.send(wind_data).unwrap();
+                }
+                Err(e) => {
+                    error!("{}", e);
+                    continue;
+                }
+            }
+        }
+    });
+
+    tokio::task::yield_now().await;
+
+    Ok(rx)
+}
 
 fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
     match std::env::var(key) {

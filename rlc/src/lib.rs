@@ -12,7 +12,7 @@ use chumsky::{
     prelude::*,
 };
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Rules(std::collections::HashMap<String, Vec<VariableHuman>>);
 
 pub const COMPARE_NODE_NAME: &'static str = "#lhtui";
@@ -515,6 +515,16 @@ pub struct Evaluated {
     pub rules: Rules,
     pub wind: Vec<WindFunction>,
     pub vars: VariableHistory,
+}
+
+impl Evaluated {
+    pub fn new() -> Self {
+        Self {
+            rules: Rules::new(),
+            wind: vec![],
+            vars: VariableHistory::new(vec![]),
+        }
+    }
 }
 
 #[derive(Debug)]

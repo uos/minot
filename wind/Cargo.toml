@@ -21,14 +21,14 @@ ros_pointcloud2.workspace = true
 async-trait.workspace = true
 
 roslibrust = { version = "0.12.2", features = ["ros1", "macro"] }
-ros2-client = { version = "0.8.1", git = "https://github.com/stelzo/ros2-client", branch = "raw" }
+ros2-client.workspace = true
 ros2-interfaces-jazzy = { version = "0.0.4", features = [
-    "std_msgs",
-    "geometry_msgs",
-    "sensor_msgs",
-    "builtin_interfaces",
+  "std_msgs",
+  "geometry_msgs",
+  "sensor_msgs",
+  "builtin_interfaces",
 ] }
-cdr-encoding = { version="0.10" }
+cdr-encoding = { version = "0.10" }
 byteorder = { version = "1.3", features = ["i128"] }
 
 [[bin]]

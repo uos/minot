@@ -211,6 +211,7 @@ dependencies = [
  "memmap2",
  "nalgebra",
  "rlc",
+ "ros2-client 0.8.1",
  "ros2-interfaces-jazzy",
  "ros_pointcloud2",
  "serde",
@@ -1494,6 +1495,7 @@ dependencies = [
  "serde",
  "tokio",
  "tui-logger",
+ "wind",
 ]
 
 [[package]]

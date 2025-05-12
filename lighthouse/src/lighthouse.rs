@@ -22,26 +22,107 @@ use crate::{
     tui::Tui,
 };
 
+const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tui_logger::init_logger(log::LevelFilter::Info).unwrap();
-    tui_logger::set_default_level(log::LevelFilter::Info);
-
     let file = std::env::args().nth(1).map(|f| PathBuf::from_str(&f));
     let file = match file {
         Some(pathres) => Some(pathres?),
         None => None,
     };
 
-    let rules = match &file {
+    let eval = match &file {
         Some(path) => {
             println!("Compiling {:#?}", &path);
             let rats = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
-            rats.rules
+            rats
         }
-        None => rlc::Rules::new(),
+        None => rlc::Evaluated::new(),
     };
+    // TODO check if we can really give an empty eval when everything is embedded
+    let wind_file = if let Some(rhs) = eval.vars.resolve("_wind_file")? {
+        match rhs {
+            rlc::Rhs::Val(rlc::Val::StringVal(file)) | rlc::Rhs::Path(file) => Ok(Some(file)),
+            _ => Err(anyhow!("Expected _wind_file to be path or string.")),
+        }
+    } else {
+        Ok(None)
+    }?;
 
+    // TODO load wind_file relative to the wind file in "file"
+
+    let log_level = if let Some(rhs) = eval.vars.resolve("_log_level")? {
+        match rhs {
+            rlc::Rhs::Val(rlc::Val::StringVal(v)) => match v.as_str() {
+                "info" => Ok(log::LevelFilter::Info),
+                "warn" => Ok(log::LevelFilter::Warn),
+                "error" => Ok(log::LevelFilter::Error),
+                _ => Err(anyhow!("unsupported log filter")),
+            },
+            _ => Err(anyhow!("Expected info, warn, error for _log_level.")),
+        }
+    } else {
+        Ok(log::LevelFilter::Info)
+    }?;
+    tui_logger::init_logger(log_level).unwrap();
+    // tui_logger::set_env_filter_from_string(&log_level);
+    // tui_logger::set_default_level(log::LevelFilter::Error);
+
+    #[cfg(feature = "embed-coordinator")]
+    {
+        let locked_start = if let Some(rhs) = eval.vars.resolve("_start_locked")? {
+            match rhs {
+                rlc::Rhs::Val(rlc::Val::BoolVal(locked)) => Ok(locked),
+                _ => Err(anyhow!("Expected bool for _start_locked.")),
+            }
+        } else {
+            Ok(false)
+        }?;
+
+        #[allow(unused_mut)]
+        let mut clients = coord::get_clients(&eval)?;
+
+        #[cfg(feature = "embed-coordinator")]
+        {
+            let wind_name = wind::ros2::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+            clients.insert(wind_name);
+        }
+
+        coord::run_coordinator(locked_start, clients, eval.rules.clone());
+    }
+
+    #[cfg(feature = "embed-ros2-turbine")]
+    {
+        let wind_name = wind::ros2::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+        let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
+
+        let namespace =
+            rlc_wind_ns
+                .resolve("namespace")?
+                .map_or(Ok("/wind".to_owned()), |rhs| {
+                    Ok(match rhs {
+                        rlc::Rhs::Path(topic) => topic,
+                        _ => {
+                            return Err(anyhow!(
+                                "Unexpected type for _lidar.topic, expected Path."
+                            ));
+                        }
+                    })
+                })?;
+
+        tokio::spawn(async move {
+            let res = wind::ros2::run_dyn_wind_ros2(&namespace, &wind_name).await;
+            match res {
+                Ok(_) => {} // will never return
+                Err(e) => {
+                    error!("Error in embedded Wind. Reload the App. {e}")
+                }
+            }
+        });
+    }
+
+    let rules = eval.rules;
     println!("Searching for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init
     let comparer =
         sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)

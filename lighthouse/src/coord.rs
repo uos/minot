@@ -66,95 +66,7 @@ struct WindTask {
     already_seen: bool,
 }
 
-#[tokio::main(flavor = "multi_thread")]
-pub async fn main() -> anyhow::Result<()> {
-    let env = env_logger::Env::new().filter_or("LH_LOG", "off");
-    env_logger::Builder::from_env(env).init();
-
-    // file can be rules or wind set by _wind var
-    let filepath = std::env::args().nth(1);
-
-    let eval = if let Some(fp) = filepath {
-        let rules_file = PathBuf::from_str(&fp)?;
-        let rules_file = std::fs::canonicalize(&rules_file)?;
-        rlc::compile_file(&rules_file, None, None)?
-    } else {
-        rlc::Evaluated {
-            rules: Rules::new(),
-            wind: Vec::new(),
-            vars: VariableHistory::new(Vec::new()),
-        }
-    };
-
-    let locked_start = eval.vars.resolve("_start_locked")?;
-    let locked_start = if let Some(rhs) = locked_start {
-        match rhs {
-            rlc::Rhs::Val(rlc::Val::BoolVal(locked)) => Ok(locked),
-            _ => Err(anyhow!("Expected bool for _start_locked.")),
-        }
-    } else {
-        Ok(false)
-    }?;
-
-    let rules = eval.rules;
-    let mut clients = HashSet::new();
-
-    // ships from rules
-    for (_, inner_clients) in rules.raw().iter() {
-        inner_clients.iter().for_each(|client| {
-            if let Some(strat) = &client.strategy {
-                match strat {
-                    ActionPlan::Sail => {}
-                    ActionPlan::Shoot { target } => {
-                        clients.extend(target.clone());
-                    }
-                    ActionPlan::Catch { source } => {
-                        clients.insert(source.clone());
-                    }
-                }
-            }
-        });
-    }
-
-    // find all winds using variables
-    let winds = eval.vars.resolve("_wind")?;
-    let winds = if let Some(winds) = winds {
-        match winds {
-            rlc::Rhs::Array(items)
-                if items.iter().all(|item| match **item {
-                    rlc::Rhs::Val(rlc::Val::StringVal(_)) => true,
-                    _ => false,
-                }) =>
-            {
-                items
-                    .into_iter()
-                    .map(|item| match *item {
-                        rlc::Rhs::Val(rlc::Val::StringVal(wind)) => wind,
-                        _ => {
-                            unreachable!("Catched in higher match.")
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            }
-            rlc::Rhs::Val(rlc::Val::StringVal(single_wind)) => {
-                vec![single_wind]
-            }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Expected _wind variable to be String or Array<String>"
-                ));
-            }
-        }
-    } else {
-        vec![]
-    };
-
-    clients.extend(winds);
-
-    // TODO On exit: disconnect all members of the network.
-    // only use the rats that are mentioned. filter out the rest.
-    // Winds are not mapped to rats, so they won't be filtered.
-
+pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rules) {
     let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
     let rules_changer = std::sync::Arc::clone(&rules);
 
@@ -686,21 +598,98 @@ pub async fn main() -> anyhow::Result<()> {
         }
         debug!("coord_rx closed");
     });
+}
 
-    // Wind Sender Task
+pub fn get_clients(eval: &rlc::Evaluated) -> anyhow::Result<HashSet<String>> {
+    let mut clients = HashSet::new();
 
-    // The bag reader is a different task that can be notified with a channel what to do
-    //let bagfile = "bagfile";
-    // TODO bag reader task, create random data for now, bagfile later!
+    // ships from rules
+    for (_, inner_clients) in eval.rules.raw().iter() {
+        inner_clients.iter().for_each(|client| {
+            if let Some(strat) = &client.strategy {
+                match strat {
+                    ActionPlan::Sail => {}
+                    ActionPlan::Shoot { target } => {
+                        clients.extend(target.clone());
+                    }
+                    ActionPlan::Catch { source } => {
+                        clients.insert(source.clone());
+                    }
+                }
+            }
+        });
+    }
 
-    // let rand_imu = ImuMsg::default();
-    // let imu_data = sea::WindData::Imu(rand_imu);
-    // wind_tx.send(imu_data).unwrap();
+    // find all winds using variables
+    let winds = eval.vars.resolve("_wind")?;
+    let winds = if let Some(winds) = winds {
+        match winds {
+            rlc::Rhs::Array(items)
+                if items.iter().all(|item| match **item {
+                    rlc::Rhs::Val(rlc::Val::StringVal(_)) => true,
+                    _ => false,
+                }) =>
+            {
+                items
+                    .into_iter()
+                    .map(|item| match *item {
+                        rlc::Rhs::Val(rlc::Val::StringVal(wind)) => wind,
+                        _ => {
+                            unreachable!("Catched in higher match.")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+            rlc::Rhs::Val(rlc::Val::StringVal(single_wind)) => {
+                vec![single_wind]
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Expected _wind variable to be String or Array<String>"
+                ));
+            }
+        }
+    } else {
+        vec![]
+    };
 
-    // let rand_points = vec![PointXYZ::new(1.0, 1.0, 1.0)];
-    // let rand_points = PointCloud2Msg::try_from_vec(rand_points).unwrap();
-    // let lidar_data = sea::WindData::Pointcloud(rand_points);
-    // wind_tx.send(lidar_data).unwrap();
+    clients.extend(winds);
+
+    Ok(clients)
+}
+
+#[tokio::main(flavor = "multi_thread")]
+pub async fn main() -> anyhow::Result<()> {
+    let env = env_logger::Env::new().filter_or("LH_LOG", "off");
+    env_logger::Builder::from_env(env).init();
+
+    // file can be rules or wind set by _wind var
+    let filepath = std::env::args().nth(1);
+
+    let eval = if let Some(fp) = filepath {
+        let rules_file = PathBuf::from_str(&fp)?;
+        let rules_file = std::fs::canonicalize(&rules_file)?;
+        rlc::compile_file(&rules_file, None, None)?
+    } else {
+        rlc::Evaluated {
+            rules: Rules::new(),
+            wind: Vec::new(),
+            vars: VariableHistory::new(Vec::new()),
+        }
+    };
+
+    let locked_start = eval.vars.resolve("_start_locked")?;
+    let locked_start = if let Some(rhs) = locked_start {
+        match rhs {
+            rlc::Rhs::Val(rlc::Val::BoolVal(locked)) => Ok(locked),
+            _ => Err(anyhow!("Expected bool for _start_locked.")),
+        }
+    } else {
+        Ok(false)
+    }?;
+
+    let clients = get_clients(&eval)?;
+    run_coordinator(locked_start, clients, eval.rules);
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {

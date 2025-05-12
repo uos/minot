@@ -26,6 +26,8 @@ rosbag2-rs = "0.2.1"
 chrono = "0.4.40"
 tui-logger = "0.17.2"
 
+wind = { optional = true, workspace = true }
+
 [profile.release]
 lto = true          # Link Time Optimization
 codegen-units = 1   # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
@@ -45,3 +47,8 @@ name = "lh"
 path = "src/lighthouse.rs"
 test = false
 bench = false
+
+[features]
+default = ["embed-coordinator", "embed-ros2-turbine"]
+embed-coordinator = []
+embed-ros2-turbine = ["dep:wind"]

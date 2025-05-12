@@ -1,18 +1,27 @@
+use std::str::FromStr;
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, anyhow};
 use byteorder::LittleEndian;
 use mcap::{McapError, Message};
 use memmap2::Mmap;
+use qos::{
+    RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
+};
 use rlc::{
     AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
     SensorIdentification, SensorType,
 };
 pub use ros_pointcloud2::PointCloud2Msg;
+use ros2_client::ros2::policy::{Durability, History, Reliability};
+use ros2_client::ros2::{self, Duration};
 use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
+
+mod qos;
+pub use Qos::*;
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TimeMsg {
@@ -91,25 +100,23 @@ pub struct TopicMetadata {
 
 // --- QoS Profile Structs (New) ---
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize, Clone)]
 pub struct QosProfile {
-    // Using i32 for enum-like values, could be mapped to actual enums if needed
-    pub history: i32,
+    pub history: String,
     pub depth: i32,
-    pub reliability: i32,
-    pub durability: i32,
+    pub reliability: String,
+    pub durability: String,
     pub deadline: QosTime,
     pub lifespan: QosTime,
-    pub liveliness: i32,
+    pub liveliness: String,
     pub liveliness_lease_duration: QosTime,
     pub avoid_ros_namespace_conventions: bool,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)] // Added Clone, Copy
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)] // Added Clone, Copy
 pub struct QosTime {
-    // Using i64/u32 based on typical ROS time representations and potential values
-    pub sec: i64,
-    pub nsec: u32,
+    pub sec: u64,
+    pub nsec: u64,
 }
 
 // --- File Information Structs ---
@@ -192,38 +199,8 @@ pub struct BagMsg {
     pub topic: String,
     pub msg_type: String,
     pub data: SensorTypeMapped,
+    pub qos: Option<Qos>,
 }
-
-// impl PlayKindUnitedRich {
-//     pub fn with_topic(src: PlayKindUnited, topics: &[&str]) -> Self {
-//         match src {
-//             PlayKindUnited::SensorCount {
-//                 sensor,
-//                 count,
-//                 trigger,
-//                 play_mode,
-//             } => PlayKindUnitedRich::SensorCount {
-//                 sensor: SensorTypeRich::with_topic(&sensor, topics),
-//                 count,
-//                 trigger,
-//                 play_mode,
-//             },
-//             PlayKindUnited::UntilSensorCount {
-//                 sending,
-//                 until_sensor,
-//                 until_count,
-//                 trigger,
-//                 play_mode,
-//             } => PlayKindUnitedRich::UntilSensorCount {
-//                 sending: SensorTypeRich::with_topic(&sending, topics),
-//                 until_sensor: SensorTypeRich::with_topic(&until_sensor, topics),
-//                 until_count,
-//                 trigger,
-//                 play_mode,
-//             },
-//         }
-//     }
-// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SensorTypeMapped {
@@ -363,7 +340,7 @@ fn collect_until(
                     None => {}
                 }
 
-                let msgtype = metadata
+                let topic_meta = metadata
                     .get_topic_meta(&msg.channel.topic)
                     .ok_or(anyhow!("Topic does not exist."))?;
 
@@ -405,7 +382,7 @@ fn collect_until(
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             SensorTypeMapped::Imu(dec)
                         }
-                        SensorType::Mixed => match msgtype.topic_type.as_str() {
+                        SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
                                 let (dec, _) =
                                     cdr_encoding::from_bytes::<PointCloud2, LittleEndian>(
@@ -425,10 +402,18 @@ fn collect_until(
                         },
                         SensorType::Any => SensorTypeMapped::Any(msg.data.to_vec()),
                     };
+                    let qos = if topic_meta.offered_qos_profiles.len() == 1 {
+                        // TODO override with settings from ratslang file
+                        Some(Qos::Cutom(topic_meta.offered_qos_profiles[0].clone()))
+                    } else {
+                        // Some(Qos::Sensor)
+                        None
+                    };
                     let enc = BagMsg {
-                        topic: msgtype.name.clone(),
-                        msg_type: msgtype.topic_type.clone(),
+                        topic: topic_meta.name.clone(),
+                        msg_type: topic_meta.topic_type.clone(),
                         data,
+                        qos,
                     };
                     msgs.push((msg.publish_time, enc));
                 }
@@ -444,6 +429,142 @@ fn collect_until(
     }
 
     return Ok(msgs);
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub enum Qos {
+    Sensor,
+    #[default]
+    SystemDefault,
+    Cutom(QosProfile),
+}
+
+impl TryFrom<String> for Qos {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "sensor" => Ok(Qos::Sensor),
+            "system_default" => Ok(Qos::SystemDefault),
+            _ => Err(anyhow!("Invalid QoS value")),
+        }
+    }
+}
+
+impl TryFrom<crate::Qos> for ros2::QosPolicies {
+    type Error = anyhow::Error;
+    fn try_from(value: crate::Qos) -> Result<Self, Self::Error> {
+        Ok(match value {
+            Qos::Sensor => ros2::QosPolicyBuilder::new()
+                .durability(ros2::policy::Durability::Volatile)
+                .deadline(ros2::policy::Deadline(ros2::Duration::INFINITE))
+                .ownership(ros2::policy::Ownership::Shared)
+                .reliability(ros2::policy::Reliability::BestEffort)
+                .history(ros2::policy::History::KeepLast { depth: 5 })
+                .lifespan(ros2::policy::Lifespan {
+                    duration: ros2::Duration::INFINITE,
+                })
+                .build(),
+            Qos::SystemDefault => ros2::QosPolicyBuilder::new()
+                .durability(ros2::policy::Durability::Volatile)
+                .deadline(ros2::policy::Deadline(ros2::Duration::INFINITE))
+                .ownership(ros2::policy::Ownership::Shared)
+                .reliability(ros2::policy::Reliability::Reliable {
+                    max_blocking_time: ros2::Duration::from_millis(100),
+                })
+                .history(ros2::policy::History::KeepLast { depth: 1 })
+                .lifespan(ros2::policy::Lifespan {
+                    duration: ros2::Duration::INFINITE,
+                })
+                .build(),
+            Qos::Cutom(q) => {
+                let deadline_dur = std::time::Duration::from_secs(q.deadline.sec)
+                    + std::time::Duration::from_nanos(q.deadline.nsec);
+                let deadline = ros2::policy::Deadline(Duration::from_std(deadline_dur));
+                let lifespan_dur = std::time::Duration::from_secs(q.lifespan.sec)
+                    + std::time::Duration::from_nanos(q.lifespan.nsec);
+                let lifespan = ros2::policy::Lifespan {
+                    duration: Duration::from_std(lifespan_dur),
+                };
+
+                let reliability = match RmwQosReliabilityPolicy::from_str(&q.reliability)? {
+                    RmwQosReliabilityPolicy::SystemDefault => Reliability::Reliable {
+                        max_blocking_time: Duration::INFINITE,
+                    },
+                    RmwQosReliabilityPolicy::Reliable => Reliability::Reliable {
+                        max_blocking_time: Duration::INFINITE,
+                    },
+                    RmwQosReliabilityPolicy::BestEffort => Reliability::BestEffort,
+                    RmwQosReliabilityPolicy::Unknown => {
+                        return Err(anyhow!("Unknown reliability"));
+                    }
+                    RmwQosReliabilityPolicy::BestAvailable => {
+                        // TODO maybe warn here, qos not found
+                        Reliability::Reliable {
+                            max_blocking_time: Duration::INFINITE,
+                        }
+                    }
+                };
+
+                let durability = match RmwQosDurabilityPolicy::from_str(&q.durability)? {
+                    RmwQosDurabilityPolicy::SystemDefault => Durability::TransientLocal,
+                    RmwQosDurabilityPolicy::TransientLocal => Durability::TransientLocal,
+                    RmwQosDurabilityPolicy::Volatile => Durability::Volatile,
+                    RmwQosDurabilityPolicy::Unknown => {
+                        return Err(anyhow!("Durability set to unknown."));
+                    }
+                    RmwQosDurabilityPolicy::BestAvailable => Durability::TransientLocal,
+                };
+
+                let history = match RmwQosHistoryPolicy::from_str(&q.history)? {
+                    RmwQosHistoryPolicy::SystemDefault => History::KeepLast { depth: q.depth },
+                    RmwQosHistoryPolicy::KeepLast => History::KeepLast { depth: q.depth },
+                    RmwQosHistoryPolicy::KeepAll => History::KeepAll,
+                    RmwQosHistoryPolicy::Unknown => {
+                        return Err(anyhow!("History set to unknown."));
+                    }
+                };
+
+                let liveliness_dur =
+                    std::time::Duration::from_secs(q.liveliness_lease_duration.sec)
+                        + std::time::Duration::from_nanos(q.liveliness_lease_duration.nsec);
+                let liveliness_dur = ros2::Duration::from_std(liveliness_dur);
+                let liveliness = match RmwQosLivelinessPolicy::from_str(&q.liveliness)? {
+                    RmwQosLivelinessPolicy::SystemDefault => {
+                        ros2::policy::Liveliness::ManualByParticipant {
+                            lease_duration: liveliness_dur,
+                        }
+                    }
+                    RmwQosLivelinessPolicy::Automatic => ros2::policy::Liveliness::Automatic {
+                        lease_duration: liveliness_dur,
+                    },
+                    RmwQosLivelinessPolicy::ManualByNode => {
+                        ros2::policy::Liveliness::ManualByTopic {
+                            lease_duration: liveliness_dur,
+                        }
+                    }
+                    RmwQosLivelinessPolicy::ManualByTopic => {
+                        ros2::policy::Liveliness::ManualByTopic {
+                            lease_duration: liveliness_dur,
+                        }
+                    }
+                    RmwQosLivelinessPolicy::Unknown => {
+                        return Err(anyhow!("Liveliness set to unknown."));
+                    }
+                    RmwQosLivelinessPolicy::BestAvailable => todo!(),
+                };
+                ros2::QosPolicyBuilder::new()
+                    .durability(durability)
+                    .deadline(deadline)
+                    .history(history)
+                    .lifespan(lifespan)
+                    .reliability(reliability)
+                    .ownership(ros2::policy::Ownership::Shared)
+                    .liveliness(liveliness)
+                    .build()
+            }
+        })
+    }
 }
 
 impl Bagfile {
