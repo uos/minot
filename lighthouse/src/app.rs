@@ -2223,7 +2223,7 @@ impl App {
                     wind_cursor.line_end = wind_cursor.line_start;
                 }
                 Some(VerticalDirection::Down) => {
-                    wind_cursor.line_start = Some(wind_cursor.line_start.unwrap_or(1));
+                    wind_cursor.line_start = Some(wind_cursor.line_end.unwrap_or(1));
                     wind_cursor.line_start =
                         Some(wind_cursor.line_start.unwrap().saturating_add(1));
                     wind_cursor.line_end = wind_cursor.line_start;

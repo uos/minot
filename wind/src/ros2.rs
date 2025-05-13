@@ -39,19 +39,6 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindD
     Ok(rx)
 }
 
-pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
-    match std::env::var(key) {
-        Ok(name) => Ok(name),
-        Err(e) => match e {
-            std::env::VarError::NotPresent => Ok(default.to_owned()),
-            std::env::VarError::NotUnicode(_os_string) => {
-                error!("Could not fetch node name because it is not unicode");
-                Err(anyhow!("Could not initialize node"))
-            }
-        },
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default)]
 pub enum Qos {
     Sensor,
@@ -131,7 +118,7 @@ pub fn split_path(path: &str) -> (String, String) {
     (final_directory_path, last_element)
 }
 
-pub async fn run_dyn_wind_ros2(node_namespace: &str, wind_name: &str) -> anyhow::Result<()> {
+pub async fn run_dyn_wind(node_namespace: &str, wind_name: &str) -> anyhow::Result<()> {
     let ctx = ros2_client::Context::new()?;
     let node_name = wind_name.to_owned() + "_node";
     let mut node = ctx.new_node(
@@ -199,8 +186,21 @@ pub async fn run_dyn_wind_ros2(node_namespace: &str, wind_name: &str) -> anyhow:
     Ok(())
 }
 
+// TODO share in module so both submodules can uzse it
+pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
+    match std::env::var(key) {
+        Ok(name) => Ok(name),
+        Err(e) => match e {
+            std::env::VarError::NotPresent => Ok(default.to_owned()),
+            std::env::VarError::NotUnicode(_os_string) => Err(anyhow!(
+                "Could not fetch env variable because it is not unicode"
+            )),
+        },
+    }
+}
+
 #[tokio::main]
-#[allow(dead_code)] // TODO wtf?
+#[allow(dead_code)]
 async fn main() -> anyhow::Result<()> {
     let env = env_logger::Env::new().filter_or("WIND_LOG", "off");
     env_logger::Builder::from_env(env).init();
@@ -227,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
             })
         })?;
 
-    run_dyn_wind_ros2(&namespace, &wind_name).await?; // will never return
+    run_dyn_wind(&namespace, &wind_name).await?; // will never return
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use log::{error, info};
+use log::{error, info, warn};
 use rlc::COMPARE_NODE_NAME;
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 
@@ -27,30 +27,21 @@ const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = std::env::args().nth(1).map(|f| PathBuf::from_str(&f));
+
     let file = match file {
         Some(pathres) => Some(pathres?),
         None => None,
     };
 
-    let eval = match &file {
+    #[allow(unused_mut)]
+    let mut eval = match &file {
         Some(path) => {
-            println!("Compiling {:#?}", &path);
-            let rats = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
-            rats
+            println!("Compiling {:#?}", &path.canonicalize()?);
+            rlc::compile_file(&path, None, None)? // evaluate entire file at first
         }
         None => rlc::Evaluated::new(),
     };
     // TODO check if we can really give an empty eval when everything is embedded
-    let wind_file = if let Some(rhs) = eval.vars.resolve("_wind_file")? {
-        match rhs {
-            rlc::Rhs::Val(rlc::Val::StringVal(file)) | rlc::Rhs::Path(file) => Ok(Some(file)),
-            _ => Err(anyhow!("Expected _wind_file to be path or string.")),
-        }
-    } else {
-        Ok(None)
-    }?;
-
-    // TODO load wind_file relative to the wind file in "file"
 
     let log_level = if let Some(rhs) = eval.vars.resolve("_log_level")? {
         match rhs {
@@ -80,21 +71,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(false)
         }?;
 
+        let coord_file = if let Some(rhs) = eval.vars.resolve("_rules")? {
+            match rhs {
+                rlc::Rhs::Val(rlc::Val::StringVal(file)) | rlc::Rhs::Path(file) => Ok(Some(file)),
+                _ => Err(anyhow!("Expected _wind_file to be path or string.")),
+            }
+        } else {
+            Ok(None)
+        }?;
+
+        let eval = match (file.as_ref(), coord_file) {
+            (Some(cfg_filepath), Some(cfpath)) => {
+                let cfg_parent = cfg_filepath
+                    .parent()
+                    .ok_or(anyhow!("Passed .rl file does not have a parent."))?
+                    .canonicalize()
+                    .expect("Should have failed in prev compilation.");
+                let joined = cfg_parent.join(cfpath);
+                println!("Compiling separate wind {:#?}", &joined);
+                let rl = rlc::compile_file(&joined, None, None)?;
+                rl
+            }
+            (_, _) => rlc::Evaluated::new(),
+        };
+
         #[allow(unused_mut)]
         let mut clients = coord::get_clients(&eval)?;
 
         #[cfg(feature = "embed-coordinator")]
         {
-            let wind_name = wind::ros2::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+            let wind_name = wind::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
-        coord::run_coordinator(locked_start, clients, eval.rules.clone());
+        coord::run_coordinator(locked_start, clients, eval.rules);
     }
 
     #[cfg(feature = "embed-ros2-turbine")]
     {
-        let wind_name = wind::ros2::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+        let wind_name = wind::get_env_or_default("ros2_wind_name", &EMBED_ROS2_TURBINE_NAME)?;
         let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
 
         let namespace =
@@ -112,9 +127,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })?;
 
         tokio::spawn(async move {
-            let res = wind::ros2::run_dyn_wind_ros2(&namespace, &wind_name).await;
+            let res = wind::ros2::run_dyn_wind(&namespace, &wind_name).await;
             match res {
                 Ok(_) => {} // will never return
+                Err(e) => {
+                    error!("Error in embedded Wind. Reload the App. {e}")
+                }
+            }
+        });
+    }
+
+    #[cfg(feature = "embed-ros1-turbine")]
+    {
+        let wind_name = wind::get_env_or_default("ros1_wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+
+        let master_uri = wind::get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
+
+        tokio::spawn(async move {
+            let res = wind::ros1::run_dyn_wind(&master_uri, &wind_name).await;
+            match res {
+                Ok(None) => {
+                    warn!("ROS1 Master not found. Destroying node.");
+                }
+                Ok(Some(_)) => {} // will never return
                 Err(e) => {
                     error!("Error in embedded Wind. Reload the App. {e}")
                 }

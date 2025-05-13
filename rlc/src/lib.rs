@@ -176,7 +176,7 @@ impl FromStr for SensorType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_lowercase().as_str() {
-            "lidar" => Self::Lidar,
+            "cloud" => Self::Lidar,
             "imu" => Self::Imu,
             "mixed" => Self::Mixed,
             _ => Self::Any,
@@ -2088,6 +2088,29 @@ impl VariableHistory {
         trunc_ns: bool,
     ) -> Vec<StatementKindOwned> {
         let mut vars_in_ns = vec![];
+
+        // use previous cached vars as well
+        for (var, rhs) in self.var_cache.iter() {
+            let mut wvar = var.clone();
+            if is_sub_namespace(
+                namespace,
+                match var {
+                    Var::Log => unreachable!(),
+                    Var::Predef { name: _, namespace } => namespace,
+                    Var::User { name: _, namespace } => namespace,
+                },
+            ) {
+                if trunc_ns {
+                    wvar = truncate_namespace_var(namespace, &wvar);
+                }
+
+                vars_in_ns.push(StatementKindOwned::VariableDef(Statement::AssignLeft {
+                    lhs: vec![wvar],
+                    rhs: rhs.clone(),
+                }));
+            }
+        }
+
         for stmt in self.ast.iter().take(up_to.unwrap_or(usize::MAX)) {
             match &stmt {
                 StatementKindOwned::Rule(rule_owned) => {
@@ -2942,12 +2965,12 @@ mod tests {
     fn include() {
         const SRC: &str = r"
         # like assigning a file to the current namespace
-        <- ./../rats-lang/test.rl
+        <- ./../rl/test.rl
 
         # including in namespace blocks will prepend the namespaces to the included AST
         # (excluding rules, they are always global)
         c.{
-            <- ./../rats-lang/test.rl
+            <- ./../rl/test.rl
         }
         ";
 
@@ -3192,6 +3215,26 @@ mod tests {
         );
     }
 
+    //     #[test]
+    //     fn resolve_struct() {
+    //         const SRC: &str = r"
+    // _bag.{
+    // 	lidar.{
+    // 		_short = l
+    // 		_topic = /ouster/points
+    // 		_type = Pointcloud2
+    // 	}
+    // }
+
+    //         ";
+
+    //         let eval = compile_code(SRC);
+    //         assert!(eval.is_ok());
+    //         let eval = eval.unwrap();
+
+    //         resolve_struct_in_ns(user_ns, var)
+
+    //     }
     #[test]
     fn advanced_wind() {
         const SRC: &str = r"
@@ -3240,6 +3283,8 @@ mod tests {
 
         # relative play time
         pf! l 10s..20s 1.
+
+        pf! l, i 2 1.
         ";
 
         let eval = compile_code(SRC);

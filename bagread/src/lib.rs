@@ -2,7 +2,6 @@ use std::str::FromStr;
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, anyhow};
-use byteorder::LittleEndian;
 use mcap::{McapError, Message};
 use memmap2::Mmap;
 use qos::{
@@ -209,6 +208,27 @@ pub enum SensorTypeMapped {
     Any(Vec<u8>),
 }
 
+// pub fn detect_endianness_from_header<R>(mut reader: R) -> anyhow::Result<Endian>
+// where
+//     R: std::io::Read,
+// {
+//     const ENCAPSULATION_HEADER_SIZE: usize = 4;
+//     let mut header_buffer = [0u8; ENCAPSULATION_HEADER_SIZE];
+
+//     match reader.read_exact(&mut header_buffer) {
+//         Ok(_) => match header_buffer.get(1) {
+//             Some(&0) | Some(&2) => Ok(Endian::Big),
+//             Some(&1) | Some(&3) => Ok(Endian::Little),
+//             Some(_) => Err(anyhow!("Invalid Header")),
+//             None => Err(anyhow!("Unexpected eof")),
+//         },
+//         Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+//             Err(anyhow!("Unexpected eof"))
+//         }
+//         Err(e) => Err(e.into()),
+//     }
+// }
+
 fn collect_until(
     iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
     cursor: &mut usize,
@@ -371,42 +391,37 @@ fn collect_until(
                 if pass {
                     let data = match send_type {
                         SensorType::Lidar => {
-                            let (dec, _) =
-                                cdr_encoding::from_bytes::<PointCloud2, LittleEndian>(&msg.data)
-                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            let dec = cdr::deserialize(&msg.data)
+                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                             SensorTypeMapped::Lidar(dec)
                         }
                         SensorType::Imu => {
-                            let (dec, _) = cdr_encoding::from_bytes::<Imu, LittleEndian>(&msg.data)
+                            let dec = cdr::deserialize(&msg.data)
                                 .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             SensorTypeMapped::Imu(dec)
                         }
                         SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
-                                let (dec, _) =
-                                    cdr_encoding::from_bytes::<PointCloud2, LittleEndian>(
-                                        &msg.data,
-                                    )
+                                let dec = cdr::deserialize(&msg.data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
 
                                 SensorTypeMapped::Lidar(dec)
                             }
                             IMU_ROS2_TYPE => {
-                                let (dec, _) =
-                                    cdr_encoding::from_bytes::<Imu, LittleEndian>(&msg.data)
-                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                let dec = cdr::deserialize(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 SensorTypeMapped::Imu(dec)
                             }
                             _ => SensorTypeMapped::Any(msg.data.to_vec()),
                         },
                         SensorType::Any => SensorTypeMapped::Any(msg.data.to_vec()),
                     };
-                    let qos = if topic_meta.offered_qos_profiles.len() == 1 {
+                    let qos = if let Some(last) = topic_meta.offered_qos_profiles.last() {
+                        // There are more than one here but seem similar, idk... maybe every publisher can set a different one, but which one we pub?
                         // TODO override with settings from ratslang file
-                        Some(Qos::Cutom(topic_meta.offered_qos_profiles[0].clone()))
+                        Some(Qos::Cutom(last.clone()))
                     } else {
-                        // Some(Qos::Sensor)
                         None
                     };
                     let enc = BagMsg {
