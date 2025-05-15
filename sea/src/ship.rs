@@ -2,9 +2,22 @@ use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use anyhow::anyhow;
 use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
+use rkyv::{
+    Archive, Deserialize, Serialize,
+    api::high::{HighSerializer, HighValidator, from_bytes},
+    bytecheck::CheckBytes,
+    de::Pool,
+    rancor::Strategy,
+    ser::allocator::ArenaHandle,
+    to_bytes,
+    util::AlignedVec,
+};
 
-use crate::{ShipKind, VariableType, client::Client, net::PacketKind};
+use crate::{
+    ShipKind, VariableType,
+    client::Client,
+    net::{NetArray, PacketKind},
+};
 
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
@@ -15,13 +28,17 @@ impl crate::Cannon for NetworkShipImpl {
     async fn shoot(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
-        data: impl Serialize,
+        data: &(
+             impl for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+             + Send
+             + Sync
+         ),
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
         let client = self.client.lock().await;
         for target in targets.iter() {
-            let data = data.clone().to_packet();
+            let data = to_bytes::<rkyv::rancor::Error>(data).expect("Could not deserialize packet");
             let ip_addr = &IpAddr::from_str(&format!(
                 "{}.{}.{}.{}",
                 target.ip[0], target.ip[1], target.ip[2], target.ip[3]
@@ -35,13 +52,16 @@ impl crate::Cannon for NetworkShipImpl {
     }
 
     /// Catch the dumped data from the source.
-    async fn catch<'de, T: Deserialize<'de>>(
-        &self,
-        target: &crate::NetworkShipAddress, // TODO rm target, since port is fixed?
-    ) -> anyhow::Result<T> {
+    async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
+    where
+        T: Archive,
+        T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+            + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
+    {
         let client = self.client.lock().await;
         let data = client.recv_raw_from_other_client(Some(target)).await?;
-        let mat = T::set_from_packet(data.0).expect("Could not decode data to Matrix");
+        let mat =
+            from_bytes::<T, rkyv::rancor::Error>(&data.0).expect("Could not decode data to Matrix");
         Ok(mat)
     }
     async fn catch_dyn(
@@ -58,19 +78,23 @@ impl crate::Cannon for NetworkShipImpl {
                 ));
             }
             VariableType::U8 => {
-                let mat = nalgebra::DMatrix::<u8>::deserialize(&raw_data)?;
+                let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&raw_data)?;
+                let mat: nalgebra::DMatrix<u8> = deserialized.into();
                 format!("{:?}", mat)
             }
             VariableType::I32 => {
-                let mat = nalgebra::DMatrix::<i32>::set_from_packet(raw_data)?;
+                let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&raw_data)?;
+                let mat: nalgebra::DMatrix<i32> = deserialized.into();
                 format!("{:?}", mat)
             }
             VariableType::F32 => {
-                let mat = nalgebra::DMatrix::<f32>::set_from_packet(raw_data)?;
+                let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&raw_data)?;
+                let mat: nalgebra::DMatrix<f32> = deserialized.into();
                 format!("{:?}", mat)
             }
             VariableType::F64 => {
-                let mat = nalgebra::DMatrix::<f64>::set_from_packet(raw_data)?;
+                let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&raw_data)?;
+                let mat: nalgebra::DMatrix<f64> = deserialized.into();
                 format!("{:?}", mat)
             }
         };

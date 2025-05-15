@@ -1,22 +1,32 @@
 use anyhow::anyhow;
 use log::{error, info};
+use rkyv::{
+    Archive, Deserialize, Serialize,
+    api::high::{HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    de::Pool,
+    rancor::Strategy,
+    ser::allocator::ArenaHandle,
+    util::AlignedVec,
+};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use sea::{ship::NetworkShipImpl, *};
+use sea::{net::NetArray, ship::NetworkShipImpl, *};
 
 pub struct Rat {
     name: String,
     ship: Option<NetworkShipImpl>,
 }
 
-pub fn rfalse() -> nalgebra::DMatrix<u8> {
-    nalgebra::DMatrix::<u8>::zeros(1, 1)
+pub fn rfalse() -> NetArray<u8> {
+    nalgebra::DMatrix::<u8>::zeros(1, 1).into()
 }
 
-pub fn rtrue() -> nalgebra::DMatrix<u8> {
-    let mut rf = rfalse();
+pub fn rtrue() -> NetArray<u8> {
+    let rf = rfalse();
+    let mut rf = nalgebra::DMatrix::<u8>::from(rf);
     unsafe { *rf.get_unchecked_mut((0, 0)) = 1 };
-    rf
+    rf.into()
 }
 
 static RT: LazyLock<Mutex<Option<Arc<tokio::runtime::Runtime>>>> =
@@ -111,7 +121,12 @@ pub fn bacon<T>(
     variable_type: VariableType,
 ) -> anyhow::Result<()>
 where
-    T: sea::net::SeaSendableBuffer,
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+        + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
+    T: 'static + Send,
+    T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>,
+    T: Send + Sync,
 {
     let rat_arc = RAT
         .lock()
@@ -148,7 +163,7 @@ where
 
                     rat_ship
                         .get_cannon()
-                        .shoot(&target, data.clone(), variable_type, variable_name)
+                        .shoot(&target, data, variable_type, variable_name)
                         .await?;
 
                     if let Some(mut receiver) = receiver {
@@ -295,9 +310,11 @@ pub extern "C" fn rat_bacon_f32(
         let variable_name = variable_name.to_str().unwrap();
 
         let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-        bacon(variable_name, &mut matrix, VariableType::F32).map(|_| {
+        let mut net_mat = NetArray::from(matrix);
+        bacon(variable_name, &mut net_mat, VariableType::F32).map(|_| {
+            let matrix: nalgebra::DMatrix<f32> = net_mat.into();
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
@@ -332,9 +349,11 @@ pub extern "C" fn rat_bacon_f64(
         let variable_name = variable_name.to_str().unwrap();
 
         let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-        bacon(variable_name, &mut matrix, VariableType::F64).map(|_| {
+        let mut net_mat = NetArray::from(matrix);
+        bacon(variable_name, &mut net_mat, VariableType::F64).map(|_| {
+            let matrix: nalgebra::DMatrix<f64> = net_mat.into();
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
@@ -369,9 +388,11 @@ pub extern "C" fn rat_bacon_i32(
         let variable_name = variable_name.to_str().unwrap();
 
         let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-        bacon(variable_name, &mut matrix, VariableType::I32).map(|_| {
+        let mut net_mat = NetArray::from(matrix);
+        bacon(variable_name, &mut net_mat, VariableType::I32).map(|_| {
+            let matrix: nalgebra::DMatrix<i32> = net_mat.into();
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];
@@ -406,9 +427,11 @@ pub extern "C" fn rat_bacon_u8(
         let variable_name = variable_name.to_str().unwrap();
 
         let data = unsafe { std::slice::from_raw_parts_mut(data, rows * cols) };
-        let mut matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
+        let matrix = nalgebra::DMatrix::from_column_slice(rows, cols, data);
 
-        bacon(variable_name, &mut matrix, VariableType::U8).map(|_| {
+        let mut net_mat = NetArray::from(matrix);
+        bacon(variable_name, &mut net_mat, VariableType::U8).map(|_| {
+            let matrix: nalgebra::DMatrix<u8> = net_mat.into();
             for c in 0..cols {
                 for r in 0..rows {
                     data[c * rows + r] = matrix[(r, c)];

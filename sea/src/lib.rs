@@ -1,3 +1,4 @@
+#![feature(trivial_bounds)]
 // #![feature(async_drop)]
 // #![feature(impl_trait_in_assoc_type)]
 pub mod client;
@@ -6,10 +7,14 @@ pub mod net;
 pub mod ship;
 
 pub use bagread::SensorTypeMapped;
-use nalgebra::{UnitQuaternion, Vector3};
 use rkyv::{
-    Archive, Deserialize, Serialize, deserialize,
-    rancor::{Error, Fallible},
+    Archive, Deserialize, Serialize,
+    api::high::{HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    de::Pool,
+    rancor::Strategy,
+    ser::allocator::ArenaHandle,
+    util::AlignedVec,
 };
 use rlc::{ActionPlan, VariableHuman};
 
@@ -40,24 +45,6 @@ pub enum Action {
         source: NetworkShipAddress,
     },
 }
-
-// #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-// pub enum ActionPlan {
-//     #[default]
-//     Sail,
-//     Shoot {
-//         target: Vec<String>,
-//     },
-//     Catch {
-//         source: String,
-//     },
-// }
-
-// #[derive(Clone, Debug, Deserialize, Serialize)]
-// pub struct VariableHuman {
-//     pub ship: String,
-//     pub strategy: Option<ActionPlan>,
-// }
 
 #[derive(Clone, Debug)]
 pub struct Variable {
@@ -172,21 +159,23 @@ pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
-    async fn shoot<S: Fallible>(
+    async fn shoot(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
-        data: impl Serialize<S> + Archive,
+        data: &(
+             impl for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+             + Send
+             + Sync
+         ),
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()>;
-
     /// Catch the dumped data from the source.
-    async fn catch<'de, T, S: Fallible>(
-        &self,
-        target: &crate::NetworkShipAddress,
-    ) -> anyhow::Result<T>
+    async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
     where
-        T: Deserialize<T, S>;
+        T: Archive,
+        T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+            + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>;
 
     async fn catch_dyn(
         &self,
@@ -205,18 +194,6 @@ pub struct Header {
     pub seq: u32,
     pub stamp: TimeMsg,
     pub frame_id: String,
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Archive, Serialize, Deserialize)]
-pub struct ImuMsg {
-    pub header: Header,
-    pub timestamp_sec: TimeMsg,
-    pub orientation: UnitQuaternion<f64>,
-    pub orientation_covariance: [f64; 9],
-    pub angular_velocity: Vector3<f64>,
-    pub angular_velocity_covariance: [f64; 9],
-    pub linear_acceleration: Vector3<f64>,
-    pub linear_acceleration_covariance: [f64; 9],
 }
 
 pub type WindData = bagread::BagMsg;

@@ -23,6 +23,7 @@ async-trait.workspace = true
 roslibrust = { version = "0.12.2", features = ["ros1", "macro"] }
 ros2-client.workspace = true
 ros2-interfaces-jazzy.workspace = true
+ros2-interfaces-jazzy-rkyv.workspace = true
 cdr-encoding = { version = "0.10" }
 byteorder = { version = "1.3", features = ["i128"] }
 

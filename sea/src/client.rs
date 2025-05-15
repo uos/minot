@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use pnet::datalink::{self, NetworkInterface};
+use rkyv::{api::low::from_bytes, to_bytes, util::AlignedVec};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -238,7 +239,7 @@ impl Client {
         mut wh: OwnedWriteHalf,
     ) {
         while let Some(packet) = channel.recv().await {
-            let packet_bytes = match packet.to_bytes() {
+            let packet_bytes = match to_bytes::<rkyv::rancor::Error>(&packet) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     error!("Failed to serialize packet: {e}");
@@ -356,7 +357,9 @@ impl Client {
                         partner
                     );
 
-                    let packet: Packet = match bincode::deserialize(&packet_bytes) {
+                    let packet: Packet = match from_bytes::<Packet, rkyv::rancor::Error>(
+                        &packet_bytes,
+                    ) {
                         Ok(packet) => packet,
                         Err(e) => {
                             error!(
@@ -502,7 +505,7 @@ impl Client {
         &self,
         address: &IpAddr,
         port: u16,
-        data: Vec<u8>,
+        data: AlignedVec,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
@@ -537,13 +540,14 @@ impl Client {
                         header: Header::default(),
                         data: PacketKind::RequestVarSend(padded_var_name),
                     };
-                    let init_request_data =
-                        bincode::serialize(&init_request).expect("non serializable ack");
+                    let init_request_data = to_bytes::<rkyv::rancor::Error>(&init_request)
+                        .expect("non serializable ack");
                     let ack_data = crate::net::Packet {
                         header: Header::default(),
                         data: PacketKind::Acknowledge,
                     };
-                    let ack_data = bincode::serialize(&ack_data).expect("non serializable ack");
+                    let ack_data =
+                        to_bytes::<rkyv::rancor::Error>(&ack_data).expect("non serializable ack");
                     debug!("connected to {}", addr);
                     stream.writable().await?;
 
@@ -563,7 +567,9 @@ impl Client {
                             match timeout {
                                 Ok(Ok(_)) => {
                                     let received_packet =
-                                        bincode::deserialize::<crate::net::Packet>(&buf)?;
+                                        from_bytes::<crate::net::Packet, rkyv::rancor::Error>(
+                                            &buf,
+                                        )?;
                                     if matches!(
                                         received_packet.data,
                                         crate::net::PacketKind::Acknowledge
@@ -601,8 +607,8 @@ impl Client {
                         header: Header::default(),
                         data: PacketKind::Retry,
                     };
-                    let retry_data =
-                        bincode::serialize(&expected_retry).expect("non serializable retry");
+                    let retry_data = to_bytes::<rkyv::rancor::Error>(&expected_retry)
+                        .expect("non serializable retry");
                     let mut recv_buf = vec![0; retry_data.len()];
                     let mut send_buf = [0; 1024];
                     let mut send_cursor = 0;
@@ -639,7 +645,7 @@ impl Client {
                                     continue;
                                 }
                                     let received_packet =
-                                        bincode::deserialize::<crate::net::Packet>(&recv_buf)?;
+                                        from_bytes::<crate::net::Packet, rkyv::rancor::Error>(&recv_buf)?;
                                     if matches!(
                                         received_packet.data,
                                         crate::net::PacketKind::Retry
@@ -726,13 +732,14 @@ impl Client {
                         header: Header::default(),
                         data: PacketKind::RequestVarSend(Sea::pad_string(" ")),
                     };
-                    let handshake_init_data =
-                        bincode::serialize(&handshake_init_data).expect("non serializable ack");
+                    let handshake_init_data = to_bytes::<rkyv::rancor::Error>(&handshake_init_data)
+                        .expect("non serializable ack");
                     let mut buf = vec![0; handshake_init_data.len()];
                     stream.read_exact(&mut buf).await.map_err(|e| {
                         anyhow!("Could not read exact in receiver for other client comm: {e}")
                     })?;
-                    let received_packet = bincode::deserialize::<crate::net::Packet>(&buf)?;
+                    let received_packet =
+                        from_bytes::<crate::net::Packet, rkyv::rancor::Error>(&buf)?;
                     let var_name = if let crate::net::PacketKind::RequestVarSend(var_name) =
                         received_packet.data
                     {
@@ -749,7 +756,8 @@ impl Client {
                         data: PacketKind::Acknowledge,
                     };
                     let handshake_start_ack_data =
-                        bincode::serialize(&handshake_start_ack).expect("non serializable ack");
+                        to_bytes::<rkyv::rancor::Error>(&handshake_start_ack)
+                            .expect("non serializable ack");
 
                     stream.write_all(&handshake_start_ack_data).await?;
                     debug!("handshake sucess {}", var_name);
@@ -780,8 +788,9 @@ impl Client {
                                     header: Header::default(),
                                     data: PacketKind::Retry,
                                 };
-                                let retry_packet_data = bincode::serialize(&retry_packet)
-                                    .expect("non serializable retry");
+                                let retry_packet_data =
+                                    to_bytes::<rkyv::rancor::Error>(&retry_packet)
+                                        .expect("non serializable retry");
 
                                 stream.write_all(&retry_packet_data).await?;
                                 buffer.clear();
@@ -826,7 +835,7 @@ impl Client {
     }
 
     async fn send_packet_broadcast(packet: &Packet, udp_socket: &UdpSocket) -> anyhow::Result<()> {
-        let raw = bincode::serialize(packet).expect("packet not serializable");
+        let raw = to_bytes::<rkyv::rancor::Error>(packet).expect("packet not serializable");
         let mut data = vec![PROTO_IDENTIFIER];
         data.extend_from_slice(&raw);
         for interface in Self::get_active_interfaces().iter() {

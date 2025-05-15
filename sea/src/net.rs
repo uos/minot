@@ -4,11 +4,10 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use nalgebra::DMatrix;
 
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize, api::low::from_bytes, rancor};
 
 use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client};
 
@@ -31,6 +30,34 @@ pub struct WindAt {
     pub at_var: Option<String>,
 }
 
+/// A wrapper type for using 0.8 rkyv APIs with nalgebra
+#[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct NetArray<T: nalgebra::Scalar> {
+    cols: usize,
+    data: Vec<T>,
+    rows: usize,
+}
+
+impl<T: nalgebra::Scalar> From<DMatrix<T>> for NetArray<T> {
+    fn from(value: DMatrix<T>) -> Self {
+        Self {
+            rows: value.nrows(),
+            cols: value.ncols(),
+            data: value.data.into(),
+        }
+    }
+}
+
+impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
+    fn from(value: NetArray<T>) -> Self {
+        Self::from_data(nalgebra::VecStorage::new(
+            nalgebra::Dyn(value.rows),
+            nalgebra::Dyn(value.cols),
+            value.data.into(),
+        ))
+    }
+}
+
 #[derive(Serialize, Deserialize, Archive, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
@@ -49,10 +76,10 @@ pub enum PacketKind {
         unlock_first: bool,
     },
     Unlock,
-    RawDataf64(nalgebra::DMatrix<f64>),
-    RawDataf32(nalgebra::DMatrix<f32>),
-    RawDatai32(nalgebra::DMatrix<i32>),
-    RawDatau8(nalgebra::DMatrix<u8>),
+    RawDataf64(NetArray<f64>),
+    RawDataf32(NetArray<f32>),
+    RawDatai32(NetArray<i32>),
+    RawDatau8(NetArray<u8>),
     VariableTaskRequest(String),
     RatAction {
         action: Action,
@@ -244,8 +271,8 @@ impl Sea {
                     Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
                 ),
             };
-            let bytes_rejoin_request =
-                bincode::serialize(&rejoin_request).expect("could not serialize rejoin request");
+            let bytes_rejoin_request = rkyv::api::high::to_bytes::<rancor::Error>(&rejoin_request)
+                .expect("could not serialize rejoin request");
             let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len();
             let mut new_clients_without_response = HashMap::<String, (usize, Vec<u8>)>::new();
 
@@ -283,7 +310,7 @@ impl Sea {
                         continue;
                     }
 
-                    let packet: Packet = match bincode::deserialize(&buffer) {
+                    let packet: Packet = match from_bytes::<Packet, rancor::Error>(&buffer) {
                         Err(e) => {
                             error!("Received package is broken: {e}");
                             continue;

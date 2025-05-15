@@ -7,6 +7,7 @@ use memmap2::Mmap;
 use qos::{
     RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
 };
+use rkyv::Archive;
 use rlc::{
     AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
     SensorIdentification, SensorType,
@@ -14,7 +15,8 @@ use rlc::{
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_client::ros2::policy::{Durability, History, Reliability};
 use ros2_client::ros2::{self, Duration};
-use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
+// use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
+use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
@@ -99,7 +101,7 @@ pub struct TopicMetadata {
 
 // --- QoS Profile Structs (New) ---
 
-#[derive(Deserialize, Debug, Serialize, Clone)]
+#[derive(Archive, Deserialize, Debug, Serialize, Clone, rkyv::Deserialize, rkyv::Serialize)]
 pub struct QosProfile {
     pub history: String,
     pub depth: i32,
@@ -112,7 +114,9 @@ pub struct QosProfile {
     pub avoid_ros_namespace_conventions: bool,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)] // Added Clone, Copy
+#[derive(
+    Deserialize, Serialize, rkyv::Serialize, rkyv::Deserialize, Archive, Debug, Clone, Copy,
+)] // Added Clone, Copy
 pub struct QosTime {
     pub sec: u64,
     pub nsec: u64,
@@ -198,7 +202,6 @@ pub struct BagMsg {
     pub topic: String,
     pub msg_type: String,
     pub data: SensorTypeMapped,
-    pub r#type: String,
     pub qos: Option<Qos>,
 }
 
@@ -392,27 +395,37 @@ fn collect_until(
                 if pass {
                     let data = match send_type {
                         SensorType::Lidar => {
-                            let dec = cdr::deserialize(&msg.data)
-                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
+                                cdr::deserialize(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
-                            SensorTypeMapped::Lidar(dec)
+                            SensorTypeMapped::Lidar(data)
                         }
                         SensorType::Imu => {
-                            let dec = cdr::deserialize(&msg.data)
-                                .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-                            SensorTypeMapped::Imu(dec)
+                            let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
+                                cdr::deserialize(&msg.data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            let data: Imu = unsafe { std::mem::transmute(dec) };
+
+                            SensorTypeMapped::Imu(data)
                         }
                         SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
-                                let dec = cdr::deserialize(&msg.data)
-                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
+                                    cdr::deserialize(&msg.data)
+                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
-                                SensorTypeMapped::Lidar(dec)
+                                SensorTypeMapped::Lidar(data)
                             }
                             IMU_ROS2_TYPE => {
-                                let dec = cdr::deserialize(&msg.data)
-                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
-                                SensorTypeMapped::Imu(dec)
+                                let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
+                                    cdr::deserialize(&msg.data)
+                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                let data: Imu = unsafe { std::mem::transmute(dec) };
+
+                                SensorTypeMapped::Imu(data)
                             }
                             _ => SensorTypeMapped::Any(msg.data.to_vec()),
                         },
@@ -447,7 +460,7 @@ fn collect_until(
     return Ok(msgs);
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Qos {
     Sensor,
     #[default]

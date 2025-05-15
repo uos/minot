@@ -1,3 +1,3 @@
-rule!(wow_interesting
-  supercoolpublisher -> supercoolsubscriber
+rule!(some_topic
+  pubber -> subber
 )

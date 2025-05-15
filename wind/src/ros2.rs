@@ -6,7 +6,6 @@ use byteorder::LittleEndian;
 use ros2_client::ros2;
 use ros2_client::{NodeName, NodeOptions};
 use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
-use ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2;
 
 use anyhow::anyhow;
 use log::{error, info, warn};
@@ -161,14 +160,29 @@ pub async fn run_dyn_wind(node_namespace: &str, wind_name: &str) -> anyhow::Resu
             let pubber = existing_pubber.expect("Should be inserted manually if not exists.");
             match data.data {
                 SensorTypeMapped::Lidar(l) => {
-                    let raw = cdr_encoding::to_vec::<PointCloud2, LittleEndian>(&l)
-                        .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
+                    // reinterpret-cast from rkyv serializable type to serde serial type
+                    let l = unsafe {
+                        std::mem::transmute::<
+                            ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::PointCloud2,
+                            _,
+                        >(l)
+                    };
+                    let raw = cdr_encoding::to_vec::<
+                        ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2,
+                        LittleEndian,
+                    >(&l)
+                    .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
 
                     pubber.async_publish(raw).await?;
 
                     info!("published cloud");
                 }
                 SensorTypeMapped::Imu(imu) => {
+                    let imu = unsafe {
+                        std::mem::transmute::<ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::Imu, _>(
+                            imu,
+                        )
+                    };
                     let raw = cdr_encoding::to_vec::<Imu, LittleEndian>(&imu)
                         .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
 

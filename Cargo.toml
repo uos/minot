@@ -17,7 +17,7 @@ rkyv = { version = "0.8.10" }
 bincode = { version = "0", features = ["serde"] }
 env_logger = "0.11.6"
 log = "0.4.25"
-nalgebra = { version = "0.33.2", features = ["rkyv-serialize"] }
+nalgebra = { version = "0.33.2" }
 ros_pointcloud2 = { version = "0.5.3", git = "https://github.com/stelzo/ros_pointcloud2.git", features = [
   "serde",
   "ros2-interfaces-jazzy",
@@ -36,6 +36,12 @@ ros2-interfaces-jazzy = { version = "0.0.4", features = [
   "sensor_msgs",
   "builtin_interfaces",
 ] }
+ros2-interfaces-jazzy-rkyv = { version = "0.0.4", features = [
+  "std_msgs",
+  "geometry_msgs",
+  "sensor_msgs",
+  "builtin_interfaces",
+], git = "https://github.com/stelzo/ros2-interfaces-jazzy-rkyv.git" }
 
 [patch.crates-io]
 roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls", features = [
