@@ -1,0 +1,26 @@
+[package]
+name = "ratpubsub"
+version.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+include.workspace = true
+
+[dependencies]
+sea.workspace = true
+env_logger.workspace = true
+log.workspace = true
+nalgebra.workspace = true
+tokio.workspace = true
+serde.workspace = true
+bincode.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+
+[lib]
+crate-type = [
+  "dylib",
+  "rlib",      # needed when building the example
+  "staticlib",
+] # use as crate on rust and as static library on c++

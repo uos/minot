@@ -616,7 +616,8 @@ pub fn get_clients(eval: &rlc::Evaluated) -> anyhow::Result<HashSet<String>> {
                         clients.insert(source.clone());
                     }
                 }
-            }
+            };
+            clients.insert(client.ship.clone());
         });
     }
 
