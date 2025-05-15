@@ -238,7 +238,7 @@ impl Client {
         mut wh: OwnedWriteHalf,
     ) {
         while let Some(packet) = channel.recv().await {
-            let packet_bytes = match bincode::serialize(&packet) {
+            let packet_bytes = match packet.to_bytes() {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     error!("Failed to serialize packet: {e}");

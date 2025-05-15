@@ -4,7 +4,7 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use anyhow::anyhow;
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use logos::{Lexer, Logos};
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 
 use chumsky::{
     container::Seq,
@@ -42,13 +42,13 @@ impl Rules {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Archive, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct VariableHuman {
     pub ship: String,
     pub strategy: Option<ActionPlan>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Archive, Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ActionPlan {
     #[default]
     Sail,

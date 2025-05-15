@@ -10,7 +10,7 @@ include.workspace = true
 [dependencies]
 env_logger.workspace = true
 log.workspace = true
-serde.workspace = true
+rkyv.workspace = true
 anyhow.workspace = true
 logos = "0.15.0"
 chumsky = "0.10.0"

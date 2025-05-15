@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use nalgebra::DMatrix;
 
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client};
 
@@ -25,13 +25,13 @@ pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::f
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Archive, Serialize, Deserialize, Clone, Debug)]
 pub struct WindAt {
     pub data: WindData,
     pub at_var: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Archive, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
     Retry,
@@ -62,83 +62,84 @@ pub enum PacketKind {
     WindDynamic(String),
 }
 
-pub trait SeaSendableScalar:
-    nalgebra::Scalar + serde::Serialize + for<'a> serde::Deserialize<'a>
-{
-}
-impl SeaSendableScalar for f64 {}
-impl SeaSendableScalar for f32 {}
-impl SeaSendableScalar for u8 {}
-impl SeaSendableScalar for i32 {}
+// pub trait SeaSendableScalar:
+//     nalgebra::Scalar + serde::Serialize + for<'a> serde::Deserialize<'a>
+// {
+// }
+// impl SeaSendableScalar for f64 {}
+// impl SeaSendableScalar for f32 {}
+// impl SeaSendableScalar for u8 {}
+// impl SeaSendableScalar for i32 {}
 
-pub trait SeaSendableBuffer: Send + Clone {
-    fn to_packet(self) -> Vec<u8>;
-    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self>;
-}
+// pub trait SeaSendableBuffer: Send + Clone {
+//     fn to_packet(self) -> Vec<u8>;
+//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self>;
+// }
+// pub trait SeaSendableBuffer<'de>: Serialize + Deserialize<'de> {}
 
-impl SeaSendableBuffer for () {
-    fn to_packet(self) -> Vec<u8> {
-        unimplemented!("Should only be a shadow for async_trait crate.")
-    }
+// impl SeaSendableBuffer for () {
+//     fn to_packet(self) -> Vec<u8> {
+//         unimplemented!("Should only be a shadow for async_trait crate.")
+//     }
 
-    fn set_from_packet(_: Vec<u8>) -> anyhow::Result<Self> {
-        unimplemented!("Should only be a shadow for async_trait crate.")
-    }
-}
+//     fn set_from_packet(_: Vec<u8>) -> anyhow::Result<Self> {
+//         unimplemented!("Should only be a shadow for async_trait crate.")
+//     }
+// }
 
-impl SeaSendableBuffer for DMatrix<u8> {
-    fn to_packet(self) -> Vec<u8> {
-        bincode::serialize(&PacketKind::RawDatau8(self)).expect("data not serializable")
-    }
+// impl SeaSendableBuffer for DMatrix<u8> {
+//     fn to_packet(self) -> Vec<u8> {
+//         bincode::serialize(&PacketKind::RawDatau8(self)).expect("data not serializable")
+//     }
 
-    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDatau8(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-}
+//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+//         match data {
+//             PacketKind::RawDatau8(data) => Ok(data),
+//             _ => Err(anyhow!("Received wrong data type")),
+//         }
+//     }
+// }
 
-impl SeaSendableBuffer for DMatrix<f64> {
-    fn to_packet(self) -> Vec<u8> {
-        bincode::serialize(&PacketKind::RawDataf64(self)).expect("data not serializable")
-    }
+// impl SeaSendableBuffer for DMatrix<f64> {
+//     fn to_packet(self) -> Vec<u8> {
+//         bincode::serialize(&PacketKind::RawDataf64(self)).expect("data not serializable")
+//     }
 
-    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDataf64(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-}
-impl SeaSendableBuffer for DMatrix<f32> {
-    fn to_packet(self) -> Vec<u8> {
-        bincode::serialize(&PacketKind::RawDataf32(self)).expect("data not serializable")
-    }
+//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+//         match data {
+//             PacketKind::RawDataf64(data) => Ok(data),
+//             _ => Err(anyhow!("Received wrong data type")),
+//         }
+//     }
+// }
+// impl SeaSendableBuffer for DMatrix<f32> {
+//     fn to_packet(self) -> Vec<u8> {
+//         bincode::serialize(&PacketKind::RawDataf32(self)).expect("data not serializable")
+//     }
 
-    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDataf32(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-}
-impl SeaSendableBuffer for DMatrix<i32> {
-    fn to_packet(self) -> Vec<u8> {
-        bincode::serialize(&PacketKind::RawDatai32(self)).expect("data not serializable")
-    }
+//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+//         match data {
+//             PacketKind::RawDataf32(data) => Ok(data),
+//             _ => Err(anyhow!("Received wrong data type")),
+//         }
+//     }
+// }
+// impl SeaSendableBuffer for DMatrix<i32> {
+//     fn to_packet(self) -> Vec<u8> {
+//         bincode::serialize(&PacketKind::RawDatai32(self)).expect("data not serializable")
+//     }
 
-    fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-        let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-        match data {
-            PacketKind::RawDatai32(data) => Ok(data),
-            _ => Err(anyhow!("Received wrong data type")),
-        }
-    }
-}
+//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
+//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
+//         match data {
+//             PacketKind::RawDatai32(data) => Ok(data),
+//             _ => Err(anyhow!("Received wrong data type")),
+//         }
+//     }
+// }
 
 // With a join request, the client sends a joinrequest with udp to all
 // available broadcast addresses. The UDP port is not important here.
@@ -151,13 +152,13 @@ impl SeaSendableBuffer for DMatrix<i32> {
 // The coordinator must save this port. It now always uses that when communicating with it and it also sends to it other clients if they need
 // to have a connection.
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, Default)]
+#[derive(Archive, Serialize, Deserialize, Copy, Clone, Debug, Default)]
 pub struct Header {
     pub source: ShipName,
     pub target: ShipName,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Archive, Serialize, Deserialize, Clone, Debug)]
 pub struct Packet {
     pub header: Header,
     pub data: PacketKind,

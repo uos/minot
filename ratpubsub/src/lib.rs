@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub use sea::net::SeaSendableBuffer;
@@ -22,7 +23,7 @@ impl RatNode {
 
     pub async fn publish<T>(&self, topic: &str, data: T) -> anyhow::Result<()>
     where
-        T: sea::net::SeaSendableBuffer,
+        T: Serialize + Deserialize,
     {
         if let Some(rat_ship) = self.ship.as_ref() {
             match rat_ship.ask_for_action(topic).await {

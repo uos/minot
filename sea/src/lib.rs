@@ -7,11 +7,13 @@ pub mod ship;
 
 pub use bagread::SensorTypeMapped;
 use nalgebra::{UnitQuaternion, Vector3};
-use net::SeaSendableBuffer;
+use rkyv::{
+    Archive, Deserialize, Serialize, deserialize,
+    rancor::{Error, Fallible},
+};
 use rlc::{ActionPlan, VariableHuman};
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Hash, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize, Hash, Eq, PartialOrd, Ord)]
 pub enum ShipKind {
     Rat(String),
     Wind(String),
@@ -19,7 +21,7 @@ pub enum ShipKind {
 
 pub type ShipName = i128;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, PartialEq, Eq)]
 pub struct NetworkShipAddress {
     ip: [u8; 4],
     port: u16,
@@ -27,7 +29,7 @@ pub struct NetworkShipAddress {
     pub kind: ShipKind,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Archive, Clone, Default, Serialize, Deserialize)]
 pub enum Action {
     #[default]
     Sail,
@@ -131,7 +133,7 @@ pub trait Ship: Send + Sync + 'static {
     fn get_cannon(&self) -> &impl Cannon;
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum VariableType {
     #[default]
     StaticOnly, // statically supported but no dynamic conversion implemented
@@ -170,18 +172,21 @@ pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
-    async fn shoot(
+    async fn shoot<S: Fallible>(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
-        data: impl net::SeaSendableBuffer,
+        data: impl Serialize<S> + Archive,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()>;
 
     /// Catch the dumped data from the source.
-    async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
+    async fn catch<'de, T, S: Fallible>(
+        &self,
+        target: &crate::NetworkShipAddress,
+    ) -> anyhow::Result<T>
     where
-        T: SeaSendableBuffer;
+        T: Deserialize<T, S>;
 
     async fn catch_dyn(
         &self,
@@ -189,20 +194,20 @@ pub trait Cannon: Send + Sync + 'static {
     ) -> anyhow::Result<(String, VariableType, String)>;
 }
 
-#[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Copy, Archive, Serialize, Deserialize, PartialEq)]
 pub struct TimeMsg {
     pub sec: i32,
     pub nanosec: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Archive, Serialize, Deserialize)]
 pub struct Header {
     pub seq: u32,
     pub stamp: TimeMsg,
     pub frame_id: String,
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, Archive, Serialize, Deserialize)]
 pub struct ImuMsg {
     pub header: Header,
     pub timestamp_sec: TimeMsg,

@@ -193,15 +193,16 @@ pub struct Bagfile {
     metadata: Option<Metadata>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
 pub struct BagMsg {
     pub topic: String,
     pub msg_type: String,
     pub data: SensorTypeMapped,
+    pub r#type: String,
     pub qos: Option<Qos>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
 pub enum SensorTypeMapped {
     Lidar(PointCloud2),
     Imu(Imu),

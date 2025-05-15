@@ -13,7 +13,7 @@ env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
-serde.workspace = true
+rkyv.workspace = true
 bincode.workspace = true
 rlc.workspace = true
 anyhow.workspace = true
@@ -22,12 +22,7 @@ async-trait.workspace = true
 
 roslibrust = { version = "0.12.2", features = ["ros1", "macro"] }
 ros2-client.workspace = true
-ros2-interfaces-jazzy = { version = "0.0.4", features = [
-  "std_msgs",
-  "geometry_msgs",
-  "sensor_msgs",
-  "builtin_interfaces",
-] }
+ros2-interfaces-jazzy.workspace = true
 cdr-encoding = { version = "0.10" }
 byteorder = { version = "1.3", features = ["i128"] }
 

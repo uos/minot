@@ -2,12 +2,9 @@ use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use anyhow::anyhow;
 use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
 
-use crate::{
-    ShipKind, VariableType,
-    client::Client,
-    net::{PacketKind, SeaSendableBuffer},
-};
+use crate::{ShipKind, VariableType, client::Client, net::PacketKind};
 
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
@@ -18,7 +15,7 @@ impl crate::Cannon for NetworkShipImpl {
     async fn shoot(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
-        data: impl crate::net::SeaSendableBuffer,
+        data: impl Serialize,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
@@ -38,7 +35,7 @@ impl crate::Cannon for NetworkShipImpl {
     }
 
     /// Catch the dumped data from the source.
-    async fn catch<T: SeaSendableBuffer>(
+    async fn catch<'de, T: Deserialize<'de>>(
         &self,
         target: &crate::NetworkShipAddress, // TODO rm target, since port is fixed?
     ) -> anyhow::Result<T> {
@@ -61,7 +58,7 @@ impl crate::Cannon for NetworkShipImpl {
                 ));
             }
             VariableType::U8 => {
-                let mat = nalgebra::DMatrix::<u8>::set_from_packet(raw_data)?;
+                let mat = nalgebra::DMatrix::<u8>::deserialize(&raw_data)?;
                 format!("{:?}", mat)
             }
             VariableType::I32 => {
