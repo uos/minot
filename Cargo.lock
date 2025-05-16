@@ -3922,6 +3922,7 @@ dependencies = [
  "env_logger",
  "log",
  "nalgebra",
+ "ratpubsub",
  "rkyv",
  "rlc",
  "ros2-client 0.8.1",
