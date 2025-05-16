@@ -69,7 +69,7 @@ impl Node {
         };
     }
 
-    pub async fn subscribe<T>(
+    pub fn subscribe<T>(
         &self,
         topic: &str,
         queue_size: usize,
