@@ -154,9 +154,9 @@ impl Client {
                         let coord_raw_send = coord_raw_send_tx_l.clone();
                         // wait for the welcome packet and when received, start heartbeat for as long as the write channel is open
                         while let Ok((packet, _partner)) = coord_heartbeat_sub.recv().await {
-                            if let PacketKind::Welcome(my_addr) = packet.data {
+                            if let PacketKind::Welcome(my_addr, wait_for_ack) = packet.data {
                                 // TODO maybe send the coord_send_tx_inner directly if someone wants to use it
-                                connected_tx_inner.send(true).await.unwrap();
+                                connected_tx_inner.send(wait_for_ack).await.unwrap();
                                 {
                                     // connection accepted here, so we can replace the sender channel
                                     coord_raw_send
@@ -446,7 +446,7 @@ impl Client {
 
         let udp_socket = Self::get_udp_socket(Some(self.ip), None).await;
 
-        loop {
+        let wait_for_ack = loop {
             Self::send_packet_broadcast(&network_register_packet, &udp_socket).await?;
 
             let tim = tokio::time::timeout(CLIENT_REGISTER_TIMEOUT, self.connected.recv()).await;
@@ -459,11 +459,11 @@ impl Client {
                 Ok(None) => {
                     return Err(anyhow!("TCP channel closed"));
                 }
-                Ok(Some(_)) => {
-                    break;
+                Ok(Some(wait_for_ack)) => {
+                    break wait_for_ack;
                 }
             }
-        }
+        };
 
         let (_disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
@@ -473,25 +473,26 @@ impl Client {
             _ => true,
         } {
             // TODO disconnect not implemented yet, must send to disconnect_tx
-
-            info!("waiting for coord ready signal.");
-            // Wait for coordinator to send us Ack to signal that every expected client is connected
-            let mut coord_sub = self
-                .coordinator_receive
-                .read()
-                .unwrap()
-                .as_ref()
-                .expect("TCP Socket does not exist")
-                .subscribe();
-            loop {
-                match coord_sub.recv().await {
-                    Err(e) => {
-                        error!("Could not receive updates from coordinator: {}", e);
-                    }
-                    Ok((packet, _)) => {
-                        if matches!(packet.data, PacketKind::Acknowledge) {
-                            debug!("received ack, so all are connected!");
-                            break;
+            if wait_for_ack {
+                info!("waiting for coord ready signal.");
+                // Wait for coordinator to send us Ack to signal that every expected client is connected
+                let mut coord_sub = self
+                    .coordinator_receive
+                    .read()
+                    .unwrap()
+                    .as_ref()
+                    .expect("TCP Socket does not exist")
+                    .subscribe();
+                loop {
+                    match coord_sub.recv().await {
+                        Err(e) => {
+                            error!("Could not receive updates from coordinator: {}", e);
+                        }
+                        Ok((packet, _)) => {
+                            if matches!(packet.data, PacketKind::Acknowledge) {
+                                debug!("received ack, so all are connected!");
+                                break;
+                            }
                         }
                     }
                 }

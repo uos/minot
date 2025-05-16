@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use log::{error, info};
 use ratpubsub::Node;
@@ -31,17 +33,43 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindD
 }
 
 pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<Option<()>> {
-    let node = Node::create(&wind_name).await?;
+    let node = Node::create(wind_name.to_owned()).await?;
     let mut wind_receiver = wind(&wind_name).await?;
 
+    let mut cloud_publishers = HashMap::new();
+    let mut imu_publishers = HashMap::new();
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             match data.data {
                 sea::SensorTypeMapped::Lidar(cloud_msg) => {
-                    node.publish(&data.topic, &cloud_msg).await?;
+                    let mut existing_pubber = cloud_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        cloud_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            cloud_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    pubber.publish(&cloud_msg).await?;
                 }
                 sea::SensorTypeMapped::Imu(imu_msg) => {
-                    node.publish(&data.topic, &imu_msg).await?;
+                    let mut existing_pubber = imu_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        imu_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            imu_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    pubber.publish(&imu_msg).await?;
                 }
                 sea::SensorTypeMapped::Any(_) => {
                     error!(

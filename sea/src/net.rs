@@ -64,7 +64,7 @@ pub enum PacketKind {
     Retry,
     RequestVarSend(String),
     JoinRequest(u16, u16, ShipKind),
-    Welcome(crate::NetworkShipAddress), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
+    Welcome(crate::NetworkShipAddress, bool), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
     RuleAppend {
@@ -87,86 +87,15 @@ pub enum PacketKind {
     },
     Wind(Vec<WindAt>),
     WindDynamic(String),
+    RegisterSubscribe {
+        ship: String,
+        var: String,
+    },
+    RegisterPublish {
+        ship: String,
+        var: String,
+    },
 }
-
-// pub trait SeaSendableScalar:
-//     nalgebra::Scalar + serde::Serialize + for<'a> serde::Deserialize<'a>
-// {
-// }
-// impl SeaSendableScalar for f64 {}
-// impl SeaSendableScalar for f32 {}
-// impl SeaSendableScalar for u8 {}
-// impl SeaSendableScalar for i32 {}
-
-// pub trait SeaSendableBuffer: Send + Clone {
-//     fn to_packet(self) -> Vec<u8>;
-//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self>;
-// }
-// pub trait SeaSendableBuffer<'de>: Serialize + Deserialize<'de> {}
-
-// impl SeaSendableBuffer for () {
-//     fn to_packet(self) -> Vec<u8> {
-//         unimplemented!("Should only be a shadow for async_trait crate.")
-//     }
-
-//     fn set_from_packet(_: Vec<u8>) -> anyhow::Result<Self> {
-//         unimplemented!("Should only be a shadow for async_trait crate.")
-//     }
-// }
-
-// impl SeaSendableBuffer for DMatrix<u8> {
-//     fn to_packet(self) -> Vec<u8> {
-//         bincode::serialize(&PacketKind::RawDatau8(self)).expect("data not serializable")
-//     }
-
-//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-//         match data {
-//             PacketKind::RawDatau8(data) => Ok(data),
-//             _ => Err(anyhow!("Received wrong data type")),
-//         }
-//     }
-// }
-
-// impl SeaSendableBuffer for DMatrix<f64> {
-//     fn to_packet(self) -> Vec<u8> {
-//         bincode::serialize(&PacketKind::RawDataf64(self)).expect("data not serializable")
-//     }
-
-//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-//         match data {
-//             PacketKind::RawDataf64(data) => Ok(data),
-//             _ => Err(anyhow!("Received wrong data type")),
-//         }
-//     }
-// }
-// impl SeaSendableBuffer for DMatrix<f32> {
-//     fn to_packet(self) -> Vec<u8> {
-//         bincode::serialize(&PacketKind::RawDataf32(self)).expect("data not serializable")
-//     }
-
-//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-//         match data {
-//             PacketKind::RawDataf32(data) => Ok(data),
-//             _ => Err(anyhow!("Received wrong data type")),
-//         }
-//     }
-// }
-// impl SeaSendableBuffer for DMatrix<i32> {
-//     fn to_packet(self) -> Vec<u8> {
-//         bincode::serialize(&PacketKind::RawDatai32(self)).expect("data not serializable")
-//     }
-
-//     fn set_from_packet(raw_data: Vec<u8>) -> anyhow::Result<Self> {
-//         let data: PacketKind = bincode::deserialize(&raw_data).expect("data not deserializable");
-//         match data {
-//             PacketKind::RawDatai32(data) => Ok(data),
-//             _ => Err(anyhow!("Received wrong data type")),
-//         }
-//     }
-// }
 
 // With a join request, the client sends a joinrequest with udp to all
 // available broadcast addresses. The UDP port is not important here.
@@ -213,7 +142,7 @@ pub struct Sea {
 
 /// Server handling the Sea network
 impl Sea {
-    pub async fn init(external_ip: Option<[u8; 4]>) -> Self {
+    pub async fn init(external_ip: Option<[u8; 4]>, clients_wait_for_ack: bool) -> Self {
         let (rejoin_req_tx, mut rejoin_req_rx) = tokio::sync::mpsc::channel::<(String, Packet)>(10);
 
         let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(10);
@@ -429,7 +358,10 @@ impl Sea {
                                         source: CONTROLLER_CLIENT_ID,
                                         target: generated_id,
                                     },
-                                    data: PacketKind::Welcome(client_addr.clone()),
+                                    data: PacketKind::Welcome(
+                                        client_addr.clone(),
+                                        clients_wait_for_ack,
+                                    ),
                                 };
 
                                 match client_sender_tx.send(welcome_packet).await {

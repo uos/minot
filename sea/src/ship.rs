@@ -3,36 +3,31 @@ use std::{net::IpAddr, str::FromStr, sync::Arc};
 use anyhow::anyhow;
 use log::{debug, error, info};
 use rkyv::{
-    Archive, Deserialize, Serialize,
-    api::high::{HighSerializer, HighValidator, from_bytes},
+    Archive, Deserialize,
+    api::high::{HighValidator, from_bytes},
     bytecheck::CheckBytes,
     de::Pool,
     rancor::Strategy,
-    ser::allocator::ArenaHandle,
     to_bytes,
-    util::AlignedVec,
 };
 
 use crate::{
-    ShipKind, VariableType,
+    Sendable, ShipKind, VariableType,
     client::Client,
     net::{NetArray, PacketKind},
 };
 
+#[derive(Debug)]
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
 }
 
 #[async_trait::async_trait]
 impl crate::Cannon for NetworkShipImpl {
-    async fn shoot(
+    async fn shoot<T: Sendable>(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
-        data: &(
-             impl for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-             + Send
-             + Sync
-         ),
+        data: &T,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {

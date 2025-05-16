@@ -164,8 +164,8 @@ impl CoordinatorImpl {
         Ok(action)
     }
 
-    pub async fn new(external_ip: Option<[u8; 4]>) -> Self {
-        let sea = crate::net::Sea::init(external_ip).await;
+    pub async fn new(external_ip: Option<[u8; 4]>, clients_wait_for_ack: bool) -> Self {
+        let sea = crate::net::Sea::init(external_ip, clients_wait_for_ack).await;
 
         let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let mut incoming_clients = sea.network_clients_chan.subscribe();

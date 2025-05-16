@@ -67,6 +67,7 @@ struct WindTask {
 }
 
 pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rules) {
+    let clients_wait_for_ack = !clients.is_empty();
     let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
     let rules_changer = std::sync::Arc::clone(&rules);
 
@@ -81,7 +82,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
     let (coord_tx, mut coord_rx) = tokio::sync::mpsc::unbounded_channel::<LighthouseTask>();
     let coord_tx_new_client = coord_tx.clone();
     tokio::spawn(async move {
-        let coordinator = CoordinatorImpl::new(None).await;
+        let coordinator = CoordinatorImpl::new(None, clients_wait_for_ack).await;
 
         // unlock clients to send us stuff when all our expected clients are connected
         let total_clients_check_rats = std::sync::Arc::clone(&coordinator.rat_qs);

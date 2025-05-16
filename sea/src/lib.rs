@@ -153,19 +153,32 @@ impl From<VariableType> for u8 {
     }
 }
 
+use rkyv::rancor::Error as RkyvError;
+
+// Trait for types that can be Sent (Serialized).
+// Requires Sized, Send, Sync, 'static, and the specific rkyv Serialize bound.
+pub trait Sendable: Sized + Send + Sync + 'static
+where
+    Self: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvError>>,
+{
+}
+// Blanket implementation for Sendable. Any type meeting the bounds is Sendable.
+impl<T> Sendable for T
+where
+    T: Sized + Send + Sync + 'static,
+    T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvError>>,
+{
+}
+
 #[async_trait::async_trait]
 pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
-    async fn shoot(
+    async fn shoot<T: Sendable>(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
-        data: &(
-             impl for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-             + Send
-             + Sync
-         ),
+        data: &T,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()>;
