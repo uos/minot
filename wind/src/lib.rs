@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 pub use sea;
-pub mod ratpubsub;
+pub mod ratpub;
 pub mod ros1;
 pub mod ros2;
 

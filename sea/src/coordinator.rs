@@ -19,11 +19,13 @@ pub struct ClientInfo {
 pub struct CoordinatorImpl {
     pub sea: crate::net::Sea,
     pub rat_qs: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
+    pub new_rat_note: tokio::sync::broadcast::Sender<String>,
 }
 
 #[async_trait::async_trait]
 impl crate::Coordinator for CoordinatorImpl {
     /// Get a channel that only returns the variable from this rat
+    // TODO remove, not used anymore
     async fn rat_action_request_queue(
         &self,
         ship: String,
@@ -168,8 +170,10 @@ impl CoordinatorImpl {
         let sea = crate::net::Sea::init(external_ip, clients_wait_for_ack).await;
 
         let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let (new_rat_note, _) = tokio::sync::broadcast::channel::<String>(10);
         let mut incoming_clients = sea.network_clients_chan.subscribe();
         let inner_client_rat_queues = rat_queues.clone();
+        // let new_rat_note_tx = new_rat_note.clone();
         tokio::spawn(async move {
             let inner_client_loop_rat_queues = inner_client_rat_queues.clone();
             loop {
@@ -181,7 +185,7 @@ impl CoordinatorImpl {
                         let (rat_queue_tx, _) = tokio::sync::broadcast::channel(10);
                         let client_info = ClientInfo {
                             id: client.ship,
-                            queue: rat_queue_tx.clone(),
+                            queue: rat_queue_tx.clone(), // TODO not used anymore, rm
                             sender: client.send,
                             network: client.addr_from_coord,
                             client_port: client.other_client_port,
@@ -191,35 +195,42 @@ impl CoordinatorImpl {
                             crate::ShipKind::Wind(name) => name,
                         };
 
-                        let namea = name.clone();
                         {
                             inner_client_loop_rat_queues
                                 .write()
                                 .await
-                                .insert(name, client_info);
+                                .insert(name.clone(), client_info);
                         }
 
-                        let mut receiver = client.recv.subscribe();
-                        tokio::spawn(async move {
-                            while let Ok((msg, _)) = receiver.recv().await {
-                                match msg.data {
-                                    PacketKind::VariableTaskRequest(variable_name) => {
-                                        match rat_queue_tx.send(variable_name.clone()) {
-                                            Err(e) => {
-                                                error!("Could not send to rat queue: {}", e);
-                                            }
-                                            Ok(_) => {
-                                                debug!("sent {}, {:?}", namea, variable_name);
-                                            }
-                                        }
-                                    }
-                                    PacketKind::Heartbeat => {
-                                        debug!("Got heartbeat.");
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        });
+                        // new_rat_note_tx.send(name.clone()).unwrap();
+
+                        // let mut receiver = client.recv.subscribe();
+                        // tokio::spawn(async move {
+                        //     while let Ok((msg, _)) = receiver.recv().await {
+                        //         match msg.data {
+                        //             PacketKind::VariableTaskRequest(variable_name) => {
+                        //                 match rat_queue_tx.send(variable_name.clone()) {
+                        //                     Err(e) => {
+                        //                         error!("Could not send to rat queue: {}", e);
+                        //                     }
+                        //                     Ok(_) => {
+                        //                         debug!("sent {}, {:?}", &name, variable_name);
+                        //                     }
+                        //                 }
+                        //             }
+                        //             PacketKind::Heartbeat => {
+                        //                 debug!("Got heartbeat.");
+                        //             }
+                        //             _ => {
+                        //                 debug!(
+                        //                     "received a different packet than vartaskreq or hearbeat: {:?}",
+                        //                     msg.data
+                        //                 );
+                        //             }
+                        //         }
+                        //     }
+                        //     info!("closing receiver listener");
+                        // });
                     }
                 }
             }
@@ -228,6 +239,7 @@ impl CoordinatorImpl {
         Self {
             sea,
             rat_qs: rat_queues,
+            new_rat_note,
         }
     }
     // pub async fn cleanup(&mut self) {

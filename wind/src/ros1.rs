@@ -98,7 +98,7 @@ impl From<PointCloud2Msg> for sensor_msgs::PointCloud2 {
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
+    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -130,6 +130,9 @@ pub async fn run_dyn_wind(master_uri: &str, wind_name: &str) -> anyhow::Result<O
         Err(err) => match err {
             roslibrust::ros1::NodeError::RosMasterError(
                 RosMasterError::ServerCommunicationFailure(_),
+            )
+            | roslibrust::ros1::NodeError::RosMasterError(
+                RosMasterError::HostIpResolutionFailure(_),
             ) => return Ok(None), // reports that there was no connection to the ROS1 master, print as error outside and stop here
             _ => {
                 return Err(err.into());

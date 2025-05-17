@@ -37,6 +37,7 @@ pub struct Client {
     pub other_client_entrance: u16, // tcp port for 1:1 connections
     pub kind: ShipKind,
     connected: tokio::sync::mpsc::Receiver<bool>,
+    rm_rules_on_disconnect: bool,
 }
 
 impl Client {
@@ -61,7 +62,11 @@ impl Client {
         udp_socket
     }
 
-    pub async fn init(ship_kind: ShipKind, external_ip: Option<[u8; 4]>) -> Self {
+    pub async fn init(
+        ship_kind: ShipKind,
+        external_ip: Option<[u8; 4]>,
+        rm_rules_on_disconnect: bool,
+    ) -> Self {
         let ip = external_ip.unwrap_or([0, 0, 0, 0]);
         let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0);
         // TCP socket for Coordinator communication
@@ -154,7 +159,7 @@ impl Client {
                         let coord_raw_send = coord_raw_send_tx_l.clone();
                         // wait for the welcome packet and when received, start heartbeat for as long as the write channel is open
                         while let Ok((packet, _partner)) = coord_heartbeat_sub.recv().await {
-                            if let PacketKind::Welcome(my_addr, wait_for_ack) = packet.data {
+                            if let PacketKind::Welcome { addr, wait_for_ack } = packet.data {
                                 // TODO maybe send the coord_send_tx_inner directly if someone wants to use it
                                 connected_tx_inner.send(wait_for_ack).await.unwrap();
                                 {
@@ -179,7 +184,7 @@ impl Client {
                                     .await;
                                     match timeout {
                                         Ok(Some(mut packet)) => {
-                                            packet.header.source = my_addr.ship; // overwrite source with our id
+                                            packet.header.source = addr.ship; // overwrite source with our id
                                             packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
                                             match coord_raw_sender.send(packet).await {
                                                 Err(e) => {
@@ -195,7 +200,7 @@ impl Client {
                                         Err(_e) => {
                                             let packet = Packet {
                                                 header: crate::net::Header {
-                                                    source: my_addr.ship,
+                                                    source: addr.ship,
                                                     target: CONTROLLER_CLIENT_ID,
                                                 },
                                                 data: PacketKind::Heartbeat,
@@ -231,6 +236,7 @@ impl Client {
             connected: connected_rx,
             tcp_port,
             ip,
+            rm_rules_on_disconnect,
         }
     }
 
@@ -432,11 +438,12 @@ impl Client {
                 source: ShipName::MAX,
                 target: CONTROLLER_CLIENT_ID,
             },
-            data: PacketKind::JoinRequest(
-                self.tcp_port,
-                self.other_client_entrance,
-                Sea::pad_ship_kind_name(&self.kind),
-            ),
+            data: PacketKind::JoinRequest {
+                tcp_port: self.tcp_port,
+                other_client_entrance: self.other_client_entrance,
+                kind: Sea::pad_ship_kind_name(&self.kind),
+                remove_rules_on_disconnect: self.rm_rules_on_disconnect,
+            },
         };
 
         debug!(

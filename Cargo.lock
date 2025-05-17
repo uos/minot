@@ -2357,7 +2357,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ratpubsub"
+name = "ratpub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3922,7 +3922,7 @@ dependencies = [
  "env_logger",
  "log",
  "nalgebra",
- "ratpubsub",
+ "ratpub",
  "rkyv",
  "rlc",
  "ros2-client 0.8.1",

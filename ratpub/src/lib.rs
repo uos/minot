@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use log::{debug, error};
+use log::{debug, error, info};
 use rkyv::{
     Archive, Deserialize, api::high::HighValidator, bytecheck::CheckBytes, de::Pool,
     rancor::Strategy,
@@ -108,15 +108,18 @@ impl Node {
         coord_tx
             .send(Packet {
                 header: sea::net::Header::default(),
-                data: net::PacketKind::RegisterPublish {
+                data: net::PacketKind::RegisterShipAtVar {
                     ship: self.name.to_owned(),
                     var: topic.to_owned(),
+                    kind: net::RatPubRegisterKind::Publish,
                 },
             })
             .await?;
 
         // Response
+        info!("awaiting publisher ack");
         rx.await?;
+        info!("got publisher ack");
 
         Ok(Publisher {
             topic,
@@ -164,9 +167,10 @@ impl Node {
         coord_tx
             .send(Packet {
                 header: sea::net::Header::default(),
-                data: net::PacketKind::RegisterSubscribe {
+                data: net::PacketKind::RegisterShipAtVar {
                     ship: self.name.to_owned(),
                     var: topic.to_owned(),
+                    kind: net::RatPubRegisterKind::Subscribe,
                 },
             })
             .await?;
@@ -181,6 +185,7 @@ impl Node {
                 match rat_ship.ask_for_action(&topic).await {
                     Ok((sea::Action::Sail, _)) => {
                         debug!("Doing nothing but expected a catch command {} ", &topic);
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                         continue;
                     }
                     Ok((sea::Action::Shoot { target: _ }, _)) => {
@@ -218,7 +223,8 @@ impl Node {
     }
 
     pub async fn create(name: String) -> anyhow::Result<Self> {
-        let ship = sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_owned()), None).await?;
+        let ship =
+            sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_owned()), None, true).await?;
 
         Ok(Self {
             name,

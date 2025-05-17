@@ -41,7 +41,7 @@ impl Rat {
     ) -> anyhow::Result<Self> {
         let ship = rt.block_on(async {
             let init_future =
-                sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None);
+                sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None, false);
 
             match timeout {
                 None => {

@@ -58,13 +58,27 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
     }
 }
 
+#[derive(Serialize, Deserialize, Archive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RatPubRegisterKind {
+    Publish,
+    Subscribe,
+}
+
 #[derive(Serialize, Deserialize, Archive, Clone, Debug)]
 pub enum PacketKind {
     Acknowledge,
     Retry,
     RequestVarSend(String),
-    JoinRequest(u16, u16, ShipKind),
-    Welcome(crate::NetworkShipAddress, bool), // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
+    JoinRequest {
+        tcp_port: u16,
+        other_client_entrance: u16,
+        kind: ShipKind,
+        remove_rules_on_disconnect: bool,
+    },
+    Welcome {
+        addr: crate::NetworkShipAddress,
+        wait_for_ack: bool,
+    }, // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
     Heartbeat,
     Disconnect,
     RuleAppend {
@@ -87,13 +101,10 @@ pub enum PacketKind {
     },
     Wind(Vec<WindAt>),
     WindDynamic(String),
-    RegisterSubscribe {
+    RegisterShipAtVar {
         ship: String,
         var: String,
-    },
-    RegisterPublish {
-        ship: String,
-        var: String,
+        kind: RatPubRegisterKind,
     },
 }
 
@@ -132,6 +143,7 @@ pub struct ShipHandle {
     // send to this client
     pub send: tokio::sync::mpsc::Sender<Packet>,
     pub other_client_port: u16,
+    pub remove_rules_on_disconnect: bool,
 }
 
 #[derive(Debug)]
@@ -193,12 +205,13 @@ impl Sea {
                     source: ShipName::MAX,
                     target: CONTROLLER_CLIENT_ID,
                 },
-                // names are padded with maximal length 64 chars
-                data: PacketKind::JoinRequest(
-                    0,
-                    0,
-                    Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
-                ),
+                // dummy. names are padded with maximal length 64 chars
+                data: PacketKind::JoinRequest {
+                    tcp_port: 0,
+                    other_client_entrance: 0,
+                    kind: Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
+                    remove_rules_on_disconnect: false,
+                },
             };
             let bytes_rejoin_request = rkyv::api::high::to_bytes::<rancor::Error>(&rejoin_request)
                 .expect("could not serialize rejoin request");
@@ -274,7 +287,12 @@ impl Sea {
                 let receive = rejoin_req_rx.recv().await;
                 if let Some((addr, packet)) = receive {
                     match packet.data {
-                        PacketKind::JoinRequest(client_tcp_port, other_client_port, ship_kind) => {
+                        PacketKind::JoinRequest {
+                            tcp_port: client_tcp_port,
+                            other_client_entrance: other_client_port,
+                            kind: ship_kind,
+                            remove_rules_on_disconnect,
+                        } => {
                             let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
                             debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
                             {
@@ -293,6 +311,7 @@ impl Sea {
 
                             // task to handle tcp connection to this client
                             let curr_client_create_sender = clients_tx_inner.clone();
+                            let ships_lock_for_disconnect = std::sync::Arc::clone(&rat_lock);
                             tokio::spawn(async move {
                                 let ip = addr.split(':').next().unwrap();
                                 let client_stream = tokio::net::TcpStream::connect(format!(
@@ -333,9 +352,15 @@ impl Sea {
 
                                 // reading stream from client
                                 let current_ship = ship_kind.clone();
+
+                                let ship_kind_for_disconnect = ship_kind.clone();
                                 tokio::spawn(async move {
                                     Client::receive_from_socket(rh, tx, None).await;
                                     warn!("Client {:?} disconnected.", current_ship);
+                                    {
+                                        let mut lock = ships_lock_for_disconnect.lock().unwrap();
+                                        lock.remove(&ship_kind_for_disconnect);
+                                    }
                                     // TODO when here, the client is disconnected, so stop all processing (block or send wait signal) until the clients are back
                                 });
 
@@ -358,10 +383,10 @@ impl Sea {
                                         source: CONTROLLER_CLIENT_ID,
                                         target: generated_id,
                                     },
-                                    data: PacketKind::Welcome(
-                                        client_addr.clone(),
-                                        clients_wait_for_ack,
-                                    ),
+                                    data: PacketKind::Welcome {
+                                        addr: client_addr.clone(),
+                                        wait_for_ack: clients_wait_for_ack,
+                                    },
                                 };
 
                                 match client_sender_tx.send(welcome_packet).await {
@@ -379,6 +404,7 @@ impl Sea {
                                     name: ship_kind,
                                     addr_from_coord: client_addr,
                                     other_client_port,
+                                    remove_rules_on_disconnect,
                                 };
                                 curr_client_create_sender.send(ship_handle).unwrap();
                                 debug!("ShipHandle created and sent");
@@ -428,6 +454,7 @@ impl Sea {
         }
     }
 
+    // TODO never worked
     pub async fn cleanup(&mut self) {
         let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
         match self.dissolve_network.send(answer_tx).await {
@@ -452,14 +479,14 @@ impl Sea {
 }
 
 // TODO block_in_place blocks the current thread. So when the dissolve_network receivers are running on the same thread, is this a deadlock since we are blocking the thread?
-impl Drop for Sea {
-    fn drop(&mut self) {
-        tokio::task::block_in_place(move || {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(self.cleanup());
-        });
-    }
-}
+// impl Drop for Sea {
+//     fn drop(&mut self) {
+//         tokio::task::block_in_place(move || {
+//             let rt = tokio::runtime::Handle::current();
+//             rt.block_on(self.cleanup());
+//         });
+//     }
+// }
 
 // impl std::future::AsyncDrop for Sea {
 //     type Dropper<'a> = impl std::future::Future<Output = ()>;

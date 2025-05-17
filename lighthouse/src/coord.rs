@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
+use sea::net::Packet;
 use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
 use rlc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};
@@ -41,17 +42,17 @@ enum LighthouseTask {
         ship_name: String,
         data: ActionPlan,
     },
-    // TODO variables currently handled manually because of a async deadlock
-    // GetVariableChannel {
-    //     ship: String,
-    //     answer: oneshot::Sender<broadcast::Receiver<String>>,
-    // },
     SendWind {
         ship_name: String,
         data: Vec<sea::WindData>,
     },
     WindDynamicVarReq(String), // Target is always LH TUI
     Unlock,
+    RegisterShipAtVar {
+        ship: String,
+        var: String,
+        kind: sea::net::RatPubRegisterKind,
+    },
 }
 
 #[derive(Debug)]
@@ -82,7 +83,8 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
     let (coord_tx, mut coord_rx) = tokio::sync::mpsc::unbounded_channel::<LighthouseTask>();
     let coord_tx_new_client = coord_tx.clone();
     tokio::spawn(async move {
-        let coordinator = CoordinatorImpl::new(None, clients_wait_for_ack).await;
+        let coordinator =
+            std::sync::Arc::new(CoordinatorImpl::new(None, clients_wait_for_ack).await);
 
         // unlock clients to send us stuff when all our expected clients are connected
         let total_clients_check_rats = std::sync::Arc::clone(&coordinator.rat_qs);
@@ -113,6 +115,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
         // TODO maybe also await until clients are collected so we can remove this task since all tasks that are needed for long term have been spawned
         let lighthouse_client_connected = std::sync::Arc::new(std::sync::RwLock::new(false));
         let tasks_lh_connect = std::sync::Arc::clone(&lighthouse_client_connected);
+        let rules_change_for_disconnect = std::sync::Arc::clone(&rules_changer);
         tokio::spawn(async move {
             loop {
                 match new_clients_chan.recv().await {
@@ -130,6 +133,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                 let rat_rules = rules.clone();
                                 let rat_coord_tx = coord_tx_new_client.clone();
                                 let winds_inner = std::sync::Arc::clone(&winds_changer);
+                                let rules_change_for_disconnect_inner = std::sync::Arc::clone(&rules_change_for_disconnect);
                                 // spawn task to handle variable requests for this rat
                                 tokio::spawn(async move {
                                     let lighthouse_name = COMPARE_NODE_NAME.to_string();
@@ -240,26 +244,34 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                             loop {
                                                 match client_news.recv().await {
                                                     Ok((packet, _)) => {
-                                                        if let PacketKind::VariableTaskRequest(
-                                                            variable,
-                                                        ) = packet.data
-                                                        {
-                                                            let rat_rules_ref =
-                                                                rat_rules.read().unwrap();
-                                                            let lighthouse_actions =
-                                                                sea::get_strategies(
-                                                                    &rat_rules_ref,
-                                                                    &lighthouse_name,
-                                                                    variable.clone(),
-                                                                    Some(&inner_name),
-                                                                );
+                                                        match packet.data {
+                                                            PacketKind::RegisterShipAtVar {
+                                                                ship,
+                                                                var,
+                                                                kind,
+                                                            } => {
+                                                                rat_coord_tx.send(LighthouseTask::RegisterShipAtVar {ship,var,kind,},).unwrap();
+                                                                client.send.send(Packet {header: sea::net::Header::default(),data: PacketKind::Acknowledge,}).await.unwrap();
+                                                            }
+                                                            PacketKind::VariableTaskRequest(
+                                                                variable,
+                                                            ) => {
+                                                                let rat_rules_ref =
+                                                                    rat_rules.read().unwrap();
+                                                                let lighthouse_actions =
+                                                                    sea::get_strategies(
+                                                                        &rat_rules_ref,
+                                                                        &lighthouse_name,
+                                                                        variable.clone(),
+                                                                        Some(&inner_name),
+                                                                    );
 
-                                                            for action in lighthouse_actions {
-                                                                if !matches!(
-                                                                    action,
-                                                                    ActionPlan::Sail
-                                                                ) {
-                                                                    rat_coord_tx
+                                                                for action in lighthouse_actions {
+                                                                    if !matches!(
+                                                                        action,
+                                                                        ActionPlan::Sail
+                                                                    ) {
+                                                                        rat_coord_tx
                                                                 .send(
                                                                     LighthouseTask::SendRatAction {
                                                                         ship_name: lighthouse_name
@@ -268,38 +280,37 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     },
                                                                 )
                                                                 .unwrap();
+                                                                    }
                                                                 }
-                                                            }
 
-                                                            let mut my_actions =
-                                                                sea::get_strategies(
-                                                                    &rat_rules_ref,
-                                                                    &inner_name,
-                                                                    variable.clone(),
-                                                                    None,
-                                                                );
+                                                                let mut my_actions =
+                                                                    sea::get_strategies(
+                                                                        &rat_rules_ref,
+                                                                        &inner_name,
+                                                                        variable.clone(),
+                                                                        None,
+                                                                    );
 
-                                                            if my_actions.is_empty() {
-                                                                my_actions.push(ActionPlan::Sail);
-                                                            }
+                                                                if my_actions.is_empty() {
+                                                                    my_actions
+                                                                        .push(ActionPlan::Sail);
+                                                                }
 
-                                                            // answer the client that asked
-                                                            for action in my_actions {
-                                                                rat_coord_tx
-                                                            .send(LighthouseTask::SendRatAction {
-                                                                ship_name: inner_name.clone(),
-                                                                data: action,
-                                                            })
-                                                            .unwrap();
-                                                            }
+                                                                // answer the client that asked
+                                                                for action in my_actions {
+                                                                    rat_coord_tx.send(LighthouseTask::SendRatAction {
+                                                                        ship_name: inner_name.clone(),
+                                                                        data: action,
+                                                                    })
+                                                                    .unwrap();
+                                                                }
 
-                                                            let mut winds =
-                                                                winds_inner.write().unwrap();
+                                                                let mut winds =
+                                                                    winds_inner.write().unwrap();
 
-                                                            let mut changed = false;
-                                                            let mut asked_for_dynamic = false;
-                                                            winds.get_mut(&variable).map(|wt| {
-                                                            info!("setting asked false");
+                                                                let mut changed = false;
+                                                                let mut asked_for_dynamic = false;
+                                                                winds.get_mut(&variable).map(|wt| {
                                                                 wt.iter_mut().for_each(|wte| {
                                                                     // TODO we saved many reguests here for the same var but only one will come through "already seen"
                                                                     if !wte.already_seen {
@@ -342,28 +353,49 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
 
                                                             });
 
-                                                            // set all other to be sent again
-                                                            if changed {
-                                                                for (var, wind) in winds.iter_mut()
-                                                                {
-                                                                    if var == &variable {
-                                                                        continue;
-                                                                    }
+                                                                // set all other to be sent again
+                                                                if changed {
+                                                                    for (var, wind) in
+                                                                        winds.iter_mut()
+                                                                    {
+                                                                        if var == &variable {
+                                                                            continue;
+                                                                        }
 
-                                                                    wind.iter_mut().for_each(
-                                                                        |wte| {
-                                                                            wte.already_seen =
-                                                                                false;
-                                                                        },
-                                                                    );
+                                                                        wind.iter_mut().for_each(
+                                                                            |wte| {
+                                                                                wte.already_seen =
+                                                                                    false;
+                                                                            },
+                                                                        );
+                                                                    }
                                                                 }
+                                                            }
+                                                            PacketKind::Heartbeat => {}
+
+                                                            _ => {
+                                                                warn!(
+                                                                    "Received unexpected packet {:?}",
+                                                                    packet.data
+                                                                );
                                                             }
                                                         }
                                                     }
                                                     Err(e) => {
-                                                        error!(
-                                                            "Could not receive packet from client {inner_name}: {e}"
-                                                        );
+                                                        match e {
+                                                            tokio::sync::broadcast::error::RecvError::Closed => {
+                                                                // disconnecting from network
+                                                                if client.remove_rules_on_disconnect {
+                                                                    let mut current_rules = rules_change_for_disconnect_inner.write().unwrap();
+                                                                    current_rules.remove_client(&inner_name);
+                                                                }
+                                                            }, 
+                                                            _ => {
+                                                                error!(
+                                                                    "Could not receive packet from client {inner_name}: {e}"
+                                                                );
+                                                            }
+                                                        }
                                                         return;
                                                     }
                                                 }
@@ -401,9 +433,14 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                 }
                                             },
                                             Err(e) => {
-                                                error!(
-                                                    "Could not receive packet from wind client {inner_name_rx}: {e}"
-                                                );
+                                                match e {
+                                                    tokio::sync::broadcast::error::RecvError::Closed => {}, // disconnected from network
+                                                    _ => {
+                                                        error!(
+                                                            "Could not receive packet from wind client {inner_name_rx}: {e}"
+                                                        );
+                                                    }
+                                                }
                                                 return;
                                             }
                                         }
@@ -434,32 +471,57 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
             }
         });
 
-        // wait here until all clients are connected. TODO to select that reacts on ctrl-c and exits
-        clients_collected_rx.recv().await;
-
         // save the broadcast channels for all clients here so they are subscribed before reactions to variables come in
-        let clients = {
-            let clients = coordinator.rat_qs.read().await;
-            clients
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect::<Vec<_>>()
-        };
-        let mut queues = HashMap::new();
+        // let coord_for_new_client = std::sync::Arc::clone(&coordinator);
+        // let mut rat_node_sub = coord_for_new_client.new_rat_note.subscribe();
+        // tokio::spawn(async move {
+        //     // let mut queues = HashMap::new();
+        //     while let Ok(client_name) = rat_node_sub.recv().await {
+        //         let q = coord_for_new_client
+        //             .rat_action_request_queue(client_name.clone())
+        //             .await;
+        //         match q {
+        //             Err(e) => {
+        //                 error!("Could not get client queue: {e}");
+        //             }
+        //             Ok(mut queue_receiver) => {
+        //                 tokio::spawn(async move {
+        //                     while let Ok(var) = queue_receiver.recv().await {
+        //                         // Send to LighthouseTask? TODO
+        //                         info!("requesting {:?}", var);
+        //                     }
+        //                 });
 
-        for client_name in clients.iter() {
-            let q = coordinator
-                .rat_action_request_queue(client_name.clone())
-                .await;
-            match q {
-                Err(e) => {
-                    error!("Could not get client queue: {e}");
-                }
-                Ok(queue_receiver) => {
-                    queues.insert(client_name.clone(), queue_receiver);
-                }
-            }
-        }
+        //                 // queues.insert(client_name.clone(), queue_receiver);
+        //             }
+        //         }
+        //         info!("did strange queue add");
+        //     }
+        //     // let clients = {
+        //     //     let clients = coordinator.rat_qs.read().await;
+        //     //     clients
+        //     //         .iter()
+        //     //         .map(|(name, _)| name.clone())
+        //     //         .collect::<Vec<_>>()
+        //     // };
+
+        //     // for client_name in clients.iter() {
+        //     //     let q = coordinator
+        //     //         .rat_action_request_queue(client_name.clone())
+        //     //         .await;
+        //     //     match q {
+        //     //         Err(e) => {
+        //     //             error!("Could not get client queue: {e}");
+        //     //         }
+        //     //         Ok(queue_receiver) => {
+        //     //             queues.insert(client_name.clone(), queue_receiver);
+        //     //         }
+        //     //     }
+        //     // }
+        // });
+
+        // wait here until all clients are connected.
+        clients_collected_rx.recv().await;
 
         let mut lock_next = locked_start;
         while let Some(task) = coord_rx.recv().await {
@@ -594,6 +656,22 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                         }
                         Ok(_) => (),
                     }
+                }
+                LighthouseTask::RegisterShipAtVar { ship, var, kind } => {
+                    let mut current_rules = rules_changer.write().unwrap();
+                    info!("Registering at rules {:?}", (&ship, &var, &kind, &current_rules.raw()));
+                    current_rules.register(
+                        var,
+                        ship,
+                        match kind {
+                            sea::net::RatPubRegisterKind::Publish => {
+                                rlc::RatPubRegisterKind::Publish
+                            }
+                            sea::net::RatPubRegisterKind::Subscribe => {
+                                rlc::RatPubRegisterKind::Subscribe
+                            }
+                        },
+                    );
                 }
             }
         }

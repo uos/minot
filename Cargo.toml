@@ -1,5 +1,5 @@
 [workspace]
-members = ["bagread", "lighthouse", "rat", "ratpubsub", "rlc", "sea", "wind"]
+members = ["bagread", "lighthouse", "rat", "ratpub", "rlc", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
@@ -23,7 +23,7 @@ ros_pointcloud2 = { version = "0.5.3", git = "https://github.com/stelzo/ros_poin
   "ros2-interfaces-jazzy",
 ] }
 sea = { path = "sea" }
-ratpubsub = { path = "ratpubsub" }
+ratpub = { path = "ratpub" }
 bagread = { path = "bagread" }
 rlc = { path = "rlc" }
 wind = { path = "wind" }

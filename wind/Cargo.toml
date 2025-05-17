@@ -26,7 +26,7 @@ ros2-interfaces-jazzy.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
 cdr-encoding = { version = "0.10" }
 byteorder = { version = "1.3", features = ["i128"] }
-ratpubsub.workspace = true
+ratpub.workspace = true
 
 [[bin]]
 name = "wind-ros1"
@@ -38,4 +38,4 @@ path = "src/ros2.rs"
 
 [[bin]]
 name = "wind-rat"
-path = "src/ratpubsub.rs"
+path = "src/ratpub.rs"

@@ -213,8 +213,12 @@ impl NetworkShipImpl {
         }
     }
 
-    pub async fn init(kind: ShipKind, external_ip: Option<[u8; 4]>) -> anyhow::Result<Self> {
-        let client = Client::init(kind, external_ip).await;
+    pub async fn init(
+        kind: ShipKind,
+        external_ip: Option<[u8; 4]>,
+        rm_rules_on_disconnect: bool,
+    ) -> anyhow::Result<Self> {
+        let client = Client::init(kind, external_ip, rm_rules_on_disconnect).await;
 
         let client = Arc::new(tokio::sync::Mutex::new(client));
         let _disconnect_handle = {

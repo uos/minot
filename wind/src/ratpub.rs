@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use log::{error, info};
-use ratpubsub::Node;
+use ratpub::Node;
 use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None).await?;
+    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -73,7 +73,7 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<Option<()>> {
                 }
                 sea::SensorTypeMapped::Any(_) => {
                     error!(
-                        "Any-Types are not supported for ratpubsub due to different message encodings."
+                        "Any-Types are not supported for ratpub due to different message encodings."
                     )
                 }
             }
@@ -101,7 +101,7 @@ pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let wind_name = get_env_or_default("wind_name", "turbine_ratpubsub")?;
+    let wind_name = get_env_or_default("wind_name", "turbine_ratpub")?;
 
     run_dyn_wind(&wind_name).await?;
 

@@ -1,5 +1,5 @@
 [package]
-name = "ratpubsub"
+name = "ratpub"
 version.workspace = true
 keywords.workspace = true
 license.workspace = true
@@ -18,10 +18,3 @@ bincode.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
-
-# [lib]
-# crate-type = [
-#   "dylib",
-#   "rlib",      # needed when building the example
-#   "staticlib",
-# ] # use as crate on rust and as static library on c++

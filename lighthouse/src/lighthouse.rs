@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match res {
                 Ok(_) => {} // will never return
                 Err(e) => {
-                    error!("Error in embedded Wind. Reload the App. {e}")
+                    error!("Error in embedded ROS2 turbine. Reload the App. {e}")
                 }
             }
         });
@@ -151,7 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Ok(Some(_)) => {} // will never return
                 Err(e) => {
-                    error!("Error in embedded Wind. Reload the App. {e}")
+                    error!(
+                        "Error in embedded ROS1 turbine. Reload the App to resolve if necessary: {e}"
+                    )
                 }
             }
         });
@@ -160,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rules = eval.rules;
     println!("Searching for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init
     let comparer =
-        sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None)
+        sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None, false)
             .await?;
 
     let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
