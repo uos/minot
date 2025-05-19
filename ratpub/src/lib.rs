@@ -8,7 +8,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use sea::{net::Packet, ship::NetworkShipImpl, *};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Publisher<T: Sendable> {
     topic: String,
     ship: Arc<NetworkShipImpl>,
