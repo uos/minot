@@ -50,8 +50,9 @@ bench = false
 
 [features]
 default = ["embed-all"]
-embed-all = ["embed-coordinator", "embed-ros-turbines"]
+embed-all = ["embed-coordinator"]
 embed-coordinator = []
 embed-ros-turbines = ["embed-ros2-turbine", "embed-ros1-turbine"]
 embed-ros2-turbine = ["dep:wind"]
 embed-ros1-turbine = ["dep:wind"]
+embed-ratpub-turbine = ["dep:wind"]

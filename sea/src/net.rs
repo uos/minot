@@ -108,6 +108,8 @@ pub enum PacketKind {
     },
 }
 
+// unsafe impl Send for PacketKind {}
+
 // With a join request, the client sends a joinrequest with udp to all
 // available broadcast addresses. The UDP port is not important here.
 // The target port is the fixed udp port of the server.
@@ -130,6 +132,8 @@ pub struct Packet {
     pub header: Header,
     pub data: PacketKind,
 }
+
+// unsafe impl Send for Packet {}
 
 #[derive(Clone, Debug)]
 pub struct ShipHandle {

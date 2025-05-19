@@ -23,6 +23,8 @@ use crate::{
 };
 
 const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
+const EMBED_ROS1_TURBINE_NAME: &'static str = "embedded_ros1_turbine";
+const EMBED_RATPUB_TURBINE_NAME: &'static str = "embedded_ratpub_turbine";
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,9 +100,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[allow(unused_mut)]
         let mut clients = coord::get_clients(&eval)?;
 
-        #[cfg(feature = "embed-coordinator")]
+        #[cfg(feature = "embed-ros2-turbine")]
         {
             let wind_name = wind::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+            clients.insert(wind_name);
+        }
+
+        #[cfg(feature = "embed-ros1-turbine")]
+        {
+            let wind_name = wind::get_env_or_default("wind_name", &EMBED_ROS1_TURBINE_NAME)?;
+            clients.insert(wind_name);
+        }
+
+        #[cfg(feature = "embed-ratpub-turbine")]
+        {
+            let wind_name = wind::get_env_or_default("wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
@@ -158,6 +172,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    // #[cfg(feature = "embed-ratpub-turbine")]
+    // {
+    //     let wind_name = wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+
+    //     tokio::spawn(async move {
+    //         let res = wind::ratpub::run_dyn_wind(&wind_name).await;
+    //         match res {
+    //             Ok(_) => {} // will never return
+    //             Err(e) => {
+    //                 error!("Error in embedded ROS2 turbine. Reload the App. {e}")
+    //             }
+    //         }
+    //     });
+    // }
 
     let rules = eval.rules;
     println!("Searching for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init

@@ -1,5 +1,5 @@
 [workspace]
-members = ["bagread", "lighthouse", "rat", "ratpub", "rlc", "sea", "wind"]
+members = ["bagread", "lighthouse", "rat", "ratpub", "ratpub_smol", "rlc", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
