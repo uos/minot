@@ -149,7 +149,7 @@ where
 
                     Ok(())
                 }
-                Ok((sea::Action::Shoot { target }, lock_until_ack)) => {
+                Ok((sea::Action::Shoot { target, id }, lock_until_ack)) => {
                     info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
 
                     let receiver = lock_until_ack.then_some({
@@ -163,7 +163,7 @@ where
 
                     rat_ship
                         .get_cannon()
-                        .shoot(&target, data, variable_type, variable_name)
+                        .shoot(&target, id, data, variable_type, variable_name)
                         .await?;
 
                     if let Some(mut receiver) = receiver {
@@ -184,7 +184,7 @@ where
 
                     Ok(())
                 }
-                Ok((sea::Action::Catch { source }, lock_until_ack)) => {
+                Ok((sea::Action::Catch { source, id }, lock_until_ack)) => {
                     info!(
                         "Rat {} catches {} from {:?}",
                         rat.name, variable_name, source
@@ -199,7 +199,7 @@ where
                             .subscribe()
                     });
 
-                    let recv_data = rat_ship.get_cannon().catch::<T>(&source).await?;
+                    let recv_data = rat_ship.get_cannon().catch::<T>(id).await?;
 
                     info!(
                         "Rat {} finished catching {} from {:?}",

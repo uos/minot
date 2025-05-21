@@ -39,9 +39,11 @@ pub enum Action {
     Sail,
     Shoot {
         target: Vec<NetworkShipAddress>,
+        id: u32,
     },
     Catch {
         source: NetworkShipAddress,
+        id: u32,
     },
 }
 
@@ -83,16 +85,18 @@ pub fn get_strategies(
                 })
                 .filter_map(|plan| match plan.strategy.as_ref()? {
                     ActionPlan::Sail => None,
-                    ActionPlan::Shoot { target } => target
+                    ActionPlan::Shoot { target, id } => target
                         .iter()
                         .find(|shoot_target| *shoot_target == rat_ship)
                         .map(|_| ActionPlan::Catch {
                             source: plan.ship.clone(),
+                            id: *id,
                         }),
-                    ActionPlan::Catch { source } => {
+                    ActionPlan::Catch { source, id } => {
                         if source == rat_ship {
                             Some(ActionPlan::Shoot {
                                 target: vec![source.clone()],
+                                id: *id,
                             })
                         } else {
                             None
@@ -178,21 +182,20 @@ pub trait Cannon: Send + Sync + 'static {
     async fn shoot<T: Sendable>(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
+        id: u32,
         data: &T,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()>;
+
     /// Catch the dumped data from the source.
-    async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
+    async fn catch<T>(&self, id: u32) -> anyhow::Result<T>
     where
         T: Archive,
         T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
             + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>;
 
-    async fn catch_dyn(
-        &self,
-        target: &crate::NetworkShipAddress,
-    ) -> anyhow::Result<(String, VariableType, String)>;
+    async fn catch_dyn(&self, id: u32) -> anyhow::Result<(String, VariableType, String)>;
 }
 
 #[derive(Clone, Debug, Default, Copy, Archive, Serialize, Deserialize, PartialEq)]

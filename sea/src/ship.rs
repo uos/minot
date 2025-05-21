@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use anyhow::anyhow;
-use log::{debug, error, info};
+use log::{error, info};
 use rkyv::{
     Archive, Deserialize,
     api::high::{HighValidator, from_bytes},
@@ -27,6 +27,7 @@ impl crate::Cannon for NetworkShipImpl {
     async fn shoot<T: Sendable>(
         &self,
         targets: &Vec<crate::NetworkShipAddress>,
+        id: u32,
         data: &T,
         variable_type: VariableType,
         variable_name: &str,
@@ -40,32 +41,83 @@ impl crate::Cannon for NetworkShipImpl {
             ))
             .unwrap();
             client
-                .send_raw_to_other_client(ip_addr, target.port, data, variable_type, &variable_name)
+                .send_raw_to_other_client(
+                    ip_addr,
+                    id,
+                    target.port,
+                    data,
+                    variable_type,
+                    &variable_name,
+                )
                 .await?;
         }
         Ok(())
     }
 
     /// Catch the dumped data from the source.
-    async fn catch<T>(&self, target: &crate::NetworkShipAddress) -> anyhow::Result<T>
+    async fn catch<T>(&self, id: u32) -> anyhow::Result<T>
     where
         T: Archive,
         T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
             + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
     {
-        let client = self.client.lock().await;
-        let data = client.recv_raw_from_other_client(Some(target)).await?;
+        let (buf, mut update_chan) = {
+            let client = self.client.lock().await;
+            let buf = std::sync::Arc::clone(&client.raw_recv_buff);
+            let update_chan = client.updated_raw_recv.subscribe();
+            (buf, update_chan)
+        };
+
+        let update_id = {
+            let mut buf_lock = buf.write().unwrap();
+            buf_lock.remove(&id)
+        };
+
+        let (buf, _, _) = match update_id {
+            Some(mut en) => en.try_recv().unwrap(),
+            None => loop {
+                if let Ok(update_id) = update_chan.recv().await {
+                    if update_id == id {
+                        {
+                            let mut buf_lock = buf.write().unwrap();
+                            let mut recv = buf_lock.remove(&id).unwrap();
+                            recv.try_recv().unwrap()
+                        };
+                    }
+                }
+            },
+        };
         let mat =
-            from_bytes::<T, rkyv::rancor::Error>(&data.0).expect("Could not decode data to Matrix");
+            from_bytes::<T, rkyv::rancor::Error>(&buf).expect("Could not decode data to Matrix");
         Ok(mat)
     }
-    async fn catch_dyn(
-        &self,
-        target: &crate::NetworkShipAddress,
-    ) -> anyhow::Result<(String, VariableType, String)> {
-        let client = self.client.lock().await;
-        let (raw_data, var_type, var_name) =
-            client.recv_raw_from_other_client(Some(target)).await?;
+    async fn catch_dyn(&self, id: u32) -> anyhow::Result<(String, VariableType, String)> {
+        let (buf, mut update_chan) = {
+            let client = self.client.lock().await;
+            let buf = std::sync::Arc::clone(&client.raw_recv_buff);
+            let update_chan = client.updated_raw_recv.subscribe();
+            (buf, update_chan)
+        };
+
+        let update_id = {
+            let mut buf_lock = buf.write().unwrap();
+            buf_lock.remove(&id)
+        };
+
+        let (buf, var_type, var_name) = match update_id {
+            Some(mut en) => en.try_recv().unwrap(),
+            None => loop {
+                if let Ok(update_id) = update_chan.recv().await {
+                    if update_id == id {
+                        {
+                            let mut buf_lock = buf.write().unwrap();
+                            let mut recv = buf_lock.remove(&id).unwrap();
+                            recv.try_recv().unwrap()
+                        };
+                    }
+                }
+            },
+        };
         let strrep = match var_type {
             VariableType::StaticOnly => {
                 return Err(anyhow!(
@@ -73,27 +125,26 @@ impl crate::Cannon for NetworkShipImpl {
                 ));
             }
             VariableType::U8 => {
-                let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&raw_data)?;
+                let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&buf)?;
                 let mat: nalgebra::DMatrix<u8> = deserialized.into();
                 format!("{:?}", mat)
             }
             VariableType::I32 => {
-                let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&raw_data)?;
+                let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&buf)?;
                 let mat: nalgebra::DMatrix<i32> = deserialized.into();
                 format!("{:?}", mat)
             }
             VariableType::F32 => {
-                let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&raw_data)?;
+                let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&buf)?;
                 let mat: nalgebra::DMatrix<f32> = deserialized.into();
                 format!("{:?}", mat)
             }
             VariableType::F64 => {
-                let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&raw_data)?;
+                let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&buf)?;
                 let mat: nalgebra::DMatrix<f64> = deserialized.into();
                 format!("{:?}", mat)
             }
         };
-
         Ok((strrep, var_type, var_name))
     }
 }
@@ -218,13 +269,13 @@ impl NetworkShipImpl {
         external_ip: Option<[u8; 4]>,
         rm_rules_on_disconnect: bool,
     ) -> anyhow::Result<Self> {
-        let client = Client::init(kind, external_ip, rm_rules_on_disconnect).await;
+        let client = Client::init(kind.clone(), external_ip, rm_rules_on_disconnect).await;
 
         let client = Arc::new(tokio::sync::Mutex::new(client));
         let _disconnect_handle = {
-            info!("Registering for network...");
+            info!("{:?} Registering for network...", &kind);
             let disconnect_handle = client.lock().await.register().await?;
-            info!("Registered :)");
+            info!("{:?} Registered.", &kind);
             disconnect_handle
         };
 
@@ -238,39 +289,39 @@ impl NetworkShipImpl {
         Ok(Self { client })
     }
 
-    pub async fn next_catch(&self) -> anyhow::Result<crate::NetworkShipAddress> {
-        let mut sub = {
-            let client = self.client.lock().await;
-            let sub = client
-                .coordinator_receive
-                .read()
-                .unwrap()
-                .as_ref()
-                .map(|sub| sub.subscribe())
-                .ok_or(anyhow!(
-                    "Sender to Coordinator is available but Receiver is not."
-                ))?;
-            sub
-        };
+    // pub async fn next_catch(&self) -> anyhow::Result<crate::NetworkShipAddress> {
+    //     let mut sub = {
+    //         let client = self.client.lock().await;
+    //         let sub = client
+    //             .coordinator_receive
+    //             .read()
+    //             .unwrap()
+    //             .as_ref()
+    //             .map(|sub| sub.subscribe())
+    //             .ok_or(anyhow!(
+    //                 "Sender to Coordinator is available but Receiver is not."
+    //             ))?;
+    //         sub
+    //     };
 
-        debug!("waiting");
-        loop {
-            let (packet, _) = sub.recv().await.map_err(|e| {
-                anyhow!("Could not receive answer for variable question from coordinator: {e}")
-            })?;
-            debug!("received something");
-            match packet.data {
-                PacketKind::RatAction {
-                    action,
-                    lock_until_ack: _,
-                } => {
-                    if let crate::Action::Catch { source } = action {
-                        debug!("received rat action");
-                        return Ok(source);
-                    }
-                }
-                _ => (),
-            }
-        }
-    }
+    //     debug!("waiting");
+    //     loop {
+    //         let (packet, _) = sub.recv().await.map_err(|e| {
+    //             anyhow!("Could not receive answer for variable question from coordinator: {e}")
+    //         })?;
+    //         debug!("received something");
+    //         match packet.data {
+    //             PacketKind::RatAction {
+    //                 action,
+    //                 lock_until_ack: _,
+    //             } => {
+    //                 if let crate::Action::Catch { source, id: _ } = action {
+    //                     debug!("received rat action");
+    //                     return Ok(source);
+    //                 }
+    //             }
+    //             _ => (),
+    //         }
+    //     }
+    // }
 }

@@ -1,4 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr, TcpStream},
+};
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
@@ -20,7 +23,7 @@ use crate::{
         Header, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
     },
 };
-const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
+const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>() + std::mem::size_of::<u32>();
 
 #[derive(Debug)]
 pub struct Client {
@@ -33,11 +36,16 @@ pub struct Client {
     pub coordinator_send:
         std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<Packet>>>>,
     ip: [u8; 4],
-    other_client_listener: tokio::net::TcpListener,
     pub other_client_entrance: u16, // tcp port for 1:1 connections
     pub kind: ShipKind,
     connected: tokio::sync::mpsc::Receiver<bool>,
     rm_rules_on_disconnect: bool,
+    pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
+    pub raw_recv_buff: std::sync::Arc<
+        std::sync::RwLock<
+            HashMap<u32, tokio::sync::oneshot::Receiver<(Vec<u8>, VariableType, String)>>,
+        >,
+    >,
 }
 
 impl Client {
@@ -96,6 +104,22 @@ impl Client {
         > = std::sync::Arc::new(std::sync::RwLock::new(None));
         let coord_raw_send_tx_l = coord_raw_send_tx.clone();
         let coord_raw_receive_tx_l = coord_raw_receive_tx.clone();
+        let (updated_raw_recv, _) = tokio::sync::broadcast::channel(100);
+        let raw_recv_buff = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+
+        let inner_updated_raw_recv = updated_raw_recv.clone();
+        let inner_raw_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
+
+        // receiving packets from other clients
+        tokio::spawn(async move {
+            Self::recv_raw_from_other_client(
+                client_listener,
+                inner_updated_raw_recv,
+                inner_raw_recv_buff,
+            )
+            .await;
+        });
+
         tokio::spawn(async move {
             loop {
                 match tcp_listener.accept().await {
@@ -192,9 +216,7 @@ impl Client {
                                                         "could not forward coordinator packet: {e}"
                                                     );
                                                 }
-                                                Ok(_) => {
-                                                    debug!("send packet");
-                                                }
+                                                Ok(_) => {}
                                             }
                                         }
                                         Err(_e) => {
@@ -230,13 +252,14 @@ impl Client {
         Self {
             kind: ship_kind,
             other_client_entrance: client_listener_port,
-            other_client_listener: client_listener,
             coordinator_send: coord_raw_send_tx,
             coordinator_receive: coord_raw_receive_tx,
             connected: connected_rx,
             tcp_port,
             ip,
             rm_rules_on_disconnect,
+            updated_raw_recv,
+            raw_recv_buff,
         }
     }
 
@@ -285,6 +308,7 @@ impl Client {
                 channel.close();
                 return;
             }
+            debug!("Sent buffer through socket");
         }
         info!("Send channel closed, send_to_socket task exiting.");
     }
@@ -301,7 +325,7 @@ impl Client {
             let n = match rh.read(&mut temp_buffer).await {
                 Ok(0) => {
                     // Connection closed by peer
-                    info!("TCP connection closed by peer.");
+                    debug!("TCP connection closed by peer.");
                     return;
                 }
                 Ok(n) => n,
@@ -481,7 +505,7 @@ impl Client {
         } {
             // TODO disconnect not implemented yet, must send to disconnect_tx
             if wait_for_ack {
-                info!("waiting for coord ready signal.");
+                info!("{:?}: waiting for coord ready signal.", self.kind);
                 // Wait for coordinator to send us Ack to signal that every expected client is connected
                 let mut coord_sub = self
                     .coordinator_receive
@@ -512,6 +536,7 @@ impl Client {
     pub async fn send_raw_to_other_client(
         &self,
         address: &IpAddr,
+        id: u32,
         port: u16,
         data: AlignedVec,
         variable_type: VariableType,
@@ -601,6 +626,7 @@ impl Client {
                     debug!("received ack from other client, sending now");
                     let packet_size = data.len() as u32;
                     let packet_size_buffer = packet_size.to_be_bytes();
+                    let id_buffer = id.to_be_bytes();
                     let mut buffer = vec![
                         PROTO_IDENTIFIER,
                         packet_size_buffer[0],
@@ -608,6 +634,10 @@ impl Client {
                         packet_size_buffer[2],
                         packet_size_buffer[3],
                         variable_type.into(),
+                        id_buffer[0],
+                        id_buffer[1],
+                        id_buffer[2],
+                        id_buffer[3],
                     ];
                     buffer.extend_from_slice(&data);
 
@@ -689,146 +719,175 @@ impl Client {
         }
     }
 
+    /// A task to distribute received messages from other clients via 1 to 1 TCP connections
     pub async fn recv_raw_from_other_client(
-        &self,
-        sender: Option<&crate::NetworkShipAddress>,
-    ) -> anyhow::Result<(Vec<u8>, VariableType, String)> {
+        tcp_port: tokio::net::TcpListener,
+        updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
+        raw_recv_buff: std::sync::Arc<
+            std::sync::RwLock<
+                HashMap<u32, tokio::sync::oneshot::Receiver<(Vec<u8>, VariableType, String)>>,
+            >,
+        >,
+    ) -> ! {
         loop {
-            let stream = tokio::time::timeout(
-                CLIENT_TO_CLIENT_TIMEOUT,
-                self.other_client_listener.accept(),
-            )
-            .await;
-
-            debug!("recv from other");
-            let mut variable_type = VariableType::default();
-            match stream {
+            let stream = tokio::time::timeout(CLIENT_TO_CLIENT_TIMEOUT, tcp_port.accept()).await;
+            let (mut stream, _) = match stream {
                 Err(_) => {
-                    return Err(anyhow!(
-                        "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
-                    ));
+                    error!("Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}");
+                    continue;
                 }
                 Ok(Err(e)) => match e.kind() {
                     std::io::ErrorKind::ConnectionRefused => {
                         debug!("connection not yet ready, wait a bit");
-                        tokio::task::yield_now().await;
                         continue;
                     }
                     _ => {
-                        return Err(anyhow!("Could not connect to other client: {e}"));
+                        error!("Could not connect to other client: {e}");
+                        continue;
                     }
                 },
-                Ok(Ok((mut stream, socket_sender))) => {
-                    debug!("started receiving from {:?}", sender);
-                    if let Some(expected_sender) = sender {
-                        let expected_ip = Ipv4Addr::new(
-                            expected_sender.ip[0],
-                            expected_sender.ip[1],
-                            expected_sender.ip[2],
-                            expected_sender.ip[3],
-                        );
-                        if expected_ip != socket_sender.ip().to_canonical() {
-                            continue;
-                        }
-                    }
-                    stream.readable().await?;
+                Ok(Ok(res)) => res,
+            };
 
-                    // Ask for other client if it is ready. Normally you would assume TCP handles handshakes etc but it seems to write
-                    // to the socket into the void without the receiver being ready to receive anything. Tokio then merges the buffers when calling recv()?
-                    // Another option would be to init the socket on each receive but then the socket could be set in the meantime by the operating system.
-                    let handshake_init_data = crate::net::Packet {
-                        header: Header::default(),
-                        data: PacketKind::RequestVarSend(Sea::pad_string(" ")),
-                    };
-                    let handshake_init_data = to_bytes::<rkyv::rancor::Error>(&handshake_init_data)
-                        .expect("non serializable ack");
-                    let mut buf = vec![0; handshake_init_data.len()];
-                    stream.read_exact(&mut buf).await.map_err(|e| {
-                        anyhow!("Could not read exact in receiver for other client comm: {e}")
-                    })?;
-                    let received_packet =
-                        from_bytes::<crate::net::Packet, rkyv::rancor::Error>(&buf)?;
-                    let var_name = if let crate::net::PacketKind::RequestVarSend(var_name) =
-                        received_packet.data
-                    {
-                        var_name
-                    } else {
-                        return Err(anyhow!(
-                            "Received packet for 1-1 handshake is of unexpected type"
-                        ));
-                    };
-                    let var_name = Sea::reverse_padding(&var_name);
-
-                    let handshake_start_ack = crate::net::Packet {
-                        header: Header::default(),
-                        data: PacketKind::Acknowledge,
-                    };
-                    let handshake_start_ack_data =
-                        to_bytes::<rkyv::rancor::Error>(&handshake_start_ack)
-                            .expect("non serializable ack");
-
-                    stream.write_all(&handshake_start_ack_data).await?;
-                    debug!("handshake sucess {}", var_name);
-
-                    let mut buffer = Vec::with_capacity(1024);
-                    let mut first = true;
-                    let mut msg_size = 0;
-
-                    loop {
-                        // Hint: This process only works as long as no other client is writing to our current stream. With the coordinator socket we sometimes get 2 messages into the same stream but they are from different clients talking to the same socket.
-                        let mut buf = [0; 1024];
-                        let n = match stream.read(&mut buf).await {
-                            Err(e) => {
-                                return Err(anyhow!(
-                                    "Could not read from TCP stream when receiving from other client: {e}"
-                                ));
-                            }
-                            Ok(n) => n,
-                        };
-
-                        if n == 0 {
-                            continue;
-                        }
-
-                        if first {
-                            if buf[0] != PROTO_IDENTIFIER {
-                                let retry_packet = crate::net::Packet {
-                                    header: Header::default(),
-                                    data: PacketKind::Retry,
-                                };
-                                let retry_packet_data =
-                                    to_bytes::<rkyv::rancor::Error>(&retry_packet)
-                                        .expect("non serializable retry");
-
-                                stream.write_all(&retry_packet_data).await?;
-                                buffer.clear();
-                                first = true;
-                                // warn!("Unexpected start token, asking for retry");
-                                continue;
-                            } else {
-                                // read 4 bytes into u32 for length of rest message
-                                let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                                variable_type = VariableType::from(buf[5]);
-                                msg_size = u32::from_be_bytes(msg_size_buf);
-                                first = false;
-                            }
-                        }
-
-                        buffer.extend_from_slice(&buf[..n]);
-
-                        if buffer.len() as u32 == msg_size + 6 {
-                            break;
-                        }
-                    }
-
-                    if !buffer.is_empty() {
-                        buffer = buffer[6..buffer.len()].into(); // TODO for large data, maybe better to directly delete the indicators when checking them to avoid large copies
-                        return Ok((buffer, variable_type, var_name));
-                    }
-
-                    return Err(anyhow!("Received data is not for us"));
+            let task_update_chan = updated_raw_recv.clone();
+            let task_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
+            tokio::spawn(async move {
+                let mut variable_type = VariableType::default();
+                if let Err(_) = stream.readable().await {
+                    error!("Stream not readable");
+                    return;
                 }
-            }
+
+                // Ask for other client if it is ready. Normally you would assume TCP handles handshakes etc but it seems to write
+                // to the socket into the void without the receiver being ready to receive anything. Tokio then merges the buffers when calling recv()?
+                // Another option would be to init the socket on each receive but then the socket could be set in the meantime by the operating system.
+                let handshake_init_data = crate::net::Packet {
+                    header: Header::default(),
+                    data: PacketKind::RequestVarSend(Sea::pad_string(" ")),
+                };
+                let handshake_init_data = to_bytes::<rkyv::rancor::Error>(&handshake_init_data)
+                    .expect("non serializable ack");
+                let mut buf = vec![0; handshake_init_data.len()];
+                if let Err(e) = stream.read_exact(&mut buf).await {
+                    error!("Could not read exact in receiver for other client comm: {e}");
+                    return;
+                };
+                let received_packet =
+                    match from_bytes::<crate::net::Packet, rkyv::rancor::Error>(&buf) {
+                        Ok(packet) => packet,
+                        Err(e) => {
+                            error!("Could not decode packet from bytes: {e}");
+                            return;
+                        }
+                    };
+
+                let var_name = if let crate::net::PacketKind::RequestVarSend(var_name) =
+                    received_packet.data
+                {
+                    var_name
+                } else {
+                    error!("Received packet for 1-1 handshake is of unexpected type");
+                    return;
+                };
+                let var_name = Sea::reverse_padding(&var_name);
+
+                let handshake_start_ack = crate::net::Packet {
+                    header: Header::default(),
+                    data: PacketKind::Acknowledge,
+                };
+                let handshake_start_ack_data =
+                    to_bytes::<rkyv::rancor::Error>(&handshake_start_ack)
+                        .expect("non serializable ack");
+
+                if let Err(e) = stream.write_all(&handshake_start_ack_data).await {
+                    error!("Could not write handshake start to sending client: {e}");
+                    return;
+                }
+                debug!("handshake sucess {}", var_name);
+
+                let mut buffer = Vec::with_capacity(1024);
+                let mut first = true;
+                let mut msg_size = 0;
+                let mut msg_id = 0;
+
+                loop {
+                    // Hint: This process only works as long as no other client is writing to our current stream. With the coordinator socket we sometimes get 2 messages into the same stream but they are from different clients talking to the same socket.
+                    let mut buf = [0; 1024];
+                    let n = match stream.read(&mut buf).await {
+                        Err(e) => {
+                            error!(
+                                "Could not read from TCP stream when receiving from other client: {e}"
+                            );
+                            return;
+                        }
+                        Ok(n) => n,
+                    };
+
+                    if n == 0 {
+                        continue;
+                    }
+
+                    if first {
+                        if buf[0] != PROTO_IDENTIFIER {
+                            let retry_packet = crate::net::Packet {
+                                header: Header::default(),
+                                data: PacketKind::Retry,
+                            };
+                            let retry_packet_data = to_bytes::<rkyv::rancor::Error>(&retry_packet)
+                                .expect("non serializable retry");
+
+                            if let Err(e) = stream.write_all(&retry_packet_data).await {
+                                error!("Could not write to 1-to-1 TCP socket: {e}");
+                                return;
+                            }
+                            buffer.clear();
+                            first = true;
+                            warn!("Unexpected start token, asking for retry");
+                            continue;
+                        } else {
+                            let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
+                            variable_type = VariableType::from(buf[5]);
+                            msg_size = u32::from_be_bytes(msg_size_buf);
+                            let msg_id_buf = [buf[6], buf[7], buf[8], buf[9]];
+                            msg_id = u32::from_be_bytes(msg_id_buf);
+                            first = false;
+                        }
+                    }
+
+                    buffer.extend_from_slice(&buf[..n]);
+
+                    if buffer.len() as u32 == msg_size + 10 {
+                        break;
+                    }
+                }
+
+                if !buffer.is_empty() {
+                    let out_buff = buffer[10..buffer.len()].to_vec();
+                    let (buff_tx, buff_rx) = tokio::sync::oneshot::channel();
+                    {
+                        let mut lock = task_recv_buff.write().unwrap();
+                        lock.insert(msg_id, buff_rx);
+                    }
+
+                    if let Err(_) = task_update_chan.send(msg_id) {
+                        debug!("got a message for id: {msg_id} but no one cares :(");
+                    }
+
+                    tokio::spawn(async move {
+                        match buff_tx.send((out_buff, variable_type, var_name)) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                error!(
+                                    "Could not send to received 1-1 buffer to respective task waiting for the result."
+                                );
+                            }
+                        }
+                    });
+                }
+
+                debug!("Received data is not for us");
+                return;
+            });
         }
     }
 

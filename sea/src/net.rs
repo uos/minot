@@ -20,7 +20,7 @@ pub const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duratio
 pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(200);
 pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
-pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60); // TODO or never?
+pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::MAX; // TODO can be deleted in that case
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
 
@@ -158,7 +158,10 @@ pub struct Sea {
 
 /// Server handling the Sea network
 impl Sea {
-    pub async fn init(external_ip: Option<[u8; 4]>, clients_wait_for_ack: bool) -> Self {
+    pub async fn init(
+        external_ip: Option<[u8; 4]>,
+        clients_wait_for_ack: std::sync::Arc<std::sync::RwLock<bool>>,
+    ) -> Self {
         let (rejoin_req_tx, mut rejoin_req_rx) = tokio::sync::mpsc::channel::<(String, Packet)>(10);
 
         let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(10);
@@ -316,6 +319,7 @@ impl Sea {
                             // task to handle tcp connection to this client
                             let curr_client_create_sender = clients_tx_inner.clone();
                             let ships_lock_for_disconnect = std::sync::Arc::clone(&rat_lock);
+                            let clwa = std::sync::Arc::clone(&clients_wait_for_ack);
                             tokio::spawn(async move {
                                 let ip = addr.split(':').next().unwrap();
                                 let client_stream = tokio::net::TcpStream::connect(format!(
@@ -382,6 +386,7 @@ impl Sea {
                                     kind: ship_kind.clone(),
                                 };
 
+                                let current_clients_wait_for_ack = { *clwa.read().unwrap() };
                                 let welcome_packet = Packet {
                                     header: Header {
                                         source: CONTROLLER_CLIENT_ID,
@@ -389,7 +394,7 @@ impl Sea {
                                     },
                                     data: PacketKind::Welcome {
                                         addr: client_addr.clone(),
-                                        wait_for_ack: clients_wait_for_ack,
+                                        wait_for_ack: current_clients_wait_for_ack,
                                     },
                                 };
 

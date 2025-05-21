@@ -29,6 +29,7 @@ pub enum RatPubRegisterKind {
 pub struct Rules {
     store: HashMap<Variable, Vec<VariableHuman>>,
     pub cache: HashMap<Variable, HashSet<(Client, RatPubRegisterKind)>>,
+    id_counter: u32,
 }
 
 pub const COMPARE_NODE_NAME: &'static str = "#lhtui";
@@ -38,6 +39,7 @@ impl Rules {
         Self {
             store: HashMap::new(),
             cache: HashMap::new(),
+            id_counter: 0,
         }
     }
 
@@ -50,6 +52,11 @@ impl Rules {
                 self.store.insert(variable, strategies);
             }
         }
+    }
+
+    fn new_id(&mut self) -> u32 {
+        self.id_counter += 1;
+        self.id_counter
     }
 
     /// Removes a client (ship) from the rules and cache.
@@ -74,7 +81,7 @@ impl Rules {
                 if rule.ship == client {
                     // Case 1: Client is the main ship performing an action. Remove the rule.
                     match &rule.strategy {
-                        Some(ActionPlan::Shoot { target }) => {
+                        Some(ActionPlan::Shoot { target, id: _ }) => {
                             // The client was the shooter, the targets were effectively subscribers
                             if !target.is_empty() {
                                 cache_registrations_from_store
@@ -88,7 +95,7 @@ impl Rules {
                                     );
                             }
                         }
-                        Some(ActionPlan::Catch { source }) => {
+                        Some(ActionPlan::Catch { source, id: _ }) => {
                             // The client was the catcher, the source was the publisher
                             cache_registrations_from_store
                                 .entry(variable.clone())
@@ -99,7 +106,7 @@ impl Rules {
                             // Sail, None, or no strategy - no partners to register
                         }
                     }
-                } else if let Some(ActionPlan::Shoot { target }) = &rule.strategy {
+                } else if let Some(ActionPlan::Shoot { target, id }) = &rule.strategy {
                     // Case 2: Rule is a Shoot action. Check if client is a target.
                     let initial_target_count = target.len();
                     let new_target = target
@@ -121,7 +128,10 @@ impl Rules {
                             // Target list is not empty, keep the rule with the updated target list.
                             rules_to_keep_in_variable.push(VariableHuman {
                                 ship: rule.ship.clone(),
-                                strategy: Some(ActionPlan::Shoot { target: new_target }),
+                                strategy: Some(ActionPlan::Shoot {
+                                    target: new_target,
+                                    id: *id,
+                                }),
                             });
                             variable_has_remaining_rules = true;
                         }
@@ -130,7 +140,7 @@ impl Rules {
                         rules_to_keep_in_variable.push(rule);
                         variable_has_remaining_rules = true;
                     }
-                } else if let Some(ActionPlan::Catch { source }) = &rule.strategy {
+                } else if let Some(ActionPlan::Catch { source, id: _ }) = &rule.strategy {
                     // Case 3: Rule is a Catch action. Check if client is the source.
                     if source == client {
                         // The client being removed is the source of this Catch rule. Remove the rule.
@@ -240,103 +250,119 @@ impl Rules {
 
                 // Check if the existing store entry (if any) contains Shoot rules
                 // We now only care about existing Shoot rules for the first case
-                let had_existing_shoot = existing_rules_option.as_ref().map_or(false, |rules| {
+                let had_existing_shoot = &existing_rules_option.as_ref().and_then(|rules| {
                     rules
                         .iter()
-                        .any(|vh| matches!(vh.strategy, Some(ActionPlan::Shoot { .. })))
+                        .find(|vh| matches!(vh.strategy, Some(ActionPlan::Shoot { .. })))
+                        .map(|v| match v.strategy.as_ref() {
+                            // TODO cleanup
+                            Some(ap) => match ap {
+                                ActionPlan::Sail => unreachable!(),
+                                ActionPlan::Shoot { target: _, id } => id,
+                                ActionPlan::Catch { .. } => unreachable!(),
+                            },
+                            None => unreachable!(),
+                        })
                 });
 
                 let mut generated_rules: Vec<VariableHuman> = Vec::new();
 
-                if had_existing_shoot {
-                    // Case 1: Variable was in store AND had Shoot rules.
-                    // Combine clients from existing rules and new cache registrations, then regenerate Shoot rules.
-                    let mut all_pubs: HashSet<String> = HashSet::new();
-                    let mut all_subs: HashSet<String> = HashSet::new(); // We still need subscribers to be targets
-                    let mut other_vh: Vec<VariableHuman> = Vec::new(); // Rules with Sail, Catch or None strategies
+                match had_existing_shoot {
+                    Some(id) => {
+                        // Case 1: Variable was in store AND had Shoot rules.
+                        // Combine clients from existing rules and new cache registrations, then regenerate Shoot rules.
+                        let mut all_pubs: HashSet<String> = HashSet::new();
+                        let mut all_subs: HashSet<String> = HashSet::new(); // We still need subscribers to be targets
+                        let mut other_vh: Vec<VariableHuman> = Vec::new(); // Rules with Sail, Catch or None strategies
 
-                    if let Some(existing_rules) = existing_rules_option {
-                        for vh in existing_rules {
-                            match vh.strategy {
-                                Some(ActionPlan::Shoot { target }) => {
-                                    all_pubs.insert(vh.ship);
-                                    // Also collect existing subscribers from targets of existing shoots
-                                    all_subs.extend(target.into_iter());
-                                }
-                                // Treat existing Catch rules' ships as subscribers for combining lists
-                                Some(ActionPlan::Catch { source: _ }) => {
-                                    all_subs.insert(vh.ship);
-                                }
-                                _ => {
-                                    other_vh.push(vh);
+                        let id = **id;
+                        if let Some(existing_rules) = existing_rules_option {
+                            for vh in existing_rules {
+                                match vh.strategy {
+                                    Some(ActionPlan::Shoot { target, id: _ }) => {
+                                        all_pubs.insert(vh.ship);
+                                        // Also collect existing subscribers from targets of existing shoots
+                                        all_subs.extend(target.into_iter());
+                                    }
+                                    // Treat existing Catch rules' ships as subscribers for combining lists
+                                    Some(ActionPlan::Catch { source: _, id: _ }) => {
+                                        all_subs.insert(vh.ship);
+                                    }
+                                    _ => {
+                                        other_vh.push(vh);
+                                    }
                                 }
                             }
                         }
-                    }
-                    // Add new clients from cache registrations
-                    all_pubs.extend(new_pubs.into_iter());
-                    all_subs.extend(new_subs.into_iter());
+                        // Add new clients from cache registrations
+                        all_pubs.extend(new_pubs.into_iter());
+                        all_subs.extend(new_subs.into_iter());
 
-                    let mut sorted_all_pubs: Vec<String> = all_pubs.into_iter().collect();
-                    sorted_all_pubs.sort();
-                    let mut sorted_all_subs: Vec<String> = all_subs.into_iter().collect();
-                    sorted_all_subs.sort();
+                        let mut sorted_all_pubs: Vec<String> = all_pubs.into_iter().collect();
+                        sorted_all_pubs.sort();
+                        let mut sorted_all_subs: Vec<String> = all_subs.into_iter().collect();
+                        sorted_all_subs.sort();
 
-                    // Build the new set of rules from the combined, unique, sorted client lists
-                    generated_rules.extend(other_vh); // Keep the non-Shoot/Catch rules
+                        // Build the new set of rules from the combined, unique, sorted client lists
+                        generated_rules.extend(other_vh); // Keep the non-Shoot/Catch rules
 
-                    if !sorted_all_pubs.is_empty() && !sorted_all_subs.is_empty() {
-                        // Add Shoot rules for all publishers targeting all subscribers
-                        for pub_client in &sorted_all_pubs {
-                            generated_rules.push(VariableHuman {
-                                ship: pub_client.clone(),
-                                strategy: Some(ActionPlan::Shoot {
-                                    target: sorted_all_subs.clone(),
-                                }),
-                            });
+                        if !sorted_all_pubs.is_empty() && !sorted_all_subs.is_empty() {
+                            // Add Shoot rules for all publishers targeting all subscribers
+                            for pub_client in &sorted_all_pubs {
+                                generated_rules.push(VariableHuman {
+                                    ship: pub_client.clone(),
+                                    strategy: Some(ActionPlan::Shoot {
+                                        target: sorted_all_subs.clone(),
+                                        id,
+                                    }),
+                                });
+                            }
+                            // *** Removed Catch rule generation here ***
                         }
-                        // *** Removed Catch rule generation here ***
+
+                        // Re-insert the generated rules into the store
+                        self.store.insert(var_name.clone(), generated_rules);
                     }
+                    None => {
+                        // Case 2: Variable was NOT in store, OR was in store but only had non-Shoot rules.
+                        // Require a publisher/subscriber pair *in the cache* to generate rules.
+                        if !new_pubs.is_empty() && !new_subs.is_empty() {
+                            // Generate Shoot rules (new_pubs -> new_subs) from the cache pair
+                            let mut sorted_new_pubs: Vec<String> = new_pubs.into_iter().collect();
+                            sorted_new_pubs.sort();
+                            let mut sorted_new_subs: Vec<String> = new_subs.into_iter().collect();
+                            sorted_new_subs.sort();
 
-                    // Re-insert the generated rules into the store
-                    self.store.insert(var_name.clone(), generated_rules);
-                } else {
-                    // Case 2: Variable was NOT in store, OR was in store but only had non-Shoot rules.
-                    // Require a publisher/subscriber pair *in the cache* to generate rules.
-                    if !new_pubs.is_empty() && !new_subs.is_empty() {
-                        // Generate Shoot rules (new_pubs -> new_subs) from the cache pair
-                        let mut sorted_new_pubs: Vec<String> = new_pubs.into_iter().collect();
-                        sorted_new_pubs.sort();
-                        let mut sorted_new_subs: Vec<String> = new_subs.into_iter().collect();
-                        sorted_new_subs.sort();
+                            let mut pair_generated_rules: Vec<VariableHuman> = Vec::new();
+                            let pair_id = self.new_id();
+                            for pub_client in &sorted_new_pubs {
+                                pair_generated_rules.push(VariableHuman {
+                                    ship: pub_client.clone(),
+                                    strategy: Some(ActionPlan::Shoot {
+                                        target: sorted_new_subs.clone(),
+                                        id: pair_id,
+                                    }),
+                                });
+                            }
+                            // *** Removed Catch rule generation here ***
 
-                        let mut pair_generated_rules: Vec<VariableHuman> = Vec::new();
-                        for pub_client in &sorted_new_pubs {
-                            pair_generated_rules.push(VariableHuman {
-                                ship: pub_client.clone(),
-                                strategy: Some(ActionPlan::Shoot {
-                                    target: sorted_new_subs.clone(),
-                                }),
-                            });
-                        }
-                        // *** Removed Catch rule generation here ***
-
-                        if let Some(mut existing_rules) = existing_rules_option {
-                            // Extend the existing non-Shoot rules with the newly generated pair Shoot rules
-                            existing_rules.extend(pair_generated_rules);
-                            self.store.insert(var_name.clone(), existing_rules);
+                            if let Some(mut existing_rules) = existing_rules_option {
+                                // Extend the existing non-Shoot rules with the newly generated pair Shoot rules
+                                existing_rules.extend(pair_generated_rules);
+                                self.store.insert(var_name.clone(), existing_rules);
+                            } else {
+                                // Insert a new entry with the generated pair Shoot rules
+                                self.store.insert(var_name.clone(), pair_generated_rules);
+                            }
                         } else {
-                            // Insert a new entry with the generated pair Shoot rules
-                            self.store.insert(var_name.clone(), pair_generated_rules);
+                            // Case 3: No pair in cache, and no Shoot in store rules.
+                            // Put the original store rules back (if any) and keep the cache entry.
+                            if let Some(existing_rules) = existing_rules_option {
+                                self.store.insert(var_name.clone(), existing_rules);
+                            }
+                            // Put original cache registrations back as they weren't processed
+                            self.cache.insert(var_name.clone(), registrations);
                         }
-                    } else {
-                        // Case 3: No pair in cache, and no Shoot in store rules.
-                        // Put the original store rules back (if any) and keep the cache entry.
-                        if let Some(existing_rules) = existing_rules_option {
-                            self.store.insert(var_name.clone(), existing_rules);
-                        }
-                        // Put original cache registrations back as they weren't processed
-                        self.cache.insert(var_name.clone(), registrations);
                     }
                 }
 
@@ -375,9 +401,11 @@ pub enum ActionPlan {
     Sail,
     Shoot {
         target: Vec<String>,
+        id: u32,
     },
     Catch {
         source: String,
+        id: u32,
     },
 }
 
@@ -2061,6 +2089,7 @@ impl RuleSexpr {
                                     } => unreachable!(),
                                 })
                                 .collect(),
+                            id: rules.new_id(),
                         };
 
                         let ship = match rhs {
@@ -2093,6 +2122,7 @@ impl RuleSexpr {
                                     } => unreachable!(),
                                 })
                                 .collect(),
+                            id: rules.new_id(),
                         };
 
                         let ship = match lhs {
@@ -2115,6 +2145,7 @@ impl RuleSexpr {
                     Statement::Compare { rhs, lhs } => {
                         let plan = ActionPlan::Shoot {
                             target: vec![COMPARE_NODE_NAME.to_owned()],
+                            id: rules.new_id(),
                         };
 
                         let mut merged: Vec<String> = rhs
@@ -3077,7 +3108,7 @@ mod tests {
         });
         // Also sort the target vector inside Shoot strategies for deterministic comparison
         for human in humans.iter_mut() {
-            if let Some(ActionPlan::Shoot { target }) = &mut human.strategy {
+            if let Some(ActionPlan::Shoot { target, id: _ }) = &mut human.strategy {
                 target.sort();
             }
         }
@@ -3112,6 +3143,7 @@ mod tests {
                 ship: "client1".to_string(),
                 strategy: Some(ActionPlan::Catch {
                     source: "client2".to_string(),
+                    id: 0,
                 }),
             }],
         );
@@ -3133,6 +3165,7 @@ mod tests {
                 ship: "client1".to_string(),
                 strategy: Some(ActionPlan::Catch {
                     source: "client2".to_string(),
+                    id: 0,
                 }),
             }],
         );
@@ -3151,7 +3184,8 @@ mod tests {
         assert_eq!(
             generated_rules[0].strategy,
             Some(ActionPlan::Shoot {
-                target: vec!["client3".to_string()]
+                target: vec!["client3".to_string()],
+                id: 1
             })
         );
         assert_eq!(rules.cache.len(), 0); // Cache should be resolved
@@ -3166,6 +3200,7 @@ mod tests {
                 ship: "client1".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["client2".to_string(), "client3".to_string()],
+                    id: 0,
                 }),
             }],
         );
@@ -3189,12 +3224,14 @@ mod tests {
                     ship: "shooter1".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["client_to_remove".to_string(), "client2".to_string()],
+                        id: 0,
                     }),
                 },
                 VariableHuman {
                     ship: "shooter2".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["client2".to_string(), "client_to_remove".to_string()],
+                        id: 0,
                     }),
                 },
             ],
@@ -3216,14 +3253,16 @@ mod tests {
             assert_eq!(
                 rule1.strategy,
                 Some(ActionPlan::Shoot {
-                    target: vec!["client2".to_string()]
+                    target: vec!["client2".to_string()],
+                    id: 0
                 })
             );
             assert_eq!(rule2.ship, "shooter2");
             assert_eq!(
                 rule2.strategy,
                 Some(ActionPlan::Shoot {
-                    target: vec!["client2".to_string()]
+                    target: vec!["client2".to_string()],
+                    id: 0
                 })
             );
         } else {
@@ -3231,14 +3270,16 @@ mod tests {
             assert_eq!(
                 rule1.strategy,
                 Some(ActionPlan::Shoot {
-                    target: vec!["client2".to_string()]
+                    target: vec!["client2".to_string()],
+                    id: 0
                 })
             );
             assert_eq!(rule2.ship, "shooter1");
             assert_eq!(
                 rule2.strategy,
                 Some(ActionPlan::Shoot {
-                    target: vec!["client2".to_string()]
+                    target: vec!["client2".to_string()],
+                    id: 0
                 })
             );
         }
@@ -3255,6 +3296,7 @@ mod tests {
                 ship: "shooter1".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["client_to_remove".to_string()],
+                    id: 0,
                 }),
             }],
         );
@@ -3272,6 +3314,7 @@ mod tests {
                 ship: "shooter1".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["client_to_remove".to_string()],
+                    id: 0,
                 }),
             }],
         );
@@ -3291,7 +3334,8 @@ mod tests {
         assert_eq!(
             generated_rules[0].strategy,
             Some(ActionPlan::Shoot {
-                target: vec!["client2".to_string()]
+                target: vec!["client2".to_string()],
+                id: 1
             })
         );
         assert_eq!(rules.cache.len(), 0); // Cache should be resolved
@@ -3361,6 +3405,7 @@ mod tests {
                     ship: "shooter1".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["client_to_remove".to_string(), "client2".to_string()],
+                        id: 0,
                     }),
                 },
             ],
@@ -3371,6 +3416,7 @@ mod tests {
                 ship: "client3".to_string(),
                 strategy: Some(ActionPlan::Catch {
                     source: "client_to_remove".to_string(),
+                    id: 0,
                 }),
             }],
         );
@@ -3402,7 +3448,8 @@ mod tests {
         assert_eq!(
             var1_rules[0].strategy,
             Some(ActionPlan::Shoot {
-                target: vec!["client2".to_string()]
+                target: vec!["client2".to_string()],
+                id: 0
             })
         );
     }
@@ -3455,6 +3502,7 @@ mod tests {
                 ship: "ShipA".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["ShipB".to_string()],
+                    id: 1,
                 }),
             }];
             map.insert("position".to_string(), var_humans);
@@ -3513,12 +3561,14 @@ mod tests {
                     ship: "ShipX".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipW".to_string(), "ShipZ".to_string()],
+                        id: 1,
                     }),
                 },
                 VariableHuman {
                     ship: "ShipY".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipW".to_string(), "ShipZ".to_string()],
+                        id: 1,
                     }),
                 },
             ];
@@ -3637,6 +3687,7 @@ mod tests {
                 ship: "ShipF".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["ShipG".to_string()],
+                    id: 1,
                 }),
             }];
             map.insert("shields".to_string(), var_humans);
@@ -3676,6 +3727,7 @@ mod tests {
             ship: "ShipF".to_string(),
             strategy: Some(ActionPlan::Shoot {
                 target: vec!["ShipG".to_string()],
+                id: 0,
             }),
         }];
         rules.insert("shields".to_string(), shields_rules.clone());
@@ -3732,6 +3784,7 @@ mod tests {
             ship: "ShipF".to_string(),
             strategy: Some(ActionPlan::Shoot {
                 target: vec!["ShipG".to_string()],
+                id: 0,
             }),
         }];
         rules.insert("shields".to_string(), shields_rules.clone());
@@ -3772,6 +3825,7 @@ mod tests {
             ship: "ShipK".to_string(),
             strategy: Some(ActionPlan::Shoot {
                 target: vec!["ShipI".to_string(), "ShipJ".to_string()],
+                id: 1,
             }),
         }];
         expected_store.insert("status".to_string(), status_rules);
@@ -3850,6 +3904,7 @@ mod tests {
                     ship: "ShipA".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipB".to_string()],
+                        id: 0,
                     }),
                 },
                 VariableHuman {
@@ -3882,6 +3937,7 @@ mod tests {
                     ship: "ShipA".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipB".to_string(), "ShipC".to_string()],
+                        id: 0,
                     }),
                 }, // Updated target list
             ];
@@ -3919,6 +3975,7 @@ mod tests {
                     ship: "ShipA".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipB".to_string()],
+                        id: 0,
                     }),
                 },
                 VariableHuman {
@@ -3948,12 +4005,14 @@ mod tests {
                     ship: "ShipA".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipB".to_string()],
+                        id: 0,
                     }),
                 }, // Existing Catch rule remains
                 VariableHuman {
                     ship: "ShipC".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec!["ShipB".to_string()],
+                        id: 0,
                     }),
                 },
             ];
@@ -3990,6 +4049,7 @@ mod tests {
                 ship: "BaseStation".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["Rover1".to_string()],
+                    id: 0,
                 }),
             }],
         );
@@ -4021,12 +4081,14 @@ mod tests {
                     ship: "BaseStation".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: all_subs.clone(),
+                        id: 0,
                     }),
                 },
                 VariableHuman {
                     ship: "BaseStationBackup".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: all_subs.clone(),
+                        id: 0,
                     }),
                 },
             ];
@@ -4068,12 +4130,16 @@ mod tests {
         ";
 
         let mut rules = Rules::new();
+        rules.new_id();
+        rules.new_id();
+        rules.new_id();
         rules.insert(
             "var1".to_string(),
             vec![VariableHuman {
                 ship: "testRat1".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["testRat2".to_string()],
+                    id: 1,
                 }),
             }],
         );
@@ -4084,6 +4150,7 @@ mod tests {
                 ship: "testRat2".to_string(),
                 strategy: Some(ActionPlan::Shoot {
                     target: vec!["testRat1".to_string(), COMPARE_NODE_NAME.to_string()],
+                    id: 2,
                 }),
             }],
         );
@@ -4095,12 +4162,14 @@ mod tests {
                     ship: "testRat2".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec![COMPARE_NODE_NAME.to_string()],
+                        id: 3,
                     }),
                 },
                 VariableHuman {
                     ship: "testRat1".to_string(),
                     strategy: Some(ActionPlan::Shoot {
                         target: vec![COMPARE_NODE_NAME.to_string()],
+                        id: 3,
                     }),
                 },
             ],

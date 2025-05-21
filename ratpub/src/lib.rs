@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use log::{debug, error, info};
+use log::{debug, error};
 use rkyv::{
     Archive, Deserialize, api::high::HighValidator, bytecheck::CheckBytes, de::Pool,
     rancor::Strategy,
@@ -19,22 +19,22 @@ impl<T: Sendable> Publisher<T> {
     pub async fn publish(&self, data: &T) -> anyhow::Result<()> {
         match self.ship.ask_for_action(&self.topic).await {
             Ok((sea::Action::Sail, _)) => {
-                debug!("Doing nothing but expected a shoot command {} ", self.topic);
+                // debug!("Doing nothing but expected a shoot command {} ", self.topic);
                 return Ok(());
             }
-            Ok((sea::Action::Shoot { target }, _)) => {
+            Ok((sea::Action::Shoot { target, id }, _)) => {
                 debug!("Publishing to {} at {:?}", self.topic, target);
 
                 self.ship
                     .get_cannon()
-                    .shoot(&target, data, VariableType::StaticOnly, &self.topic)
+                    .shoot(&target, id, data, VariableType::StaticOnly, &self.topic)
                     .await?;
 
                 debug!("Finished publishing {} at {:?}", self.topic, target);
 
                 return Ok(());
             }
-            Ok((sea::Action::Catch { source: _ }, _)) => {
+            Ok((sea::Action::Catch { .. }, _)) => {
                 return Err(anyhow!(
                     "Received Catch but we are in a publisher for {} ",
                     self.topic
@@ -80,17 +80,21 @@ impl Node {
         &self,
         topic: String,
     ) -> anyhow::Result<Publisher<T>> {
-        let client = self.ship.client.lock().await;
-        let client_send_lock = client.coordinator_send.read().unwrap();
-        let coord_tx = client_send_lock
-            .as_ref()
-            .expect("Sender does not exist after creation.");
+        let (coord_tx, mut coord_rx) = {
+            let client = self.ship.client.lock().await;
+            let client_send_lock = client.coordinator_send.read().unwrap();
+            let coord_tx = client_send_lock
+                .as_ref()
+                .expect("Sender does not exist after creation.")
+                .clone();
 
-        let client_recv_lock = client.coordinator_receive.read().unwrap();
-        let mut coord_rx = client_recv_lock
-            .as_ref()
-            .expect("Receiver does not exist after creation")
-            .subscribe();
+            let client_recv_lock = client.coordinator_receive.read().unwrap();
+            let coord_rx = client_recv_lock
+                .as_ref()
+                .expect("Receiver does not exist after creation")
+                .subscribe();
+            (coord_tx, coord_rx)
+        };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
@@ -104,7 +108,7 @@ impl Node {
             tx.send(()).unwrap();
         });
 
-        // Request
+        // // Request
         coord_tx
             .send(Packet {
                 header: sea::net::Header::default(),
@@ -117,9 +121,7 @@ impl Node {
             .await?;
 
         // Response
-        info!("awaiting publisher ack");
         rx.await?;
-        info!("got publisher ack");
 
         Ok(Publisher {
             topic,
@@ -184,16 +186,16 @@ impl Node {
             loop {
                 match rat_ship.ask_for_action(&topic).await {
                     Ok((sea::Action::Sail, _)) => {
-                        debug!("Doing nothing but expected a catch command {} ", &topic);
+                        // debug!("Doing nothing but expected a catch command {} ", &topic);
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                         continue;
                     }
-                    Ok((sea::Action::Shoot { target: _ }, _)) => {
+                    Ok((sea::Action::Shoot { .. }, _)) => {
                         error!("Received Shoot but we are in a subscriber for {} ", &topic);
                         continue;
                     }
-                    Ok((sea::Action::Catch { source }, _)) => {
-                        let recv_data = rat_ship.get_cannon().catch::<T>(&source).await;
+                    Ok((sea::Action::Catch { source, id }, _)) => {
+                        let recv_data = rat_ship.get_cannon().catch::<T>(id).await;
                         let recv_data = match recv_data {
                             Ok(recv_data) => recv_data,
                             Err(e) => {

@@ -1,4 +1,4 @@
-_log_level = "info"
+_log_level = "debug"
 
 # _rules = ./rules.rl
 # _winds = ["turbine_ratpub", "pelorus"]
@@ -25,8 +25,8 @@ _bag.{
 }
 
 # relative to executing binary
-reset! ./../../bags/dlg_cut
+reset! ./dlg_cut
 
+pf! i 1
 # pf! i, l 1
-pf! i, l 1
-pf! l 1
+# pf! l 1

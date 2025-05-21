@@ -8,6 +8,7 @@ use crate::{
     net::{Packet, PacketKind, WindAt},
 };
 
+#[derive(Clone, Debug)]
 pub struct ClientInfo {
     pub id: ShipName,
     pub network: NetworkShipAddress,
@@ -70,7 +71,12 @@ impl crate::Coordinator for CoordinatorImpl {
         action: rlc::ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()> {
-        if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
+        let client_info = {
+            let client_guard = self.rat_qs.read();
+            client_guard.await.get(&ship).cloned()
+        };
+
+        if let Some(client_info) = client_info {
             let action = self.convert_action(&action).await?;
             let paket = Packet {
                 header: crate::net::Header::default(),
@@ -140,7 +146,7 @@ impl CoordinatorImpl {
     ) -> anyhow::Result<crate::Action> {
         let action = match human_action {
             rlc::ActionPlan::Sail => crate::Action::Sail,
-            rlc::ActionPlan::Shoot { target } => {
+            rlc::ActionPlan::Shoot { target, id } => {
                 let mut targets = Vec::with_capacity(target.len());
                 for client_name in target.into_iter() {
                     let rat = self.rat_qs.read().await;
@@ -152,13 +158,17 @@ impl CoordinatorImpl {
                     targets.push(client_network);
                 }
 
-                crate::Action::Shoot { target: targets }
+                crate::Action::Shoot {
+                    target: targets,
+                    id: *id,
+                }
             }
-            crate::ActionPlan::Catch { source } => {
+            crate::ActionPlan::Catch { source, id } => {
                 let rat = self.rat_qs.read().await;
                 let client_info = rat.get(source).ok_or_else(|| anyhow!("Unknown client."))?;
                 crate::Action::Catch {
                     source: client_info.network.clone(),
+                    id: *id,
                 }
             }
         };
@@ -166,7 +176,10 @@ impl CoordinatorImpl {
         Ok(action)
     }
 
-    pub async fn new(external_ip: Option<[u8; 4]>, clients_wait_for_ack: bool) -> Self {
+    pub async fn new(
+        external_ip: Option<[u8; 4]>,
+        clients_wait_for_ack: std::sync::Arc<std::sync::RwLock<bool>>,
+    ) -> Self {
         let sea = crate::net::Sea::init(external_ip, clients_wait_for_ack).await;
 
         let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));

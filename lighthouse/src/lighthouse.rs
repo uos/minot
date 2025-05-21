@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use log::{error, info, warn};
+use log::{error, info};
 use rlc::COMPARE_NODE_NAME;
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 
@@ -22,8 +22,11 @@ use crate::{
     tui::Tui,
 };
 
+#[cfg(feature = "embed-ros2-turbine")]
 const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
+#[cfg(feature = "embed-ros1-turbine")]
 const EMBED_ROS1_TURBINE_NAME: &'static str = "embedded_ros1_turbine";
+#[cfg(feature = "embed-ratpub-turbine")]
 const EMBED_RATPUB_TURBINE_NAME: &'static str = "embedded_ratpub_turbine";
 
 #[tokio::main(flavor = "multi_thread")]
@@ -49,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match rhs {
             rlc::Rhs::Val(rlc::Val::StringVal(v)) => match v.as_str() {
                 "info" => Ok(log::LevelFilter::Info),
+                "debug" => Ok(log::LevelFilter::Debug),
                 "warn" => Ok(log::LevelFilter::Warn),
                 "error" => Ok(log::LevelFilter::Error),
                 _ => Err(anyhow!("unsupported log filter")),
@@ -60,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }?;
     tui_logger::init_logger(log_level).unwrap();
     // tui_logger::set_env_filter_from_string(&log_level);
-    // tui_logger::set_default_level(log::LevelFilter::Error);
+    tui_logger::set_default_level(log_level);
 
     #[cfg(feature = "embed-coordinator")]
     {
@@ -82,6 +86,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(None)
         }?;
 
+        #[cfg(feature = "embed-ratpub-turbine")]
+        {
+            let wind_name =
+                wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+
+            tokio::spawn(async move {
+                let res = wind::ratpub::run_dyn_wind(&wind_name).await;
+                match res {
+                    Ok(_) => {} // will never return
+                    Err(e) => {
+                        error!("Error in embedded ROS2 turbine. Reload the App. {e}")
+                    }
+                }
+            });
+        }
+
         let eval = match (file.as_ref(), coord_file) {
             (Some(cfg_filepath), Some(cfpath)) => {
                 let cfg_parent = cfg_filepath
@@ -102,19 +122,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         #[cfg(feature = "embed-ros2-turbine")]
         {
-            let wind_name = wind::get_env_or_default("wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+            let wind_name = wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
         #[cfg(feature = "embed-ros1-turbine")]
         {
-            let wind_name = wind::get_env_or_default("wind_name", &EMBED_ROS1_TURBINE_NAME)?;
+            let wind_name = wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
         #[cfg(feature = "embed-ratpub-turbine")]
         {
-            let wind_name = wind::get_env_or_default("wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+            let wind_name =
+                wind::get_env_or_default("wind_ratpub_name", &EMBED_RATPUB_TURBINE_NAME)?;
+            clients.insert(wind_name.clone() + "_pub");
             clients.insert(wind_name);
         }
 
@@ -161,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let res = wind::ros1::run_dyn_wind(&master_uri, &wind_name).await;
             match res {
                 Ok(None) => {
-                    warn!("ROS1 Master not found. Destroying node.");
+                    log::warn!("ROS1 Master not found. Destroying node.");
                 }
                 Ok(Some(_)) => {} // will never return
                 Err(e) => {
@@ -172,21 +194,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-
-    // #[cfg(feature = "embed-ratpub-turbine")]
-    // {
-    //     let wind_name = wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
-
-    //     tokio::spawn(async move {
-    //         let res = wind::ratpub::run_dyn_wind(&wind_name).await;
-    //         match res {
-    //             Ok(_) => {} // will never return
-    //             Err(e) => {
-    //                 error!("Error in embedded ROS2 turbine. Reload the App. {e}")
-    //             }
-    //         }
-    //     });
-    // }
 
     let rules = eval.rules;
     println!("Searching for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init
@@ -287,9 +294,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         action,
                         lock_until_ack: _,
                     } => {
-                        if let crate::Action::Catch { source } = action {
+                        if let crate::Action::Catch { source, id } = action {
                             // info!("received catch: {source:?}");
-                            match comparer.get_cannon().catch_dyn(&source).await {
+                            match comparer.get_cannon().catch_dyn(id).await {
                                 Ok((strrep, _var_type, var_name)) => {
                                     let name = match &source.kind {
                                         ShipKind::Rat(name) => name.clone(),

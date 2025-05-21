@@ -1,12 +1,8 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
 
 use anyhow::anyhow;
 use log::{error, info};
-use ratpub::{Node, Publisher};
-use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
+use ratpub::Node;
 use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -36,48 +32,51 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindD
     Ok(rx)
 }
 
-// TODO currently only supports one topic because we can not send a publisher and we need that for hashmap
 pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<Option<()>> {
-    let node = Node::create(wind_name.to_owned()).await?;
-    let mut wind_receiver = wind(&wind_name).await?;
+    let nh_name = wind_name.to_string() + "_pub";
+    let nh = tokio::spawn(async move { Node::create(nh_name).await });
+    let wind_name_owned = wind_name.to_owned();
+    let wind_receiver = tokio::spawn(async move { wind(&wind_name_owned).await });
 
-    let mut cloud_pub = None;
-    let mut imu_pub = None;
+    let node = nh.await??;
+    let mut wind_receiver = wind_receiver.await??;
 
+    let mut cloud_publishers = HashMap::new();
+    let mut imu_publishers = HashMap::new();
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             match data.data {
                 sea::SensorTypeMapped::Lidar(cloud_msg) => {
-                    let existing = match cloud_pub.as_ref() {
-                        None => {
-                            let pubber = node
-                                .create_publisher::<PointCloud2>(data.topic.clone())
-                                .await
-                                .unwrap();
-
-                            cloud_pub = Some(pubber);
-                            cloud_pub.as_ref().unwrap()
-                        }
-                        Some(existing) => &existing,
-                    };
-
-                    existing.publish(&cloud_msg).await.unwrap();
+                    let mut existing_pubber = cloud_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        cloud_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            cloud_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // TODO rm
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    pubber.publish(&cloud_msg).await?;
                 }
                 sea::SensorTypeMapped::Imu(imu_msg) => {
-                    let existing = match imu_pub.as_ref() {
-                        None => {
-                            let pubber = node
-                                .create_publisher::<Imu>(data.topic.clone())
-                                .await
-                                .unwrap();
-
-                            imu_pub = Some(pubber);
-                            imu_pub.as_ref().unwrap()
-                        }
-                        Some(existing) => &existing,
-                    };
-
-                    existing.publish(&imu_msg).await.unwrap();
+                    let mut existing_pubber = imu_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        imu_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            imu_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // TODO rm
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    pubber.publish(&imu_msg).await?;
                 }
                 sea::SensorTypeMapped::Any(_) => {
                     error!(
