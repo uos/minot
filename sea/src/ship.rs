@@ -78,11 +78,11 @@ impl crate::Cannon for NetworkShipImpl {
             None => loop {
                 if let Ok(update_id) = update_chan.recv().await {
                     if update_id == id {
-                        {
+                        let mut recv = {
                             let mut buf_lock = buf.write().unwrap();
-                            let mut recv = buf_lock.remove(&id).unwrap();
-                            recv.try_recv().unwrap()
+                            buf_lock.remove(&id).unwrap()
                         };
+                        break recv.recv().await.unwrap();
                     }
                 }
             },

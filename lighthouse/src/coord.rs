@@ -300,7 +300,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                         .push(ActionPlan::Sail);
                                                                 }
 
-                                                                info!("sending actions: {:?}", my_actions);
+                                                                debug!("sending actions: {:?}", my_actions);
 
                                                                 // answer the client that asked
                                                                 for action in my_actions {

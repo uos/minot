@@ -23,7 +23,7 @@ use crate::{
         Header, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
     },
 };
-const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>() + std::mem::size_of::<u32>();
+const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
 
 #[derive(Debug)]
 pub struct Client {
@@ -43,7 +43,7 @@ pub struct Client {
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
     pub raw_recv_buff: std::sync::Arc<
         std::sync::RwLock<
-            HashMap<u32, tokio::sync::oneshot::Receiver<(Vec<u8>, VariableType, String)>>,
+            HashMap<u32, tokio::sync::mpsc::Receiver<(Vec<u8>, VariableType, String)>>,
         >,
     >,
 }
@@ -725,7 +725,7 @@ impl Client {
         updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
         raw_recv_buff: std::sync::Arc<
             std::sync::RwLock<
-                HashMap<u32, tokio::sync::oneshot::Receiver<(Vec<u8>, VariableType, String)>>,
+                HashMap<u32, tokio::sync::mpsc::Receiver<(Vec<u8>, VariableType, String)>>,
             >,
         >,
     ) -> ! {
@@ -863,18 +863,18 @@ impl Client {
 
                 if !buffer.is_empty() {
                     let out_buff = buffer[10..buffer.len()].to_vec();
-                    let (buff_tx, buff_rx) = tokio::sync::oneshot::channel();
+                    let (buff_tx, buff_rx) = tokio::sync::mpsc::channel(1);
                     {
                         let mut lock = task_recv_buff.write().unwrap();
                         lock.insert(msg_id, buff_rx);
                     }
 
                     if let Err(_) = task_update_chan.send(msg_id) {
-                        debug!("got a message for id: {msg_id} but no one cares :(");
+                        info!("got a message for id: {msg_id} but no one cares :(");
                     }
 
                     tokio::spawn(async move {
-                        match buff_tx.send((out_buff, variable_type, var_name)) {
+                        match buff_tx.send((out_buff, variable_type, var_name)).await {
                             Ok(_) => {}
                             Err(_) => {
                                 error!(
@@ -890,8 +890,6 @@ impl Client {
             });
         }
     }
-
-    // TODO log to coordinator functions. They send them async in another thread to the coordinator so nothing is blocked on the client side.
 
     // --- end send/recv ---
 
