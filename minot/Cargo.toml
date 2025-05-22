@@ -37,13 +37,13 @@ strip = "debuginfo" # Significantly reduce binary size
 opt-level = 3
 
 [[bin]]
-name = "lh-coord"
+name = "coord"
 path = "src/coord.rs"
 test = false
 bench = false
 
 [[bin]]
-name = "lh"
+name = "minot"
 path = "src/minot.rs"
 test = false
 bench = false

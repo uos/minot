@@ -39,56 +39,54 @@ rust-nightly:
 .build_template: &build_defaults
   stage: snapshot
   script:
-    - export DATE=$(date +%Y-%m-%d)
-    - rustup default nightly
+    - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/lh lh-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/lh-coord lh-coord-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
+    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
+    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
+    - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
+    - mv target/$RUST_TARGET/release/coord coord-$TRIPLE
+    - mv target/$RUST_TARGET/release/librat.a librat.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
-    - mv target/$RUST_TARGET/release/librat.so librat-$DATE-nightly.so
+    - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
-      - wind-ros1-$TRIPLE-*-nightly
-      - wind-ros2-$TRIPLE-*-nightly
-      - lh-$TRIPLE-*-nightly
-      - lh-coord-$TRIPLE-*-nightly
-      - librat-*-nightly.so
-      - librat-*-nightly.a
+      - wind-ros1-$TRIPLE
+      - wind-ros2-$TRIPLE
+      - minot-$TRIPLE
+      - coord-$TRIPLE
+      - librat.so
+      - librat.a
     expire_in: 1 week
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-      when: always
+      when: never
 
 snapshot:linux:x86_64-musl:
   stage: snapshot
   script:
-    - export DATE=$(date +%Y-%m-%d)
-    - rustup default nightly
+    - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/lh-coord lh-coord-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/lh lh-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
+    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
+    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
+    - mv target/$RUST_TARGET/release/coord coord-$TRIPLE
+    - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
+    - mv target/$RUST_TARGET/release/librat.a librat.a
   artifacts:
     paths:
-      - lh-coord-$TRIPLE-*-nightly
-      - wind-ros1-$TRIPLE-*-nightly
-      - wind-ros2-$TRIPLE-*-nightly
-      - lh-$TRIPLE-*-nightly
-      - librat-nightly-*-nightly.a
+      - coord-$TRIPLE
+      - wind-ros1-$TRIPLE
+      - wind-ros2-$TRIPLE
+      - minot-$TRIPLE
+      - librat.a
     expire_in: 1 week
   variables:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-      when: always
+      when: never
 
 snapshot:linux:x86_64-gnu:
   <<: *build_defaults
@@ -117,30 +115,29 @@ snapshot:linux:riscv64:
 snapshot:linux:riscv64-musl:
   stage: snapshot
   script:
-    - export DATE=$(date +%Y-%m-%d)
-    - rustup default nightly
+    - rustup default stable
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/lh-coord lh-coord-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/lh lh-$TRIPLE-$DATE-nightly
-    - mv target/$RUST_TARGET/release/librat.a librat-$DATE-nightly.a
+    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
+    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
+    - mv target/$RUST_TARGET/release/coord coord-$TRIPLE
+    - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
+    - mv target/$RUST_TARGET/release/librat.a librat.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
-    - mv target/$RUST_TARGET/release/librat.so librat-$DATE-nightly.so
+    - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
-      - wind-ros1-$TRIPLE-*-nightly
-      - wind-ros2-$TRIPLE-*-nightly
-      - lh-coord-$TRIPLE-*-nightly
-      - lh-$TRIPLE-*-nightly
-      - librat-*-nightly.so
-      - librat-*-nightly.a
+      - wind-ros1-$TRIPLE
+      - wind-ros2-$TRIPLE
+      - coord-$TRIPLE
+      - minot-$TRIPLE
+      - librat.so
+      - librat.a
     expire_in: 1 week
   variables:
     RUST_TARGET: riscv64gc-unknown-linux-musl
     TRIPLE: riscv64gc-linux-musl
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-      when: always
+      when: never
