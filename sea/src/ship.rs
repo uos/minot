@@ -55,8 +55,9 @@ impl crate::Cannon for NetworkShipImpl {
     }
 
     /// Catch the dumped data from the source.
-    async fn catch<T>(&self, id: u32) -> anyhow::Result<T>
+    async fn catch<T>(&self, id: u32) -> anyhow::Result<Vec<T>>
     where
+        T: Send,
         T: Archive,
         T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
             + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
@@ -73,25 +74,73 @@ impl crate::Cannon for NetworkShipImpl {
             buf_lock.remove(&id)
         };
 
-        let (buf, _, _) = match update_id {
-            Some(mut en) => en.try_recv().unwrap(),
+        let mut out_buf = Vec::new();
+        match update_id {
+            Some(mut en) => {
+                // missed update call, the data is already waiting for us. gather all.
+                loop {
+                    let (raw, _, _) = en.recv().await.unwrap();
+                    let mat = from_bytes::<T, rkyv::rancor::Error>(&raw)
+                        .expect("Could not decode data to T");
+                    out_buf.push(mat);
+                    if en.is_empty() {
+                        break;
+                    }
+                }
+            }
             None => loop {
+                // wait for update call for our id
                 if let Ok(update_id) = update_chan.recv().await {
                     if update_id == id {
                         let mut recv = {
                             let mut buf_lock = buf.write().unwrap();
                             buf_lock.remove(&id).unwrap()
                         };
-                        break recv.recv().await.unwrap();
+                        let (nb, _, _) = recv.recv().await.unwrap();
+                        let mat = from_bytes::<T, rkyv::rancor::Error>(&nb)
+                            .expect("Could not decode data to T");
+                        out_buf.push(mat);
+                        if recv.is_empty() {
+                            break;
+                        }
                     }
                 }
             },
         };
-        let mat =
-            from_bytes::<T, rkyv::rancor::Error>(&buf).expect("Could not decode data to Matrix");
-        Ok(mat)
+        Ok(out_buf)
     }
-    async fn catch_dyn(&self, id: u32) -> anyhow::Result<(String, VariableType, String)> {
+
+    async fn catch_dyn(&self, id: u32) -> anyhow::Result<Vec<(String, VariableType, String)>> {
+        fn to_dyn_str(var_type: VariableType, buf: Vec<u8>) -> anyhow::Result<String> {
+            Ok(match var_type {
+                VariableType::StaticOnly => {
+                    return Err(anyhow!(
+                        "Received Variable without dynamic type info, could not decode."
+                    ));
+                }
+                VariableType::U8 => {
+                    let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&buf)?;
+                    let mat: nalgebra::DMatrix<u8> = deserialized.into();
+                    format!("{:?}", mat)
+                }
+                VariableType::I32 => {
+                    let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&buf)?;
+                    let mat: nalgebra::DMatrix<i32> = deserialized.into();
+                    format!("{:?}", mat)
+                }
+                VariableType::F32 => {
+                    let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&buf)?;
+                    let mat: nalgebra::DMatrix<f32> = deserialized.into();
+                    format!("{:?}", mat)
+                }
+                VariableType::F64 => {
+                    let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&buf)?;
+                    let mat: nalgebra::DMatrix<f64> = deserialized.into();
+                    format!("{:?}", mat)
+                }
+            })
+        }
+
         let (buf, mut update_chan) = {
             let client = self.client.lock().await;
             let buf = std::sync::Arc::clone(&client.raw_recv_buff);
@@ -104,48 +153,37 @@ impl crate::Cannon for NetworkShipImpl {
             buf_lock.remove(&id)
         };
 
-        let (buf, var_type, var_name) = match update_id {
-            Some(mut en) => en.try_recv().unwrap(),
+        let mut out_buf = Vec::new();
+        match update_id {
+            Some(mut en) => {
+                // missed update call, the data is already waiting for us. gather all.
+                loop {
+                    let (raw, var_type, var_name) = en.recv().await.unwrap();
+                    out_buf.push((to_dyn_str(var_type, raw)?, var_type, var_name));
+                    if en.is_empty() {
+                        break;
+                    }
+                }
+            }
             None => loop {
+                // wait for update call for our id
                 if let Ok(update_id) = update_chan.recv().await {
                     if update_id == id {
-                        {
+                        let mut recv = {
                             let mut buf_lock = buf.write().unwrap();
-                            let mut recv = buf_lock.remove(&id).unwrap();
-                            recv.try_recv().unwrap()
+                            buf_lock.remove(&id).unwrap()
                         };
+                        let (raw, var_type, var_name) = recv.recv().await.unwrap();
+                        out_buf.push((to_dyn_str(var_type, raw)?, var_type, var_name));
+                        if recv.is_empty() {
+                            break;
+                        }
                     }
                 }
             },
         };
-        let strrep = match var_type {
-            VariableType::StaticOnly => {
-                return Err(anyhow!(
-                    "Received Variable without dynamic type info, could not decode."
-                ));
-            }
-            VariableType::U8 => {
-                let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&buf)?;
-                let mat: nalgebra::DMatrix<u8> = deserialized.into();
-                format!("{:?}", mat)
-            }
-            VariableType::I32 => {
-                let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&buf)?;
-                let mat: nalgebra::DMatrix<i32> = deserialized.into();
-                format!("{:?}", mat)
-            }
-            VariableType::F32 => {
-                let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&buf)?;
-                let mat: nalgebra::DMatrix<f32> = deserialized.into();
-                format!("{:?}", mat)
-            }
-            VariableType::F64 => {
-                let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&buf)?;
-                let mat: nalgebra::DMatrix<f64> = deserialized.into();
-                format!("{:?}", mat)
-            }
-        };
-        Ok((strrep, var_type, var_name))
+
+        Ok(out_buf)
     }
 }
 

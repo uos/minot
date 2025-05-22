@@ -187,23 +187,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         &mut app.compare.horizontal_scroll_state,
     );
 
-    if app.wind_cursor.read().unwrap().showing_popup {
-        let block = Block::bordered().title("Wind Cursor to Line:");
-        let area = popup_area(frame.area(), 30, 3);
-        let buffer = app
-            .wind_cursor
-            .read()
-            .unwrap()
-            .popup_buffer
-            .iter()
-            .collect::<String>();
-        let content = Paragraph::new(buffer).block(block);
-        frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
-        frame.render_widget(content, area);
-    }
-
     if app.info_view.read().unwrap().shown {
-        let block = Block::bordered().title("Info");
+        let block = Block::bordered().title("Logs");
         let area = frame.area().inner(Margin {
             horizontal: 10,
             vertical: 5,
@@ -221,6 +206,21 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .output_target(false)
             .output_separator(' ')
             .block(block);
+        frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
+        frame.render_widget(content, area);
+    }
+
+    if app.wind_cursor.read().unwrap().showing_popup {
+        let block = Block::bordered().title("Wind Cursor to Line:");
+        let area = popup_area(frame.area(), 30, 3);
+        let buffer = app
+            .wind_cursor
+            .read()
+            .unwrap()
+            .popup_buffer
+            .iter()
+            .collect::<String>();
+        let content = Paragraph::new(buffer).block(block);
         frame.render_widget(ratatui::widgets::Clear, area); //this clears out the background
         frame.render_widget(content, area);
     }

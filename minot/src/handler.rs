@@ -48,11 +48,7 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             app.set_var_locked();
         }
         KeyCode::Char('l') => {
-            if app.wind_mode() {
-                app.wind_toggle_popup();
-            } else {
-                app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
-            }
+            app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
         }
         KeyCode::Right => {
             app.scroll_compare(Some(crate::app::HorizontalDirection::Right), None);
@@ -63,8 +59,12 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Left => {
             app.scroll_compare(Some(crate::app::HorizontalDirection::Left), None);
         }
-        KeyCode::Char('L') => {
-            app.compare_toggle_popup();
+        KeyCode::Char('g') => {
+            if app.wind_mode() {
+                app.wind_toggle_popup();
+            } else {
+                app.compare_toggle_popup();
+            }
         }
         KeyCode::Char(',') => {
             app.send_lock_next(true).await;

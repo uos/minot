@@ -204,14 +204,21 @@ impl Node {
                             }
                         };
                         debug!("Finished catching {} from {:?}", &topic, source);
-                        let sent = tx.send(recv_data).await;
-                        match sent {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("Error sending received buffer out through channel: {e}");
-                                return;
+                        let sender = tx.clone();
+                        tokio::spawn(async move {
+                            for rd in recv_data {
+                                let sent = sender.send(rd).await;
+                                match sent {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        error!(
+                                            "Error sending received buffer out through channel: {e}"
+                                        );
+                                        return;
+                                    }
+                                }
                             }
-                        }
+                        });
                     }
                     Err(e) => {
                         error!("Error asking for action: {e}");

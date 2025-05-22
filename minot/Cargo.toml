@@ -1,5 +1,5 @@
 [package]
-name = "lighthouse"
+name = "minot"
 edition.workspace = true
 include.workspace = true
 keywords.workspace = true
@@ -44,7 +44,7 @@ bench = false
 
 [[bin]]
 name = "lh"
-path = "src/lighthouse.rs"
+path = "src/minot.rs"
 test = false
 bench = false
 

@@ -1,4 +1,4 @@
-# Lighthouse
+# minot
 
 A toolchain for building and testing distributed robot systems with ROS1 and ROS2.
 
@@ -20,7 +20,7 @@ gcc rat2.c -o rat2 -L../../target/debug -lrat
 RUST_LOG=debug ./rat2
 ```
 
-## LH TUI Keybindings
+## Minot TUI Keybindings
 
 ### Basics
 
@@ -32,7 +32,7 @@ RUST_LOG=debug ./rat2
 
 **Toggle Mode** = w
 
-**Toggle Popup** (in wind mode) = l
+**Toggle Manual Enter** (in wind mode) = g
 
 **Apply Current Input in Popup** = <kbd>Enter</kbd>
 
@@ -67,7 +67,7 @@ Adding new ones happens automatically when firing the .rl file if it contains so
 <br>
 
 
-**Toggle Cursor Popup** = <kbd>Shift</kbd>+l
+**Toggle Cursor Popup** = g (in compare mode)
 
 **Apply Current Input in Popup** = <kbd>Enter</kbd>
 

@@ -189,13 +189,16 @@ pub trait Cannon: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
 
     /// Catch the dumped data from the source.
-    async fn catch<T>(&self, id: u32) -> anyhow::Result<T>
+    /// The returning Vec can contain previously missed entities of T from existing sync connections.
+    /// The first item of T is the newest, followed by incremental older ones.
+    async fn catch<T>(&self, id: u32) -> anyhow::Result<Vec<T>>
     where
+        T: Send,
         T: Archive,
         T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
             + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>;
 
-    async fn catch_dyn(&self, id: u32) -> anyhow::Result<(String, VariableType, String)>;
+    async fn catch_dyn(&self, id: u32) -> anyhow::Result<Vec<(String, VariableType, String)>>;
 }
 
 #[derive(Clone, Debug, Default, Copy, Archive, Serialize, Deserialize, PartialEq)]

@@ -199,16 +199,15 @@ where
                             .subscribe()
                     });
 
-                    let recv_data = rat_ship.get_cannon().catch::<T>(id).await?;
+                    let mut recv_data = rat_ship.get_cannon().catch::<T>(id).await?;
 
                     info!(
                         "Rat {} finished catching {} from {:?}",
                         rat.name, variable_name, source
                     );
 
-                    // let deserialized: nalgebra::DMatrix<T> = bincode::deserialize(&recv_data)
-                    // .map_err(|e| anyhow::anyhow!("Failed to deserialize data: {}", e))?;
-                    *data = recv_data;
+                    // The first index is the newest
+                    *data = recv_data.remove(0);
 
                     if let Some(mut receiver) = receiver {
                         info!("Locked...");

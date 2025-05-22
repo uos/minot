@@ -1,5 +1,5 @@
 [workspace]
-members = ["bagread", "lighthouse", "rat", "ratpub", "ratpub_smol", "rlc", "sea", "wind"]
+members = ["bagread", "minot", "rat", "ratpub", "ratpub_smol", "rlc", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
@@ -11,6 +11,12 @@ edition = "2024"
 include = ["**/*.rs", "**/*.md", "**/Cargo.toml"]
 
 [workspace.dependencies]
+sea = { path = "sea" }
+ratpub = { path = "ratpub" }
+bagread = { path = "bagread" }
+rlc = { path = "rlc" }
+wind = { path = "wind" }
+
 anyhow = "1"
 async-trait = "0.1.86"
 rkyv = { version = "0.8.10" }
@@ -22,11 +28,6 @@ ros_pointcloud2 = { version = "0.5.3", git = "https://github.com/stelzo/ros_poin
   "serde",
   "ros2-interfaces-jazzy",
 ] }
-sea = { path = "sea" }
-ratpub = { path = "ratpub" }
-bagread = { path = "bagread" }
-rlc = { path = "rlc" }
-wind = { path = "wind" }
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 ros2-client = { version = "0.8.1", git = "https://github.com/stelzo/ros2-client", branch = "raw" }

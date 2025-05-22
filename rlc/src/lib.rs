@@ -32,7 +32,7 @@ pub struct Rules {
     id_counter: u32,
 }
 
-pub const COMPARE_NODE_NAME: &'static str = "#lhtui";
+pub const COMPARE_NODE_NAME: &'static str = "#minot-tui";
 
 impl Rules {
     pub fn new() -> Self {

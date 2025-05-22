@@ -297,7 +297,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let crate::Action::Catch { source, id } = action {
                             // info!("received catch: {source:?}");
                             match comparer.get_cannon().catch_dyn(id).await {
-                                Ok((strrep, _var_type, var_name)) => {
+                                Ok(v) => {
                                     let name = match &source.kind {
                                         ShipKind::Rat(name) => name.clone(),
                                         ShipKind::Wind(_) => {
@@ -306,10 +306,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     };
 
-                                    match ndata_tx.send((name, strrep, var_name)).await {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            error!("Error sending received variable: {e}");
+                                    for (strrep, _var_type, var_name) in v {
+                                        match ndata_tx.send((name.clone(), strrep, var_name)).await
+                                        {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                error!("Error sending received variable: {e}");
+                                            }
                                         }
                                     }
                                 }
@@ -330,7 +333,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new(tx, ndata_rx, dyn_wind_rx, file).await;
 
-    info!("Welcome to Lighthouse TUI. Have fun!");
+    info!("Welcome to Minot TUI. Have fun!");
     let backend = CrosstermBackend::new(std::io::stdout());
     let terminal = Terminal::new(backend)?;
     let events = EventHandler::new(250);

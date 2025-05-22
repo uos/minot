@@ -498,7 +498,7 @@ impl Client {
 
         let (_disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
-        // only make non lh nodes wait for the coordinate since they ask for variables
+        // only make non minot tui nodes wait for the coordinate since they ask for variables
         if match &self.kind {
             ShipKind::Rat(name) => name != rlc::COMPARE_NODE_NAME,
             _ => true,
@@ -870,7 +870,7 @@ impl Client {
                     }
 
                     if let Err(_) = task_update_chan.send(msg_id) {
-                        info!("got a message for id: {msg_id} but no one cares :(");
+                        debug!("got a message for id: {msg_id} but no one cares :(");
                     }
 
                     tokio::spawn(async move {
