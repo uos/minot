@@ -13,6 +13,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use sea::{net::NetArray, ship::NetworkShipImpl, *};
 
+pub use sea::VariableType;
+
 pub struct Rat {
     name: String,
     ship: Option<NetworkShipImpl>,
