@@ -275,8 +275,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                         action,
                                                                         ActionPlan::Sail
                                                                     ) {
-                                                                        rat_coord_tx
-                                                                .send(
+                                                                        rat_coord_tx.send(
                                                                     MinotTask::SendRatAction {
                                                                         ship_name: minot_compare_name
                                                                             .clone(),
@@ -314,67 +313,58 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                 let mut winds =
                                                                     winds_inner.write().unwrap();
 
-                                                                let mut changed = false;
                                                                 let mut asked_for_dynamic = false;
                                                                 winds.get_mut(&variable).map(|wt| {
-                                                                wt.iter_mut().for_each(|wte| {
-                                                                    // TODO we saved many reguests here for the same var but only one will come through "already seen"
-                                                                    if !wte.already_seen {
-                                                                        match &mut wte.kind {
-                                                                            WindTaskKind::Fix(wind_datas) => {
-                                                                                    let ret = wind_tx_inner.send(wind_datas.clone()); // Forward to each listener of newly connected winds. They resolve the names.
+                                                                    wt.iter_mut().for_each(|wte| {
+                                                                        // TODO we saved many reguests here for the same var but only one will come through "already seen"
+                                                                        if !wte.already_seen {
+                                                                            match &mut wte.kind {
+                                                                                WindTaskKind::Fix(wind_datas) => {
+                                                                                        let ret = wind_tx_inner.send(wind_datas.clone()); // Forward to each listener of newly connected winds. They resolve the names.
+                                                                                        match ret {
+                                                                                            Ok(_) => {},
+                                                                                            Err(e) => {
+                                                                                                error!("Could not reach any turbine. Are you sure you have started and connected any? {e}");
+                                                                                            },
+                                                                                        }
+                                                                                }
+                                                                                WindTaskKind::Dynamic => {
+                                                                                    if asked_for_dynamic {
+                                                                                        wte.already_seen = true;
+                                                                                        return; // only ask one time dynamic for the variable because minot tui sends all winds for this var with one request
+                                                                                    }
+                                                                                    asked_for_dynamic = true;
+
+                                                                                    info!("asking Minot TUI for dyn for {}", &variable);
+                                                                                    // ask Minot TUI to send the next fix command to us
+                                                                                    let ret = rat_coord_tx.send(MinotTask::WindDynamicVarReq(variable.clone()));
                                                                                     match ret {
                                                                                         Ok(_) => {},
                                                                                         Err(e) => {
-                                                                                            error!("Could not reach any turbine. Are you sure you have started and connected any? {e}");
+                                                                                            error!("Could not find connected Minot TUI for asking dynamic wind. {e}");
                                                                                         },
                                                                                     }
-                                                                            }
-                                                                            WindTaskKind::Dynamic => {
-                                                                                info!("asked for dynamic {}", asked_for_dynamic);
-                                                                                if asked_for_dynamic {
-                                                                                    wte.already_seen = true;
-                                                                                    changed = true;
-                                                                                    return; // only ask one time dynamic for the variable because lhtui sends all winds for this var with one request
                                                                                 }
-                                                                                asked_for_dynamic = true;
-
-                                                                                info!("asking Minot TUI for dyn for {}", &variable);
-                                                                                // ask Minot TUI to send the next fix command to us
-                                                                                let ret = rat_coord_tx.send(MinotTask::WindDynamicVarReq(variable.clone()));
-                                                                                match ret {
-                                                                                    Ok(_) => {
-                                                                                info!("setting asked");
-                                                                                    },
-                                                                                    Err(e) => {
-                                                                                        error!("Could not find connected Minot TUI for asking dynamic wind. {e}");
-                                                                                    },
-                                                                                }
-                                                                            }
-                                                                        };
-                                                                        wte.already_seen = true;
-                                                                        changed = true;
-                                                                    }
+                                                                            };
+                                                                            wte.already_seen = true;
+                                                                        }
+                                                                    });
                                                                 });
 
-                                                            });
-
                                                                 // set all other to be sent again
-                                                                if changed {
-                                                                    for (var, wind) in
-                                                                        winds.iter_mut()
-                                                                    {
-                                                                        if var == &variable {
-                                                                            continue;
-                                                                        }
-
-                                                                        wind.iter_mut().for_each(
-                                                                            |wte| {
-                                                                                wte.already_seen =
-                                                                                    false;
-                                                                            },
-                                                                        );
+                                                                for (var, wind) in
+                                                                    winds.iter_mut()
+                                                                {
+                                                                    if var == &variable {
+                                                                        continue;
                                                                     }
+
+                                                                    wind.iter_mut().for_each(
+                                                                        |wte| {
+                                                                            wte.already_seen =
+                                                                                false;
+                                                                        },
+                                                                    );
                                                                 }
                                                             }
                                                             PacketKind::Heartbeat => {}

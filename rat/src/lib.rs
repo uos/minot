@@ -146,8 +146,27 @@ where
     if let Some(rat_ship) = rat.ship.as_ref() {
         rt.block_on(async move {
             match rat_ship.ask_for_action(variable_name).await {
-                Ok((sea::Action::Sail, _)) => {
+                Ok((sea::Action::Sail, lock_until_ack)) => {
                     info!("Rat {} sails for variable {}", rat.name, variable_name);
+                    let receiver = lock_until_ack.then_some({
+                        let client = rat_ship.client.lock().await;
+                        let sender = client.coordinator_receive.read().unwrap();
+                        sender
+                            .as_ref()
+                            .expect("How are we receiving anything in the client? :)")
+                            .subscribe()
+                    });
+
+                    if let Some(mut receiver) = receiver {
+                        info!("Locked...");
+                        loop {
+                            let (packet, _) = receiver.recv().await?;
+                            if matches!(packet.data, net::PacketKind::Acknowledge) {
+                                break;
+                            }
+                        }
+                        info!("Unlocked");
+                    }
 
                     Ok(())
                 }
