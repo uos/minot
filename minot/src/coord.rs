@@ -238,7 +238,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                 },
                                                 Err(e) => {
                                                     error!(
-                                                        "Could not receive packet from client {inner_name}: {e}"
+                                                        "Coordinator could not receive packet from Minot TUI: {e}"
                                                     );
                                                     return;
                                                 }

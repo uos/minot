@@ -1,9 +1,13 @@
+use std::io::{Read, Seek};
 use std::str::FromStr;
+use std::time::SystemTime;
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, anyhow};
-use mcap::{McapError, Message};
-use memmap2::Mmap;
+use camino::Utf8PathBuf;
+use mcap::Summary;
+use mcap::records::{nanos_to_system_time, system_time_to_nanos};
+use mcap::sans_io::{IndexedReadEvent, IndexedReader, IndexedReaderOptions, SummaryReadEvent};
 use qos::{
     RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
 };
@@ -15,7 +19,6 @@ use rlc::{
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_client::ros2::policy::{Durability, History, Reliability};
 use ros2_client::ros2::{self, Duration};
-// use ros2_interfaces_jazzy::sensor_msgs::msg::{Imu, PointCloud2};
 use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
@@ -189,12 +192,34 @@ fn validate_support(data: &Metadata) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Bagfile {
     bagfile_name: Option<std::path::PathBuf>,
-    cursor: usize,
-    buffer: Option<Mmap>,
+    last_iter_time: Option<SystemTime>,
+    start_time: Option<SystemTime>,
     metadata: Option<Metadata>,
+    reader: Option<IndexedReader>,
+    read_buffer: Vec<u8>,
+    summary: Summary,
+    file: Option<std::fs::File>,
+}
+
+impl fmt::Debug for Bagfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Bagfile")
+            .field("bagfile_name", &self.bagfile_name)
+            .field("last_iter_time", &self.last_iter_time)
+            .field("start_time", &self.start_time)
+            .field("metadata", &self.metadata)
+            // omitting reader
+            .field(
+                "read_buffer",
+                &format!("[{} bytes]", self.read_buffer.len()),
+            )
+            .field("summary", &self.summary)
+            // omitting "file",
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
@@ -233,99 +258,107 @@ pub enum SensorTypeMapped {
 //     }
 // }
 
-fn collect_until(
-    iter: impl Iterator<Item = core::result::Result<Message<'static>, McapError>>,
-    cursor: &mut usize,
+fn collect_until<T>(
+    reader: &mut IndexedReader,
+    file: &mut T,
+    mut buffer: &mut Vec<u8>,
+    last_iter_time: &mut Option<SystemTime>,
+    start_time: &mut Option<SystemTime>,
+    summary: &Summary,
     metadata: &Metadata,
     send_sensor: &Vec<AnySensor>,
     until_sensor: Option<(&Vec<AnySensor>, &PlayCount)>,
     until: Option<&PlayCount>,
-) -> anyhow::Result<Vec<(u64, BagMsg)>> {
+) -> anyhow::Result<Vec<(u64, BagMsg)>>
+where
+    T: Seek + Read,
+{
+    if start_time.is_none() {
+        start_time.replace(nanos_to_system_time(
+            summary.stats.as_ref().unwrap().message_start_time,
+        ));
+    }
+    let start_time = start_time.unwrap();
+
+    // reader
     let mut rel_since_begin = 0;
     let mut until_sensor_counter = 0;
     let mut msgs = Vec::new();
-    let mut start_time = None;
 
-    let skip = *cursor;
-    let mut skip_start_time = None;
-    let mut iter = iter
-        .enumerate()
-        .skip_while(|(i, s)| {
-            match until {
-                Some(PlayCount::TimeRangeMs(AbsTimeRange::Closed((min, _))))
-                | Some(PlayCount::TimeRangeMs(AbsTimeRange::UpperOpen(min))) => {
-                    let min = (*min as u128) * 1_000_000;
-                    if let Ok(msg) = s {
-                        let msg_time = msg.publish_time as u128;
-                        if let Some(tstart) = skip_start_time {
-                            // we haven't reached our start point yet, so skip this one
-                            msg_time < tstart + min
-                        } else {
-                            // edge case: span starts from beginning so we can't compare internal msg time with a previous ts since the range ms is relative time from bagfile start and msg_time is absolute
-                            if *i == 0 && min == 0 {
-                                false
-                            } else {
-                                skip_start_time.replace(msg.publish_time as u128);
-                                true
-                            }
-                        }
-                    } else {
-                        // failed reading mcap, propagate error to iterator peek later
-                        false
-                    }
-                }
-                _ => {
-                    let skipped = *i < skip;
-                    skipped
-                }
+    // skipping if needed. if the request wants some data from earlier, redo the indexreader with the respective filters
+    let lower = match until {
+        Some(PlayCount::TimeRangeMs(AbsTimeRange::Closed((min, _))))
+        | Some(PlayCount::TimeRangeMs(AbsTimeRange::UpperOpen(min))) => {
+            let req_min = std::time::Duration::from_millis(*min);
+            let abs_req_min = start_time + req_min;
+            Some(abs_req_min)
+        }
+        Some(PlayCount::TimeRangeMs(AbsTimeRange::LowerOpen(_))) => Some(start_time),
+        _ => None,
+    };
+
+    if let Some(lower_ts) = lower {
+        let options =
+            IndexedReaderOptions::new().log_time_on_or_after(system_time_to_nanos(&lower_ts));
+        *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(&summary, options)
+            .expect("could not construct reader");
+        *last_iter_time = Some(lower_ts);
+    }
+
+    // reading messages
+    let mut breaked_until = false;
+    let mut time_iter_before = None;
+    let span_start = last_iter_time.unwrap_or(start_time);
+    while let Some(event) = reader.next_event() {
+        match event? {
+            IndexedReadEvent::ReadChunkRequest { offset, length } => {
+                file.seek(std::io::SeekFrom::Start(offset))?;
+                buffer.resize(length, 0);
+                file.read_exact(&mut buffer)?;
+                reader.insert_chunk_record_data(offset, &buffer)?;
             }
-        })
-        .map(|(_, el)| el)
-        .peekable();
+            IndexedReadEvent::Message { header, data } => {
+                let channel = summary.channels.get(&header.channel_id).unwrap();
+                let log_time = nanos_to_system_time(header.log_time);
 
-    loop {
-        match iter.peek() {
-            Some(msg) => {
-                let msg = msg
-                    .as_ref()
-                    .map_err(|e| anyhow!("Could not read mcap: {e}"))?;
+                if time_iter_before.is_none() {
+                    time_iter_before.replace(start_time);
+                } else {
+                    time_iter_before = last_iter_time.clone();
+                }
+                *last_iter_time = Some(nanos_to_system_time(header.log_time)); // advance cursor
 
                 match until {
                     Some(PlayCount::TimeRelativeMs(rel_dur)) => {
-                        let rel_dur = rel_dur * 1_000_000;
-                        if let Some(tstart) = start_time {
-                            if msg.publish_time > tstart + rel_dur {
-                                return Ok(msgs);
-                            }
-                        } else {
-                            start_time.replace(msg.publish_time);
+                        let rel_dur = std::time::Duration::from_millis(*rel_dur);
+                        let end_abs = span_start + rel_dur;
+                        if log_time > end_abs {
+                            breaked_until = true;
+                            break;
                         }
                     }
                     Some(PlayCount::TimeRangeMs(AbsTimeRange::Closed((min, max)))) => {
-                        let min = min * 1_000_000;
-                        let max = max * 1_000_000;
                         let rel_dur = max - min;
-                        if let Some(tstart) = start_time {
-                            if tstart + rel_dur < msg.publish_time {
-                                return Ok(msgs);
-                            }
-                        } else {
-                            start_time.replace(msg.publish_time);
+                        let rel_dur = std::time::Duration::from_millis(rel_dur);
+                        let end_abs = span_start + rel_dur;
+                        if log_time > end_abs {
+                            breaked_until = true;
+                            break;
                         }
                     }
                     Some(PlayCount::TimeRangeMs(AbsTimeRange::LowerOpen(max))) => {
-                        let max = max * 1_000_000;
-                        if let Some(tstart) = start_time {
-                            if tstart + max < msg.publish_time {
-                                return Ok(msgs);
-                            }
-                        } else {
-                            start_time.replace(msg.publish_time);
+                        let max = std::time::Duration::from_millis(*max);
+                        let end_abs = span_start + max;
+                        if log_time > end_abs {
+                            breaked_until = true;
+                            break;
                         }
                     }
+                    // just for completeness. can be handled at the end to avoid index reader init
                     Some(PlayCount::Amount(count)) => {
                         if rel_since_begin >= *count {
-                            return Ok(msgs);
+                            breaked_until = true;
+                            break;
                         }
                     }
                     _ => {}
@@ -336,11 +369,11 @@ fn collect_until(
                         for us in *until_sensors {
                             let pass = match &us.id {
                                 SensorIdentification::Topic(items) => {
-                                    items.as_str() == &msg.channel.topic
+                                    items.as_str() == &channel.topic
                                 }
-                                SensorIdentification::Type(t) => t.is(msg.channel.topic.as_str()),
+                                SensorIdentification::Type(t) => t.is(channel.topic.as_str()),
                                 SensorIdentification::TopicAndType { topic, msg_type: _ } => {
-                                    topic.as_str() == &msg.channel.topic
+                                    topic.as_str() == &channel.topic
                                 }
                             };
 
@@ -349,7 +382,8 @@ fn collect_until(
                                 match pc {
                                     PlayCount::Amount(uc) => {
                                         if until_sensor_counter >= *uc {
-                                            return Ok(msgs);
+                                            breaked_until = true;
+                                            break;
                                         }
                                     }
                                     _ => {
@@ -365,7 +399,7 @@ fn collect_until(
                 }
 
                 let topic_meta = metadata
-                    .get_topic_meta(&msg.channel.topic)
+                    .get_topic_meta(&channel.topic)
                     .ok_or(anyhow!("Topic does not exist."))?;
 
                 let mut send_type = SensorType::Any;
@@ -373,13 +407,11 @@ fn collect_until(
                 for sensor in send_sensor.iter() {
                     let (n_pass, n_send_type) = match &sensor.id {
                         SensorIdentification::Topic(item) => {
-                            (item.as_str() == &msg.channel.topic, SensorType::Any)
+                            (item.as_str() == &channel.topic, SensorType::Any)
                         }
-                        SensorIdentification::Type(t) => {
-                            (t.is(msg.channel.topic.as_str()), t.clone())
-                        }
+                        SensorIdentification::Type(t) => (t.is(channel.topic.as_str()), t.clone()),
                         SensorIdentification::TopicAndType { topic, msg_type: t } => {
-                            (topic.as_str() == &msg.channel.topic, t.clone())
+                            (topic.as_str() == &channel.topic, t.clone())
                         }
                     };
 
@@ -396,7 +428,7 @@ fn collect_until(
                     let data = match send_type {
                         SensorType::Lidar => {
                             let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
-                                cdr::deserialize(&msg.data)
+                                cdr::deserialize(&data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
@@ -404,7 +436,7 @@ fn collect_until(
                         }
                         SensorType::Imu => {
                             let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
-                                cdr::deserialize(&msg.data)
+                                cdr::deserialize(&data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             let data: Imu = unsafe { std::mem::transmute(dec) };
 
@@ -413,7 +445,7 @@ fn collect_until(
                         SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
                                 let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
-                                    cdr::deserialize(&msg.data)
+                                    cdr::deserialize(&data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
@@ -421,20 +453,21 @@ fn collect_until(
                             }
                             IMU_ROS2_TYPE => {
                                 let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
-                                    cdr::deserialize(&msg.data)
+                                    cdr::deserialize(&data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: Imu = unsafe { std::mem::transmute(dec) };
 
                                 SensorTypeMapped::Imu(data)
                             }
-                            _ => SensorTypeMapped::Any(msg.data.to_vec()),
+                            _ => SensorTypeMapped::Any(data.to_vec()),
                         },
-                        SensorType::Any => SensorTypeMapped::Any(msg.data.to_vec()),
+                        SensorType::Any => SensorTypeMapped::Any(data.to_vec()),
                     };
                     let qos = if let Some(last) = topic_meta.offered_qos_profiles.last() {
-                        // There are more than one here but seem similar, idk... maybe every publisher can set a different one, but which one we pub?
+                        // TODO ROS2 allows many nodes publishing to a topic and everyone setting a different qos. So new subscribers have to be set and the key
+                        // is the tuple from topic and qos. But right now we take a topic as unique so we can not find the respective qos.
                         // TODO override with settings from ratslang file
-                        Some(Qos::Cutom(last.clone()))
+                        Some(Qos::Custom(last.clone()))
                     } else {
                         None
                     };
@@ -444,20 +477,36 @@ fn collect_until(
                         data,
                         qos,
                     };
-                    msgs.push((msg.publish_time, enc));
+                    msgs.push((header.log_time, enc));
                 }
                 if len_before != msgs.len() {
                     rel_since_begin += 1;
+                    match until {
+                        Some(pc) => match pc {
+                            PlayCount::Amount(count) => {
+                                if rel_since_begin >= *count {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        },
+                        None => {}
+                    }
                 }
             }
-            None => break,
         }
-
-        let _ = iter.next(); // consume
-        *cursor += 1;
     }
 
-    return Ok(msgs);
+    // going back one message
+    if breaked_until {
+        let options = IndexedReaderOptions::new()
+            .log_time_on_or_after(system_time_to_nanos(&time_iter_before.unwrap()));
+        *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(&summary, options)
+            .expect("could not construct reader");
+        *last_iter_time = time_iter_before.clone();
+    };
+
+    Ok(msgs)
 }
 
 #[derive(Clone, Debug, Default, Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -465,7 +514,7 @@ pub enum Qos {
     Sensor,
     #[default]
     SystemDefault,
-    Cutom(QosProfile),
+    Custom(QosProfile),
 }
 
 impl TryFrom<String> for Qos {
@@ -506,7 +555,7 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
                     duration: ros2::Duration::INFINITE,
                 })
                 .build(),
-            Qos::Cutom(q) => {
+            Qos::Custom(q) => {
                 let deadline_dur = std::time::Duration::from_secs(q.deadline.sec)
                     + std::time::Duration::from_nanos(q.deadline.nsec);
                 let deadline = ros2::policy::Deadline(Duration::from_std(deadline_dur));
@@ -598,9 +647,8 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
 
 impl Bagfile {
     pub fn next(&mut self, kind: &PlayKindUnitedPass3) -> anyhow::Result<Vec<(u64, BagMsg)>> {
-        match self.buffer.as_ref() {
-            Some(buffer) => {
-                let stream = mcap::MessageStream::new(buffer)?;
+        match self.reader.as_mut() {
+            Some(mut reader) => {
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
                 match kind {
                     PlayKindUnitedPass3::SensorCount {
@@ -609,8 +657,12 @@ impl Bagfile {
                         trigger: _,
                         play_mode: _,
                     } => collect_until(
-                        stream,
-                        &mut self.cursor,
+                        &mut reader,
+                        &mut self.file.as_mut().unwrap(),
+                        &mut self.read_buffer,
+                        &mut self.last_iter_time,
+                        &mut self.start_time,
+                        &self.summary,
                         metadata,
                         sensors,
                         None,
@@ -623,8 +675,12 @@ impl Bagfile {
                         trigger: _,
                         play_mode: _,
                     } => collect_until(
-                        stream,
-                        &mut self.cursor,
+                        &mut reader,
+                        &mut self.file.as_mut().unwrap(),
+                        &mut self.read_buffer,
+                        &mut self.last_iter_time,
+                        &mut self.start_time,
+                        &self.summary,
                         metadata,
                         sending,
                         Some((until_sensors, until_count)),
@@ -663,13 +719,35 @@ impl Bagfile {
                 .expect("Validated after deserialisation.");
 
             let mcap_path = path.join(&mcap_file.path);
-            let fd = fs::File::open(mcap_path).context("Couldn't open MCAP file")?;
-            let buffer = unsafe { Mmap::map(&fd) }.context("Couldn't map MCAP file")?;
-            self.buffer = Some(buffer);
+            let f = Utf8PathBuf::from_path_buf(mcap_path).unwrap();
+            let mut file = fs::File::open(f).context("Couldn't open MCAP file")?;
             self.metadata = Some(bag_info);
+
+            let summary = {
+                let mut reader = mcap::sans_io::summary_reader::SummaryReader::new();
+                while let Some(event) = reader.next_event() {
+                    match event? {
+                        SummaryReadEvent::ReadRequest(need) => {
+                            let written = file.read(reader.insert(need))?;
+                            reader.notify_read(written);
+                        }
+                        SummaryReadEvent::SeekRequest(to) => {
+                            reader.notify_seeked(file.seek(to)?);
+                        }
+                    }
+                }
+                reader.finish().unwrap()
+            };
+            let reader = mcap::sans_io::indexed_reader::IndexedReader::new(&summary)
+                .expect("could not construct reader");
+            self.reader = Some(reader);
+            self.read_buffer.resize(1024, 0);
+            self.file = Some(file);
+            self.summary = summary;
+            self.start_time = None;
         }
 
-        self.cursor = 0;
+        self.last_iter_time = None;
         Ok(())
     }
 }
@@ -732,7 +810,7 @@ mod tests {
                 short: None,
             }],
             trigger: None,
-            count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((50, 100))),
+            count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((30, 90))),
             play_mode: PlayMode::Fix,
         });
 

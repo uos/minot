@@ -44,12 +44,10 @@ ros2-interfaces-jazzy-rkyv = { version = "0.0.4", features = [
   "sensor_msgs",
   "builtin_interfaces",
 ], git = "https://github.com/stelzo/ros2-interfaces-jazzy-rkyv.git" }
+roslibrust = { version = "0.12.2", features = ["ros1", "macro"] }
 
 [patch.crates-io]
-roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls", features = [
-  "rustls-tls",
-  "macos-system-configuration",
-] }
+roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls" }
 
 [profile.release]
 lto = true          # Link Time Optimization

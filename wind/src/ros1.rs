@@ -3,7 +3,7 @@ roslibrust::find_and_generate_ros_messages_without_ros_package_path!("msg/ros1")
 use anyhow::anyhow;
 use std::collections::HashMap;
 
-use log::{error, info};
+use log::{debug, error, info};
 use roslibrust::{
     codegen::Time,
     ros1::{NodeHandle, RosMasterError},
@@ -190,6 +190,7 @@ pub async fn run_dyn_wind(master_uri: &str, wind_name: &str) -> anyhow::Result<O
                         is_dense: cloud_msg.is_dense,
                     };
                     pubber.publish(&msg).await?;
+                    debug!("published cloud");
                 }
                 sea::SensorTypeMapped::Imu(imu_msg) => {
                     let mut existing_pubber = imu_publishers.get(&data.topic);
@@ -268,6 +269,7 @@ pub async fn run_dyn_wind(master_uri: &str, wind_name: &str) -> anyhow::Result<O
                         ],
                     };
                     pubber.publish(&msg).await?;
+                    debug!("published cloud");
                 }
                 sea::SensorTypeMapped::Any(_) => {
                     error!(

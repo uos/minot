@@ -10,7 +10,7 @@ use ratatui::{
 };
 use tui_logger::TuiLoggerWidget;
 
-use crate::app::App;
+use crate::app::{App, WIND_POPUP_TITLE_NOERR};
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     let outer = Block::bordered()
@@ -211,7 +211,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
 
     if app.wind_cursor.read().unwrap().showing_popup {
-        let block = Block::bordered().title("Wind Cursor to Line:");
+        let block = Block::bordered().title(WIND_POPUP_TITLE_NOERR);
         let area = popup_area(frame.area(), 30, 3);
         let buffer = app
             .wind_cursor

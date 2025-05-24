@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use log::{error, info};
+use log::{debug, error, info};
 use ratpub::Node;
 use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -61,6 +61,7 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<Option<()>> {
                     let pubber =
                         existing_pubber.expect("Should be inserted manually if not exists.");
                     pubber.publish(&cloud_msg).await?;
+                    debug!("published cloud");
                 }
                 sea::SensorTypeMapped::Imu(imu_msg) => {
                     let mut existing_pubber = imu_publishers.get(&data.topic);
@@ -77,6 +78,7 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<Option<()>> {
                     let pubber =
                         existing_pubber.expect("Should be inserted manually if not exists.");
                     pubber.publish(&imu_msg).await?;
+                    debug!("published imu");
                 }
                 sea::SensorTypeMapped::Any(_) => {
                     error!(

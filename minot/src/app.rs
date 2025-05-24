@@ -19,6 +19,7 @@ use ratatui::{
 use rlc::{
     Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, Rules, VariableHistory, WindFunction,
 };
+use rust_decimal::{Decimal, prelude::FromPrimitive};
 use sea::net::{PacketKind, WindAt};
 
 /// Application result type.
@@ -688,10 +689,9 @@ pub enum WindCompile {
     Done,
 }
 
-pub const WIND_POPUP_TITLE_NOERR: &'static str = "WindCursor to Line:";
-pub const POPUP_TITLE_ERR: &'static str = "Could not parse! Please correct:";
-
-pub const COMPARE_POPUP_TITLE_NOERR: &'static str = "CompareCursor to row[:col]";
+pub const WIND_POPUP_TITLE_NOERR: &'static str = "Wind Cursor to Line";
+pub const POPUP_TITLE_ERR: &'static str = "Could not parse!";
+pub const COMPARE_POPUP_TITLE_NOERR: &'static str = "Compare Cursor to row[:col]";
 
 #[derive(Debug, Default)]
 pub enum WindMode {
@@ -1857,7 +1857,12 @@ impl App {
                                         return;
                                     }
                                 };
-                                info!("iteration done in {:?}", start_bag_read.elapsed());
+                                info!(
+                                    "got {} msg{} in {:?}",
+                                    bagmsgs.len(),
+                                    if bagmsgs.len() > 1 { "s" } else { "" },
+                                    start_bag_read.elapsed()
+                                );
 
                                 let mut wind_data = Vec::with_capacity(bagmsgs.len());
                                 let mut start_time = None;
@@ -1870,38 +1875,6 @@ impl App {
                                     end_time.replace(t);
 
                                     let diff = end_time.unwrap() - start_time.unwrap();
-                                    // let wind = match msg {
-                                    //     bagread::BagMsg::Cloud(point_cloud2_msg) => {
-                                    //         (diff, WindData::Pointcloud(point_cloud2_msg))
-                                    //     }
-                                    //     bagread::BagMsg::Imu(imu_msg) => (
-                                    //         diff,
-                                    //         WindData::Imu(sea::ImuMsg {
-                                    //             header: sea::Header {
-                                    //                 seq: imu_msg.header.seq,
-                                    //                 stamp: sea::TimeMsg {
-                                    //                     sec: imu_msg.header.stamp.sec,
-                                    //                     nanosec: imu_msg.header.stamp.nanosec,
-                                    //                 },
-                                    //                 frame_id: imu_msg.header.frame_id,
-                                    //             },
-                                    //             timestamp_sec: sea::TimeMsg {
-                                    //                 sec: imu_msg.timestamp_sec.sec,
-                                    //                 nanosec: imu_msg.timestamp_sec.nanosec,
-                                    //             },
-                                    //             orientation: imu_msg.orientation,
-                                    //             orientation_covariance: imu_msg
-                                    //                 .orientation_covariance,
-                                    //             angular_velocity: imu_msg.angular_velocity,
-                                    //             angular_velocity_covariance: imu_msg
-                                    //                 .angular_velocity_covariance,
-                                    //             linear_acceleration: imu_msg.linear_acceleration,
-                                    //             linear_acceleration_covariance: imu_msg
-                                    //                 .linear_acceleration_covariance,
-                                    //         }),
-                                    //     ),
-                                    // };
-
                                     wind_data.push((diff, msg));
                                 }
 
@@ -1925,12 +1898,27 @@ impl App {
                                         play_mode,
                                     } => trigger.as_ref().map(|trigger| match trigger {
                                         rlc::PlayTrigger::DurationRelFactor(factor) => {
-                                            let original_duration_ms =
+                                            let original_duration_ns =
                                                 end_time.unwrap() - start_time.unwrap();
-                                            let scaled_dur =
-                                                original_duration_ms as f64 * factor / 1_000_000.;
+
+                                            let total_nanos_decimal =
+                                                Decimal::from(original_duration_ns);
+                                            let scale_factor_decimal = Decimal::from_f64(*factor)
+                                                .expect(
+                                                    "Could not convert f64 scale factor to Decimal",
+                                                );
+                                            let scaled_nanos_decimal =
+                                                total_nanos_decimal * scale_factor_decimal;
+
+                                            // ignoring fractional nanoseconds here ;)
+                                            let scaled_ns = scaled_nanos_decimal
+                                                .round()
+                                                .to_string()
+                                                .parse::<u64>()
+                                                .unwrap_or(u64::MAX);
+                                            let scaled_duration = Duration::from_nanos(scaled_ns);
                                             let dur_ms = rlc::PlayTrigger::DurationMs(
-                                                scaled_dur.round() as u64,
+                                                scaled_duration.as_millis() as u64,
                                             );
                                             (dur_ms, play_mode)
                                         }
@@ -1943,19 +1931,35 @@ impl App {
                                         rlc::PlayTrigger::DurationMs(target_duration_ms),
                                         PlayMode::Fix,
                                     )) => {
-                                        let original_duration_ms =
-                                            end_time.unwrap() - start_time.unwrap();
-                                        let scale = *target_duration_ms as f64
-                                            / original_duration_ms as f64
-                                            / 1_000_000.;
+                                        let total_nanos_decimal =
+                                            Decimal::from(end_time.unwrap() - start_time.unwrap());
+                                        let target_dur_nanos_decimal = Decimal::from(
+                                            std::time::Duration::from_millis(*target_duration_ms)
+                                                .as_nanos(),
+                                        );
+
+                                        let scale_factor_decimal =
+                                            if total_nanos_decimal == Decimal::from(0) {
+                                                Decimal::from(1)
+                                            } else {
+                                                target_dur_nanos_decimal / total_nanos_decimal
+                                            };
 
                                         let start_time = Instant::now();
 
                                         for (original_ts, wind) in wind_data {
-                                            let scaled_ts = original_ts as f64 * scale;
-                                            let target_offset = Duration::from_millis(
-                                                scaled_ts.round() as u64 / 1_000_000,
-                                            );
+                                            let original_ts_nanos_decimal =
+                                                Decimal::from(original_ts);
+                                            let scaled_ts =
+                                                original_ts_nanos_decimal * scale_factor_decimal;
+
+                                            // ignoring fractional nanoseconds here ;)
+                                            let scaled_ns = scaled_ts
+                                                .round()
+                                                .to_string()
+                                                .parse::<u64>()
+                                                .unwrap_or(u64::MAX);
+                                            let target_offset = Duration::from_nanos(scaled_ns);
                                             let target_wall_time = start_time + target_offset;
                                             let sleep_duration = target_wall_time
                                                 .saturating_duration_since(Instant::now());
@@ -2228,16 +2232,16 @@ impl App {
         match wind_cursor.mode {
             WindMode::Active => match direction {
                 Some(VerticalDirection::Up) => {
-                    wind_cursor.line_start = Some(wind_cursor.line_start.unwrap_or(1));
+                    wind_cursor.line_start = Some(wind_cursor.line_start.unwrap_or(0));
                     wind_cursor.line_start =
-                        Some(wind_cursor.line_start.unwrap().saturating_sub(1));
+                        Some(wind_cursor.line_start.unwrap().saturating_sub(1).max(1));
                     if wind_cursor.line_start.unwrap() == 0 {
                         wind_cursor.line_start.replace(1);
                     }
                     wind_cursor.line_end = wind_cursor.line_start;
                 }
                 Some(VerticalDirection::Down) => {
-                    wind_cursor.line_start = Some(wind_cursor.line_end.unwrap_or(1));
+                    wind_cursor.line_start = Some(wind_cursor.line_end.unwrap_or(0));
                     wind_cursor.line_start =
                         Some(wind_cursor.line_start.unwrap().saturating_add(1));
                     wind_cursor.line_end = wind_cursor.line_start;
@@ -2257,10 +2261,10 @@ impl App {
             },
             WindMode::ActiveSelect => match direction {
                 Some(VerticalDirection::Up) => {
-                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(1));
+                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(0));
                     if wind_cursor.line_end == wind_cursor.line_start {
                         wind_cursor.line_start =
-                            Some(wind_cursor.line_start.unwrap().saturating_sub(1));
+                            Some(wind_cursor.line_start.unwrap().saturating_sub(1).max(1));
                         if wind_cursor.line_start.unwrap() == 0 {
                             wind_cursor.line_start.replace(1);
                         }
@@ -2276,7 +2280,7 @@ impl App {
                     if wind_cursor.line_start.is_none() {
                         wind_cursor.line_start = Some(1);
                     }
-                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(1));
+                    wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(0));
                     wind_cursor.line_end = Some(wind_cursor.line_end.unwrap().saturating_add(1));
                 }
                 Some(VerticalDirection::Row(line)) => {

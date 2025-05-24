@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Mutex, RwLock};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Mutex;
 
 use bagread::qos::{
     RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
@@ -10,7 +10,7 @@ use r2r::qos::{DurabilityPolicy, HistoryPolicy, LivelinessPolicy, ReliabilityPol
 use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
 
 use anyhow::anyhow;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use sea::{SensorTypeMapped, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -77,7 +77,7 @@ impl TryFrom<bagread::Qos> for QosR2RMap {
         Ok(match value {
             bagread::Qos::Sensor => Self(r2r::QosProfile::sensor_data()),
             bagread::Qos::SystemDefault => Self(r2r::QosProfile::system_default()),
-            bagread::Qos::Cutom(q) => {
+            bagread::Qos::Custom(q) => {
                 let deadline = std::time::Duration::from_secs(q.deadline.sec)
                     + std::time::Duration::from_nanos(q.deadline.nsec);
                 let lifespan = std::time::Duration::from_secs(q.lifespan.sec)
@@ -146,8 +146,6 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
 
     let mut wind_receiver = wind(wind_name).await?;
 
-    let spinning = std::sync::Arc::clone(&node);
-
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             let qos = match data.qos {
@@ -188,7 +186,7 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
 
                     pubber.publish_raw(&raw)?;
 
-                    info!("published cloud");
+                    debug!("published cloud");
                 }
                 SensorTypeMapped::Imu(imu) => {
                     let imu = unsafe {
@@ -200,11 +198,11 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
                         .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
 
                     pubber.publish_raw(&raw)?;
-                    info!("published imu");
+                    debug!("published imu");
                 }
                 SensorTypeMapped::Any(raw_data) => {
                     pubber.publish_raw(&raw_data)?;
-                    info!("published raw");
+                    debug!("published raw");
                 }
             }
         }

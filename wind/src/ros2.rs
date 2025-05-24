@@ -6,7 +6,7 @@ use ros2_client::{NodeName, NodeOptions};
 use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
 
 use anyhow::anyhow;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use sea::{SensorTypeMapped, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -173,7 +173,7 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
 
                     pubber.async_publish(raw).await?;
 
-                    info!("published cloud");
+                    debug!("published cloud");
                 }
                 SensorTypeMapped::Imu(imu) => {
                     let imu = unsafe {
@@ -185,11 +185,11 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
                         .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
 
                     pubber.async_publish(raw).await?;
-                    info!("published imu");
+                    debug!("published imu");
                 }
                 SensorTypeMapped::Any(raw_data) => {
                     pubber.async_publish(raw_data).await?;
-                    info!("published raw");
+                    debug!("published raw");
                 }
             }
         }
