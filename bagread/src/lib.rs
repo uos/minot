@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
 
-mod qos;
+pub mod qos;
 pub use Qos::*;
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]

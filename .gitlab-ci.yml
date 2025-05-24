@@ -45,7 +45,7 @@ rust-nightly:
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
     - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
-    - mv target/$RUST_TARGET/release/coord coord-$TRIPLE
+    - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
     - mv target/$RUST_TARGET/release/librat.so librat.so
@@ -54,7 +54,7 @@ rust-nightly:
       - wind-ros1-$TRIPLE
       - wind-ros2-$TRIPLE
       - minot-$TRIPLE
-      - coord-$TRIPLE
+      - minot-coord-$TRIPLE
       - librat.so
       - librat.a
     expire_in: 1 week
@@ -70,12 +70,12 @@ snapshot:linux:x86_64-musl:
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
     - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
-    - mv target/$RUST_TARGET/release/coord coord-$TRIPLE
+    - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
   artifacts:
     paths:
-      - coord-$TRIPLE
+      - minot-coord-$TRIPLE
       - wind-ros1-$TRIPLE
       - wind-ros2-$TRIPLE
       - minot-$TRIPLE
@@ -121,7 +121,7 @@ snapshot:linux:riscv64-musl:
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
     - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
-    - mv target/$RUST_TARGET/release/coord coord-$TRIPLE
+    - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
@@ -130,7 +130,7 @@ snapshot:linux:riscv64-musl:
     paths:
       - wind-ros1-$TRIPLE
       - wind-ros2-$TRIPLE
-      - coord-$TRIPLE
+      - minot-coord-$TRIPLE
       - minot-$TRIPLE
       - librat.so
       - librat.a

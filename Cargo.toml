@@ -1,5 +1,5 @@
 [workspace]
-members = ["bagread", "minot", "rat", "ratpub", "ratpub_smol", "rlc", "sea", "wind"]
+members = ["bagread", "minot", "rat", "ratpub", "rlc", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
@@ -18,6 +18,7 @@ rlc = { path = "rlc" }
 wind = { path = "wind" }
 
 anyhow = "1"
+r2r = "0.9.5"
 async-trait = "0.1.86"
 rkyv = { version = "0.8.10" }
 bincode = { version = "0", features = ["serde"] }

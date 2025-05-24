@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::str::FromStr;
 
 use byteorder::LittleEndian;
 use ros2_client::ros2;
@@ -117,11 +115,11 @@ pub fn split_path(path: &str) -> (String, String) {
     (final_directory_path, last_element)
 }
 
-pub async fn run_dyn_wind(node_namespace: &str, wind_name: &str) -> anyhow::Result<()> {
+pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
     let ctx = ros2_client::Context::new()?;
     let node_name = wind_name.to_owned() + "_node";
     let mut node = ctx.new_node(
-        NodeName::new(node_namespace, &node_name)?,
+        NodeName::new("/", &node_name)?,
         NodeOptions::new().enable_rosout(true),
     )?;
     let mut publishers: HashMap<(String, String), ros2_client::PublisherRaw> = HashMap::new();
@@ -216,32 +214,12 @@ pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
 #[tokio::main]
 #[allow(dead_code)]
 async fn main() -> anyhow::Result<()> {
-    let env = env_logger::Env::new().filter_or("WIND_LOG", "off");
+    let env = env_logger::Env::new().filter_or("WIND_LOG", "info");
     env_logger::Builder::from_env(env).init();
 
     let wind_name = get_env_or_default("wind_name", "turbine_ros2")?;
-    let rlc_file = if let Some(file) = std::env::args().nth(1) {
-        file
-    } else {
-        get_env_or_default("CONFIG_PATH", "./wind_ros2.rl")?
-    };
 
-    let eval = rlc::compile_file(&PathBuf::from_str(&rlc_file)?, None, None)?;
-
-    let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
-
-    let namespace = rlc_wind_ns
-        .resolve("namespace")?
-        .map_or(Ok("/wind".to_owned()), |rhs| {
-            Ok(match rhs {
-                rlc::Rhs::Path(topic) => topic,
-                _ => {
-                    return Err(anyhow!("Unexpected type for _lidar.topic, expected Path."));
-                }
-            })
-        })?;
-
-    run_dyn_wind(&namespace, &wind_name).await?; // will never return
+    run_dyn_wind(&wind_name).await?; // will never return
 
     Ok(())
 }

@@ -687,7 +687,7 @@ pub fn get_clients(eval: &rlc::Evaluated) -> anyhow::Result<HashSet<String>> {
 
 #[tokio::main(flavor = "multi_thread")]
 pub async fn main() -> anyhow::Result<()> {
-    let env = env_logger::Env::new().filter_or("RUST_LOG", "off");
+    let env = env_logger::Env::new().filter_or("RUST_LOG", "info");
     env_logger::Builder::from_env(env).init();
 
     // file can be rules or wind set by _wind var

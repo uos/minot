@@ -24,6 +24,8 @@ use crate::{
 
 #[cfg(feature = "embed-ros2-turbine")]
 const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
+#[cfg(feature = "embed-ros2-c-turbine")]
+const EMBED_ROS2_C_TURBINE_NAME: &'static str = "embedded_ros2_c_turbine";
 #[cfg(feature = "embed-ros1-turbine")]
 const EMBED_ROS1_TURBINE_NAME: &'static str = "embedded_ros1_turbine";
 #[cfg(feature = "embed-ratpub-turbine")]
@@ -42,7 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eval = match &file {
         Some(path) => {
             println!("Compiling {:#?}", &path.canonicalize()?);
-            rlc::compile_file(&path, None, None)? // evaluate entire file at first
+            let compiled = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
+            // remove compile feedback
+            print!("\x1b[1A"); // move cursor up 1 line
+            print!("\x1b[2K"); // erase line
+            compiled
         }
         None => rlc::Evaluated::new(),
     };
@@ -126,6 +132,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             clients.insert(wind_name);
         }
 
+        #[cfg(feature = "embed-ros2-c-turbine")]
+        {
+            let wind_name =
+                wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
+            clients.insert(wind_name);
+        }
+
         #[cfg(feature = "embed-ros1-turbine")]
         {
             let wind_name = wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
@@ -145,25 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "embed-ros2-turbine")]
     {
-        let wind_name = wind::get_env_or_default("ros2_wind_name", &EMBED_ROS2_TURBINE_NAME)?;
-        let rlc_wind_ns = eval.vars.filter_ns(&[&wind_name]);
-
-        let namespace =
-            rlc_wind_ns
-                .resolve("namespace")?
-                .map_or(Ok("/wind".to_owned()), |rhs| {
-                    Ok(match rhs {
-                        rlc::Rhs::Path(topic) => topic,
-                        _ => {
-                            return Err(anyhow!(
-                                "Unexpected type for _lidar.topic, expected Path."
-                            ));
-                        }
-                    })
-                })?;
+        let wind_name = wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
 
         tokio::spawn(async move {
-            let res = wind::ros2::run_dyn_wind(&namespace, &wind_name).await;
+            let res = wind::ros2::run_dyn_wind(&wind_name).await;
             match res {
                 Ok(_) => {} // will never return
                 Err(e) => {
@@ -173,9 +171,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    #[cfg(feature = "embed-ros2-c-turbine")]
+    {
+        let wind_name = wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
+
+        tokio::spawn(async move {
+            let res = wind::ros2_r2r::run_dyn_wind(&wind_name).await;
+            match res {
+                Ok(_) => {} // will never return
+                Err(e) => {
+                    error!(
+                        "Error in embedded ROS2-C turbine. Reload the App after the fix. Maybe you haven't sourced the message type you tried to publish. {e}"
+                    )
+                }
+            }
+        });
+    }
+
     #[cfg(feature = "embed-ros1-turbine")]
     {
-        let wind_name = wind::get_env_or_default("ros1_wind_name", &EMBED_ROS2_TURBINE_NAME)?;
+        let wind_name = wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
 
         let master_uri = wind::get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
 
@@ -196,10 +211,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let rules = eval.rules;
-    println!("Searching for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init
+    println!("Looking for coordinator..."); // TODO clear and redraw this as animation with running dots while waiting for init
     let comparer =
         sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None, false)
             .await?;
+
+    // remove searching feedback
+    print!("\x1b[1A"); // move cursor up 1 line
+    print!("\x1b[2K"); // erase line
 
     let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
     let (dyn_wind_tx, dyn_wind_rx) = tokio::sync::mpsc::channel(10);

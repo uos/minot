@@ -37,7 +37,7 @@ strip = "debuginfo" # Significantly reduce binary size
 opt-level = 3
 
 [[bin]]
-name = "coord"
+name = "minot-coord"
 path = "src/coord.rs"
 test = false
 bench = false
@@ -48,11 +48,33 @@ path = "src/minot.rs"
 test = false
 bench = false
 
+# Note: All following features only embed existing nodes that can be built and run separately through the network.
 [features]
-default = ["embed-all"]
-embed-all = ["embed-coordinator", "embed-ratpub-turbine"]
+default = ["embed-coord"]
+
+# Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
+embed-ros2-c = ["embed-ros2-c-turbine"]
+
+# Use a native Rust implementation of ROS2 (ros2-client crate). Not stable for publishing the "any" type.
+embed-ros2-native = ["embed-ros2-turbine"]
+
+# Enable for ROS1 publishing through a Rust implementation of the ROS1 client library (patched roslibrust crate) with no system dependencies.
+embed-ros1-native = ["embed-ros1-turbine"]
+
+# Publishing through a pub-sub implementation on top of the existing network stack from Minot.
+embed-ratpub = ["embed-ratpub-turbine"]
+
+# Run the coordinator in the background.
+embed-coord = ["embed-coordinator"]
+
+# ROS2 publishing with maximum compatibility and ROS1. Both networks need to be available to this process.
+embed-ros = ["embed-ros2-c", "embed-ros1-native"]
+
+# Only native Rust ROS implementations so no ROS installation needed. Can only publish non-any typed topics.
+embed-ros-native = ["embed-ros2-native", "embed-ros1-native"]
+
 embed-coordinator = []
-embed-ros-turbines = ["embed-ros2-turbine", "embed-ros1-turbine"]
-embed-ros2-turbine = ["dep:wind"]
-embed-ros1-turbine = ["dep:wind"]
-embed-ratpub-turbine = ["dep:wind"]
+embed-ros2-turbine = ["dep:wind", "wind/ros2-native"]
+embed-ros2-c-turbine = ["dep:wind", "wind/ros2-c"]
+embed-ros1-turbine = ["dep:wind", "wind/ros1"]
+embed-ratpub-turbine = ["dep:wind", "wind/ratpub"]

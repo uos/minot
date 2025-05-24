@@ -1743,7 +1743,21 @@ impl App {
                                     Arc::clone(&wc.bagfile)
                                 };
 
-                                match bag_blocking.write().unwrap().reset(Some(path)) {
+                                let reset_path = PathBuf::from(path);
+                                let abs_path = if reset_path.is_relative() {
+                                    let rats_file =
+                                        wind_cursor_worker.read().unwrap().wind_file_path.clone();
+                                    rats_file
+                                        .parent()
+                                        .unwrap()
+                                        .join(reset_path)
+                                        .canonicalize()
+                                        .unwrap()
+                                } else {
+                                    reset_path.canonicalize().unwrap()
+                                };
+
+                                match bag_blocking.write().unwrap().reset(Some(abs_path)) {
                                     Err(e) => {
                                         error!("Could not reset bagfile path {path:?}: {e}");
 
