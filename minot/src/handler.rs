@@ -36,8 +36,10 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('?') => {
             app.toggle_info_window();
         }
-        KeyCode::Char('F') => {
-            app.focus_right_rat();
+        KeyCode::Char('f') => {
+            if key_event.modifiers == KeyModifiers::SHIFT {
+                app.focus_right_rat();
+            }
         }
         KeyCode::Char('.') => {
             app.send_unlock().await;
@@ -78,13 +80,18 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             }
         }
         KeyCode::Char('t') => {
-            app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Down);
-        }
-        KeyCode::Char('T') => {
-            app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Up);
+            if key_event.modifiers == KeyModifiers::SHIFT {
+                app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Up);
+            } else {
+                app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Down);
+            }
         }
         KeyCode::Char('p') => {
-            app.change_tolerance_cursor(crate::app::HorizontalDirection::Left);
+            if key_event.modifiers == KeyModifiers::SHIFT {
+                app.change_tolerance_cursor(crate::app::HorizontalDirection::Right);
+            } else {
+                app.change_tolerance_cursor(crate::app::HorizontalDirection::Left);
+            }
         }
 
         KeyCode::Char('a') => {
@@ -96,10 +103,6 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             if key_event.modifiers == KeyModifiers::CONTROL {
                 app.change_cols_diff(crate::app::VerticalDirection::Down);
             }
-        }
-
-        KeyCode::Char('P') => {
-            app.change_tolerance_cursor(crate::app::HorizontalDirection::Right);
         }
         KeyCode::Char('k') => match app.wind_mode() {
             false => app.scroll_compare(None, Some(crate::app::VerticalDirection::Up)),
