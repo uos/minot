@@ -38,9 +38,9 @@ ros1 = ["dep:roslibrust"]
 ratpub = ["dep:ratpub"]
 
 [[bin]]
-name = "wind-ros1"
+name = "wind-ros1-native"
 path = "src/ros1.rs"
-required-features = ["ros1"]
+required-features = ["ros1-native"]
 
 [[bin]]
 name = "wind-ros2-native"
