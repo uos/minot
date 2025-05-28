@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "bagread"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "bagread",
@@ -2748,7 +2748,7 @@ dependencies = [
 
 [[package]]
 name = "rat"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2784,7 +2784,7 @@ dependencies = [
 
 [[package]]
 name = "ratpub"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3025,7 +3025,7 @@ dependencies = [
 
 [[package]]
 name = "rlc"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -3414,7 +3414,7 @@ dependencies = [
 
 [[package]]
 name = "sea"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4467,7 +4467,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "wind"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "async-trait",

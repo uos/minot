@@ -2,7 +2,6 @@
 
 Keybindings for the Minot TUI. They cannot be changed after compile time for the moment.
 
----
 
 ## Basics
 
@@ -12,7 +11,6 @@ Keybindings for the Minot TUI. They cannot be changed after compile time for the
 | Toggle Log Window | <kbd>?</kbd>                          |
 | Switch Mode (Wind/Compare)         | <kbd>w</kbd>    |
 
----
 
 ## Wind Cursor
 
@@ -26,7 +24,6 @@ Keybindings for the Minot TUI. They cannot be changed after compile time for the
 | Toggle Select Mode (in wind mode)                | <kbd>v</kbd>     |
 | Compile and Run Selection (in wind mode)         | <kbd>Space</kbd>  |
 
----
 
 ## Rules
 
@@ -36,7 +33,6 @@ Keybindings for the Minot TUI. They cannot be changed after compile time for the
 
 Adding new ones happens automatically when firing the `.rl` file if it contains some.
 
----
 
 ## Matrix Compare Window
 
@@ -60,7 +56,6 @@ Adding new ones happens automatically when firing the `.rl` file if it contains 
 | Increase Right Window Column Width  | <kbd>Ctrl</kbd>+<kbd>w</kbd>         |
 | Decrease Right Window Column Width  | <kbd>Ctrl</kbd>+<kbd>s</kbd>         |
 
----
 
 ## Difference Tolerance
 

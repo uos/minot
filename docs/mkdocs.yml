@@ -2,6 +2,12 @@
 
 site_name: Minot
 site_url: https://uos.github.io/minot
+extra_css:
+  - stylesheets/extra.css
+repo_url: https://github.com/uos/minot
+plugins:
+  - search
+  - offline
 theme:
   name: material
   palette: 
@@ -25,8 +31,11 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
+      primary: custom
+      # accent: custom
   features:
     - navigation.footer
+    - content.code.copy
 
 markdown_extensions:
   - attr_list
