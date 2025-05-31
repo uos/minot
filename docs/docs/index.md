@@ -40,18 +40,18 @@ source /opt/ros/$ROS_DISTRO/setup.bash
 sudo apt install rustup curl unzip
 
 # Get a Bagfile
-curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
+curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
     && unzip dlg_cut.zip \
     && rm dlg_cut.zip
 
-# Get the query. demo_publish.rl
-curl -sLo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+# Get the query
+curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
 
 # Get the rviz demo preset
-curl -sLo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
 
 # Run rviz and wait for data
-rviz2 ./demo.rviz
+rviz2 -d demo.rviz
 ~~~
 
 Open a new terminal.
@@ -65,7 +65,7 @@ cargo install \
   --features embed-ros2-c
 
 # Run
-minot ./demo.rl
+minot demo.rl
 
 # Press w and then Space
 # You should see a 3D Pointcloud in rviz2 now.
@@ -74,7 +74,7 @@ minot ./demo.rl
 # Quit Minot with q
 
 # Clean up everything we created
-cd .. && rm -r minot-bagfile-demo && cargo uninstall minot
+cd .. && rm -rf minot-bagfile-demo && cargo uninstall minot
 ~~~
 
 ## Variable Sharing
@@ -94,34 +94,39 @@ Variable sharing is a powerful building block and it can easily be used outside 
 ### Quickstart
 
 Build and run the libraries and run the Coordinator.
+
 ~~~bash
 git clone git@github.com:uos/minot.git && cd minot
-cargo build --examples
+cargo build --release
 
-./target/debug/minot-coord ./varshare_demo.rl
+./target/release/minot-coord rl/varshare_demo.rl
 ~~~
 
 Start a second terminal to run rat1 in Rust.
 ~~~bash
-./target/debug/examples/rat1
+cargo run --example rat1
 ~~~
 
 Start a third terminal to build and run rat2 in C.
-~~~bash
-gcc rat/examples/rat2.c -o rat2 -L./target/debug -lrat
 
-RUST_LOG=debug ./rat2
+~~~bash
+gcc rat/examples/rat2.c -o rat2 -L./target/release -l:librat.a -lm -Wl,-z,noexecstack
+
+./rat2
 
 # rat1 and rat2 terminate successfully.
 # Look at the source code of the C file you just compiled.
 # rat1 just flipped the 0 from rat2 to 1.
+
+# Clean up
+cd .. && rm -rf minot
 ~~~
 
 ## Native Publish/Subscribe
 
 The Pub/Sub model has proven itself among ROS developers. It's an intuitive way to exchange time series data. But sometimes adding the entire ROS stack with all its solutions for problems outside of the domain of the problem your node tries to solve seems like overkill.
 
-For these cases, the native Publisher and Subscriber Rust library *ratpub* can help. By building on the same concepts as Variable Sharing, it removes ROS from the dependency list at development time if you only use that API from ROS. Read more about it [here](pubsub.md).
+For these cases, the native publisher and subscriber Rust library *ratpub* can help. By building on the same concepts as Variable Sharing, it removes ROS from the dependency list at development time if you only use that API from ROS. Read more about it [here](pubsub.md).
 
 ~~~bash title="Quickstart"
 # Clone the example nodes
@@ -168,4 +173,4 @@ You are looking at a Lidar Inertial Odometry (LIO) ROS2 node. For IMU initializa
 
 Because the LIO node currently has a bug, we synchronise the Bagfile with our node using a unique approach: an empty variable in the LIO acts as a trigger for publishing a new batch of messages. This triggers registration, which then triggers the variable again, creating an endless loop. Thanks to Minot's locking feature, the process doesn't need to run to completion; we can press comma (`,`) on the keyboard to advance to the next registration, or stop it entirely to compare and visualize the state using debuggers, visualizers, or [logging to Minot](./tui.md#variable-sharing-log-and-compare).
 
-Notably, everything is running natively on a Macbook without requiring containers or system libraries.
+Notably, everything is running natively on a Macbook with no containers or ROS installation.

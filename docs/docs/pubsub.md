@@ -10,7 +10,7 @@ While [Bagfile Query](./bagquery.md) and [Variable Sharing](./varshare.md) are t
 
 When used in static and simple environments (no lifecycle node, assuming stable network and more), it is stable enough for replacing the ROS2 Publish/Subscribe API. But it is absolutely not on par with ROS features.
 
-After adding the library to your [Cargo.toml](./installation.md#ratpub-native-publishsubscribe), you can create a Publisher and a Subscriber. Like in ROS1, the communication needs a *Master*. In this case it is our Coordinator, which we can run [standalone](./installation.md#standalone-coordinator) without any arguments.
+After adding the library to your [Cargo.toml](./installation.md#ratpub-native-publishsubscribe), you can create a publisher and a subscriber. Like in ROS1, the communication needs a *Master*. In this case it is our Coordinator, which we can run [standalone](./installation.md#standalone-coordinator) without any arguments.
 
 ~~~sh title="Start the Coordinator in your Shell"
 minot-coord
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Nodes will automatically detect the Coordinator and do not need any setup. Like the other networking stack from Minot, you just need to ensure that each Node that you want to connect with each other is reachable in the network.
 
 
-In contrast to Variable Sharing, the Publisher does not care about syncing with the Subscriber. But like most abstractions, this comes at a cost. Here it is setting the capacity of the queue length for the Subscriber - like in ROS.
+In contrast to Variable Sharing, the publisher does not care about syncing with the subscriber. But like most abstractions, this comes at a cost. Here it is setting the capacity of the queue length for the subscriber - like in ROS.
 
 ~~~rust title="subscriber.rs"
 use ratpub::Node;
@@ -84,8 +84,8 @@ Mind that we don't need to `spin_once` here thanks to async like in other Rust R
 
     Examples
 
-    - If a Publisher dies or disconnects in an existing Pub/Sub connection the Subscriber will never get messages on this topic again, even when the Publisher comes back or other ones still publish on that topic.
-    - Loosing connections to the Coordinator at runtime will result in an error. `ratpub` is therefore not really reliable in unrealiable networks like WIFI.
+    - If a publisher dies or disconnects in an existing Pub/Sub connection the subscriber will never get messages on this topic again, even when the publisher comes back or other ones still publish on that topic.
+    - Loosing connections to the Coordinator at runtime will result in an error. `ratpub` is therefore not really reliable in unrealiable networks like Wi-Fi.
     - Nodes are always talking to the Coordinator, which is a good feature for reconfigurable topics but also adds latency. The plan is to add static and dynamic topics, where both have the same features but both have better latency for their respective use case.
 
 

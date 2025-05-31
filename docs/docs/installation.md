@@ -60,7 +60,7 @@ The Minot Coordinator can work as a standalone static binary. To make it easy to
 
 ## Standalone Wind Turbines (Bagfile Publishers)
 
-You can compile the embedded publishers standalone and distribute them in your network. For example: you could run the TUI on a Mac, connected to the Robot over WIFI or LAN, which runs ROS1 or ROS2 and the wind nodes.
+You can compile the embedded publishers standalone and distribute them in your network. For example: you could run the TUI on a Mac, connected to the Robot over Wi-Fi or LAN, which runs ROS1 or ROS2 and the wind nodes.
 
 ### Prebuild Binaries
 bla

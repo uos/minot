@@ -1,4 +1,6 @@
-/target
 .DS_Store
 rat/examples/rat2
 dlg_cut*
+dist/
+.intentionally-empty-file.o
+target/
