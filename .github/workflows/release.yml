@@ -59,6 +59,7 @@ jobs:
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
 
@@ -99,6 +100,7 @@ jobs:
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
           cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
 
@@ -139,6 +141,7 @@ jobs:
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
           cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
 
@@ -179,6 +182,7 @@ jobs:
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
           cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
 
@@ -217,6 +221,7 @@ jobs:
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
           cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
 
@@ -255,6 +260,7 @@ jobs:
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
           cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
 
@@ -269,3 +275,4 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu]
+
