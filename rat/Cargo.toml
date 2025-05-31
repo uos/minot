@@ -17,6 +17,7 @@ rkyv.workspace = true
 bincode.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+rand = "0.8"
 
 [lib]
 crate-type = [

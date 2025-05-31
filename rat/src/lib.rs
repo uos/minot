@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use log::{error, info};
 use rkyv::{
-    Archive, Deserialize, Serialize,
     api::high::{HighSerializer, HighValidator},
     bytecheck::CheckBytes,
     de::Pool,
@@ -11,9 +10,11 @@ use rkyv::{
 };
 use std::sync::{Arc, LazyLock, Mutex};
 
-use sea::{net::NetArray, ship::NetworkShipImpl, *};
+use sea::{ship::NetworkShipImpl, *};
 
+pub use rkyv::{Archive, Deserialize, Serialize};
 pub use sea::VariableType;
+pub use sea::net::NetArray;
 
 pub struct Rat {
     name: String,
@@ -114,7 +115,7 @@ pub fn deinit() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// When the code reaches a variable that is watched, call this function to communitcate synchronously with the link.
+/// When the code reaches a variable that is watched, call this function to communicate synchronously with the link.
 /// It syncs with the other rats and gets the action to be taken for the current var.
 /// It then applies the action to the variable and returns.
 pub fn bacon<T>(

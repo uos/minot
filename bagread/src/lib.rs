@@ -270,6 +270,7 @@ fn collect_until<T>(
     until_sensor: Option<(&Vec<AnySensor>, &PlayCount)>,
     until: Option<&PlayCount>,
 ) -> anyhow::Result<Vec<(u64, BagMsg)>>
+// TODO should be an iterator to remove warning for a ros2 bag play implementation
 where
     T: Seek + Read,
 {
@@ -368,8 +369,8 @@ where
                     Some((until_sensors, pc)) => {
                         for us in *until_sensors {
                             let pass = match &us.id {
-                                SensorIdentification::Topic(items) => {
-                                    items.as_str() == &channel.topic
+                                SensorIdentification::Topic(topic) => {
+                                    topic.as_str() == &channel.topic
                                 }
                                 SensorIdentification::Type(t) => t.is(channel.topic.as_str()),
                                 SensorIdentification::TopicAndType { topic, msg_type: _ } => {
@@ -393,6 +394,10 @@ where
                                     }
                                 }
                             }
+                        }
+
+                        if breaked_until {
+                            break;
                         }
                     }
                     None => {}

@@ -36,10 +36,8 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         KeyCode::Char('?') => {
             app.toggle_info_window();
         }
-        KeyCode::Char('f') => {
-            if key_event.modifiers == KeyModifiers::SHIFT {
-                app.focus_right_rat();
-            }
+        KeyCode::Char('F') => {
+            app.focus_right_rat();
         }
         KeyCode::Char('.') => {
             app.send_unlock().await;
@@ -79,21 +77,18 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
                 app.wind_toggle_mode();
             }
         }
+        KeyCode::Char('T') => {
+            app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Up);
+        }
         KeyCode::Char('t') => {
-            if key_event.modifiers == KeyModifiers::SHIFT {
-                app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Up);
-            } else {
-                app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Down);
-            }
+            app.change_tolerance_at_current_cursor(crate::app::VerticalDirection::Down);
+        }
+        KeyCode::Char('P') => {
+            app.change_tolerance_cursor(crate::app::HorizontalDirection::Right);
         }
         KeyCode::Char('p') => {
-            if key_event.modifiers == KeyModifiers::SHIFT {
-                app.change_tolerance_cursor(crate::app::HorizontalDirection::Right);
-            } else {
-                app.change_tolerance_cursor(crate::app::HorizontalDirection::Left);
-            }
+            app.change_tolerance_cursor(crate::app::HorizontalDirection::Left);
         }
-
         KeyCode::Char('a') => {
             if key_event.modifiers == KeyModifiers::CONTROL {
                 app.change_cols_ref(crate::app::VerticalDirection::Down);

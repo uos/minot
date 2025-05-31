@@ -2756,6 +2756,7 @@ dependencies = [
  "env_logger",
  "log",
  "nalgebra",
+ "rand 0.8.5",
  "rkyv 0.8.10",
  "sea",
  "tokio",
