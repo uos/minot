@@ -45,7 +45,7 @@ jobs:
           TRIPLE: x86_64-linux-musl
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
 
       - name: "Archive binary"
         run: |
@@ -54,8 +54,8 @@ jobs:
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
@@ -85,7 +85,7 @@ jobs:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
 
       - name: "Archive binary"
         run: |
@@ -94,8 +94,8 @@ jobs:
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
@@ -126,7 +126,7 @@ jobs:
           RUST_TARGET: aarch64-unknown-linux-gnu
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
 
       - name: "Archive binary"
         run: |
@@ -135,8 +135,8 @@ jobs:
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
@@ -167,7 +167,7 @@ jobs:
           RUST_TARGET: armv7-unknown-linux-gnueabihf
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
 
       - name: "Archive binary"
         run: |
@@ -176,8 +176,8 @@ jobs:
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
@@ -206,7 +206,7 @@ jobs:
           TRIPLE: aarch64-apple-darwin
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
 
       - name: "Archive binary"
         run: |
@@ -215,8 +215,8 @@ jobs:
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
@@ -245,7 +245,7 @@ jobs:
           TRIPLE: x86_64-apple-darwin
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
 
       - name: "Archive binary"
         run: |
@@ -254,8 +254,8 @@ jobs:
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
