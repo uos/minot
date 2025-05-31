@@ -34,7 +34,7 @@ ratpub = { workspace = true, optional = true }
 default = ["ratpub"]
 ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy"]
 ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy"]
-ros1 = ["dep:roslibrust"]
+ros1-native = ["dep:roslibrust"]
 ratpub = ["dep:ratpub"]
 
 [[bin]]

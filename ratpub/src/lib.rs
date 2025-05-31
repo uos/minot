@@ -20,7 +20,7 @@ impl<T: Sendable> Publisher<T> {
         match self.ship.ask_for_action(&self.topic).await {
             Ok((sea::Action::Sail, _)) => {
                 // debug!("Doing nothing but expected a shoot command {} ", self.topic);
-                return Ok(());
+                Ok(())
             }
             Ok((sea::Action::Shoot { target, id }, _)) => {
                 debug!("Publishing to {} at {:?}", self.topic, target);
@@ -32,18 +32,14 @@ impl<T: Sendable> Publisher<T> {
 
                 debug!("Finished publishing {} at {:?}", self.topic, target);
 
-                return Ok(());
+                Ok(())
             }
-            Ok((sea::Action::Catch { .. }, _)) => {
-                return Err(anyhow!(
-                    "Received Catch but we are in a publisher for {} ",
-                    self.topic
-                ));
-            }
-            Err(e) => {
-                return Err(e);
-            }
-        };
+            Ok((sea::Action::Catch { .. }, _)) => Err(anyhow!(
+                "Received Catch but we are in a publisher for {} ",
+                self.topic
+            )),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -57,7 +53,7 @@ where
     chan: tokio::sync::mpsc::Receiver<T>,
 }
 
-impl<'t, T> Subscriber<T>
+impl<T> Subscriber<T>
 where
     T: Send + Sync + 'static,
     T: Archive,
@@ -126,7 +122,7 @@ impl Node {
         Ok(Publisher {
             topic,
             ship: Arc::clone(&self.ship),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         })
     }
 
@@ -142,16 +138,21 @@ impl Node {
             + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
     {
         let client = self.ship.client.lock().await;
-        let client_send_lock = client.coordinator_send.read().unwrap();
-        let coord_tx = client_send_lock
-            .as_ref()
-            .expect("Sender does not exist after creation.");
+        let coord_tx = {
+            let client_send_lock = client.coordinator_send.read().unwrap();
+            client_send_lock
+                .as_ref()
+                .expect("Sender does not exist after creation.")
+                .clone()
+        };
 
-        let client_recv_lock = client.coordinator_receive.read().unwrap();
-        let mut coord_rx = client_recv_lock
-            .as_ref()
-            .expect("Receiver does not exist after creation")
-            .subscribe();
+        let mut coord_rx = {
+            let client_recv_lock = client.coordinator_receive.read().unwrap();
+            client_recv_lock
+                .as_ref()
+                .expect("Receiver does not exist after creation")
+                .subscribe()
+        };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {

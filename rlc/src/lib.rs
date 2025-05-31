@@ -32,7 +32,13 @@ pub struct Rules {
     id_counter: u32,
 }
 
-pub const COMPARE_NODE_NAME: &'static str = "#minot-tui";
+pub const COMPARE_NODE_NAME: &str = "#minot-tui";
+
+impl Default for Rules {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Rules {
     pub fn new() -> Self {
@@ -533,8 +539,8 @@ impl FromStr for SensorType {
     }
 }
 
-pub const POINTCLOUD_ROS2_TYPE: &'static str = "sensor_msgs/msg/PointCloud2";
-pub const IMU_ROS2_TYPE: &'static str = "sensor_msgs/msg/Imu";
+pub const POINTCLOUD_ROS2_TYPE: &str = "sensor_msgs/msg/PointCloud2";
+pub const IMU_ROS2_TYPE: &str = "sensor_msgs/msg/Imu";
 
 impl SensorType {
     pub fn is(&self, query: &str) -> bool {
@@ -704,8 +710,8 @@ impl fmt::Display for Token<'_> {
             Self::NewLine => write!(f, "\\n"),
             Self::BracketOpen => write!(f, "["),
             Self::BracketClose => write!(f, "]"),
-            Self::BlockStart => write!(f, "{}", "{"),
-            Self::BlockEnd => write!(f, "{}", "}"),
+            Self::BlockStart => write!(f, "{{"),
+            Self::BlockEnd => write!(f, "}}"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::OpCompare => write!(f, "=="),
@@ -864,6 +870,12 @@ pub struct Evaluated {
     pub rules: Rules,
     pub wind: Vec<WindFunction>,
     pub vars: VariableHistory,
+}
+
+impl Default for Evaluated {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Evaluated {
@@ -1143,7 +1155,7 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
         }
     }
 
-    return Err(anyhow!("Could not parse ratslang code."));
+    Err(anyhow!("Could not parse ratslang code."))
 }
 
 impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
@@ -1231,14 +1243,14 @@ impl Statement {
             Statement::AssignLeft { lhs, rhs } => {
                 let nlhs = lhs
                     .into_iter()
-                    .map(|v| v.add_namespace(&ns))
+                    .map(|v| v.add_namespace(ns))
                     .collect::<Vec<_>>();
                 Statement::AssignLeft { lhs: nlhs, rhs }
             }
             Statement::AssignRight { lhs, rhs } => {
                 let nrhs = rhs
                     .into_iter()
-                    .map(|v| v.add_namespace(&ns))
+                    .map(|v| v.add_namespace(ns))
                     .collect::<Vec<_>>();
                 Statement::AssignRight { lhs, rhs: nrhs }
             }
@@ -1290,13 +1302,13 @@ where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
     let time = select! {
-        Token::IntegerNumberMillisecond(ms) => NumVal::Integer(ms as i64),
+        Token::IntegerNumberMillisecond(ms) => NumVal::Integer(ms),
         Token::FloatingNumberMillisecond(ms) => NumVal::Floating(ms).integerize_unit_val(),
     }
     .labelled("time");
 
     let way = select! {
-        Token::IntegerNumberMillimeter(millis) => NumVal::Integer(millis as i64),
+        Token::IntegerNumberMillimeter(millis) => NumVal::Integer(millis),
         Token::FloatingNumberMillimeter(millis) => NumVal::Floating(millis).integerize_unit_val(),
     }
     .labelled("way");
@@ -1454,9 +1466,7 @@ where
             | (
                 Rhs::Val(Val::NumVal(NumVal::Integer(_))),
                 Rhs::Val(Val::NumVal(NumVal::Floating(_))),
-            ) => {
-                return Err(Rich::custom(span, "Cannot span between float and integer."));
-            }
+            ) => Err(Rich::custom(span, "Cannot span between float and integer.")),
             (_, _) => Ok((from, to)),
         })
         .map(|(from, to)| {
@@ -1512,14 +1522,12 @@ where
     let range = choice((numberrange, timerange.clone(), wayrange));
 
     let rhs_array = recursive(|rhs_array| {
-        choice((term.clone(), range.clone(), value.clone(), rhs_array))
+        choice((term, range.clone(), value, rhs_array))
             .separated_by(just(Token::Comma).then_ignore(just(Token::NewLine).repeated()))
             .at_least(1)
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen))
-            .map(|arr: Vec<Rhs>| {
-                Rhs::Array(arr.into_iter().map(|r| Box::new(r)).collect::<Vec<_>>())
-            })
+            .map(|arr: Vec<Rhs>| Rhs::Array(arr.into_iter().map(Box::new).collect::<Vec<_>>()))
     });
 
     let rhs = choice((term, range, value, rhs_array));
@@ -1680,7 +1688,7 @@ where
     let str_only = select! {
             Token::String(s) => s.to_owned(),
     }
-    .or(variable.clone().try_map(|v, span| match v {
+    .or(variable.try_map(|v, span| match v {
         Rhs::Var(Var::User {
             name,
             namespace: ns,
@@ -1690,12 +1698,9 @@ where
             }
             Ok(name)
         }
-        _ => {
-            return Err(Rich::custom(span, "Expected implicit string."));
-        }
+        _ => Err(Rich::custom(span, "Expected implicit string.")),
     }));
     let str_array = str_only
-        .clone()
         .separated_by(just(Token::Comma).then_ignore(just(Token::NewLine).repeated()))
         .at_least(1)
         .collect::<Vec<_>>()
@@ -1745,7 +1750,7 @@ where
                     }))
                 }),
                 select! {
-                    Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i as i64))), // (until) number of frames
+                    Token::IntegerNumber(i) => Rhs::Val(Val::NumVal(NumVal::Integer(i))), // (until) number of frames
                 },
             ))
             .labelled("int number for count, relative time from now or absolute timespan")
@@ -1755,18 +1760,14 @@ where
             choice((
                 variable.try_map(|v, span| match v {
                     Rhs::Var(var) => match var {
-                        Var::Log => {
-                            return Err(Rich::custom(span, "Can not trigger on Log."));
-                        }
+                        Var::Log => Err(Rich::custom(span, "Can not trigger on Log.")),
                         Var::Predef {
                             name: _,
                             namespace: _,
-                        } => {
-                            return Err(Rich::custom(
-                                span,
-                                "Did not expect a predef variable as a variable name.",
-                            ));
-                        }
+                        } => Err(Rich::custom(
+                            span,
+                            "Did not expect a predef variable as a variable name.",
+                        )),
                         Var::User { name, namespace } => {
                             if !namespace.is_empty() {
                                 return Err(Rich::custom(
@@ -1802,17 +1803,14 @@ where
         )
         .then(
             variable
-                .clone()
                 .try_map(|v, span| {
                     let errmsg = "Only f or d allowed. f for fixed, d for dynamic.";
                     match v {
                         Rhs::Var(var) => match var {
-                            Var::Log => {
-                                return Err(Rich::custom(span, errmsg));
-                            }
+                            Var::Log => Err(Rich::custom(span, errmsg)),
                             Var::Predef { name, namespace } => {
                                 if !namespace.is_empty() {
-                                    return Err(Rich::custom(span, errmsg));
+                                    Err(Rich::custom(span, errmsg))
                                 } else {
                                     if name.as_str() != "f" && name.as_str() != "d" {
                                         return Err(Rich::custom(span, errmsg));
@@ -1823,7 +1821,7 @@ where
                             }
                             Var::User { name, namespace } => {
                                 if !namespace.is_empty() {
-                                    return Err(Rich::custom(span, errmsg));
+                                    Err(Rich::custom(span, errmsg))
                                 } else {
                                     if name.as_str() != "f" && name.as_str() != "d" {
                                         return Err(Rich::custom(span, errmsg));
@@ -2046,10 +2044,7 @@ where
         .map(|(ns, stmts): (Vec<&'_ str>, Vec<StatementKindPass1>)| {
             StatementKindPass1::VariableNamespaceBlock {
                 ns,
-                stmts: stmts
-                    .into_iter()
-                    .map(|stmtk| Box::new(stmtk))
-                    .collect::<Vec<_>>(),
+                stmts: stmts.into_iter().map(Box::new).collect::<Vec<_>>(),
             }
         })
     });
@@ -2063,11 +2058,11 @@ where
         include,
     ));
     let newlines = just(Token::NewLine).repeated();
-    let one_block = newlines
+
+    newlines
         .clone()
         .ignore_then((one_of_wind_fns.then_ignore(newlines)).repeated().collect())
-        .then_ignore(end());
-    one_block
+        .then_ignore(end())
 }
 
 impl RuleSexpr {
@@ -2235,11 +2230,11 @@ fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
         return false;
     }
 
-    if sub.len() == 0 {
+    if sub.is_empty() {
         return false; // Empty is not a sub-namespace
     }
 
-    if super_namespace.len() == 0 {
+    if super_namespace.is_empty() {
         return false;
     }
 
@@ -2308,11 +2303,11 @@ fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
                     Var::Predef {
                         name: _,
                         namespace: var_ns,
-                    } => is_sub_namespace(ns, &var_ns),
+                    } => is_sub_namespace(ns, var_ns),
                     Var::User {
                         name: _,
                         namespace: var_ns,
-                    } => is_sub_namespace(ns, &var_ns),
+                    } => is_sub_namespace(ns, var_ns),
                 })
                 .map(|l| truncate_namespace_var(ns, l))
                 .collect::<Vec<_>>();
@@ -2328,11 +2323,11 @@ fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
                     Var::Predef {
                         name: _,
                         namespace: var_ns,
-                    } => is_sub_namespace(ns, &var_ns),
+                    } => is_sub_namespace(ns, var_ns),
                     Var::User {
                         name: _,
                         namespace: var_ns,
-                    } => is_sub_namespace(ns, &var_ns),
+                    } => is_sub_namespace(ns, var_ns),
                 })
                 .map(|l| truncate_namespace_var(ns, l))
                 .collect::<Vec<_>>();
@@ -2415,21 +2410,22 @@ impl VariableHistory {
     }
 
     pub fn populate_cache(&mut self) {
-        self.ast.iter().for_each(|f| match f {
-            StatementKindOwned::VariableDef(statement) => match statement {
-                Statement::AssignLeft { lhs, rhs } => {
-                    for l in lhs {
-                        self.var_cache.insert(l.clone(), rhs.clone());
+        self.ast.iter().for_each(|f| {
+            if let StatementKindOwned::VariableDef(statement) = f {
+                match statement {
+                    Statement::AssignLeft { lhs, rhs } => {
+                        for l in lhs {
+                            self.var_cache.insert(l.clone(), rhs.clone());
+                        }
                     }
-                }
-                Statement::AssignRight { lhs, rhs } => {
-                    for r in rhs {
-                        self.var_cache.insert(r.clone(), lhs.clone());
+                    Statement::AssignRight { lhs, rhs } => {
+                        for r in rhs {
+                            self.var_cache.insert(r.clone(), lhs.clone());
+                        }
                     }
+                    Statement::Compare { rhs: _, lhs: _ } => {}
                 }
-                Statement::Compare { rhs: _, lhs: _ } => {}
-            },
-            _ => {}
+            }
         });
     }
 
@@ -2514,8 +2510,8 @@ impl VariableHistory {
             .enumerate()
             .take(up_to.unwrap_or(usize::MAX))
         {
-            match &stmt {
-                &StatementKindOwned::Rule(rule) => {
+            match stmt {
+                StatementKindOwned::Rule(rule) => {
                     for rstmt in rule.stmts.iter() {
                         match rstmt {
                             Statement::AssignLeft { lhs, rhs } => {
@@ -2582,11 +2578,11 @@ impl VariableHistory {
                         }
                     }
                 }
-                &StatementKindOwned::VariableDef(statement) => match statement {
+                StatementKindOwned::VariableDef(statement) => match statement {
                     Statement::AssignLeft { lhs, rhs } => {
                         if lhs.contains(var) {
                             val = Some(match rhs {
-                                Rhs::Var(var) => match self.resolve_recursive(&var, Some(i))? {
+                                Rhs::Var(var) => match self.resolve_recursive(var, Some(i))? {
                                     None => Rhs::Val(Val::StringVal(match var {
                                         Var::User { name, namespace: _ } => name.clone(),
                                         Var::Log => {
@@ -2610,7 +2606,7 @@ impl VariableHistory {
                     Statement::AssignRight { lhs, rhs } => {
                         if rhs.contains(var) {
                             val = Some(match lhs {
-                                Rhs::Var(var) => match self.resolve_recursive(&var, Some(i))? {
+                                Rhs::Var(var) => match self.resolve_recursive(var, Some(i))? {
                                     None => Rhs::Val(Val::StringVal(match var {
                                         Var::User { name, namespace: _ } => name.clone(),
                                         Var::Log => {
@@ -2633,8 +2629,8 @@ impl VariableHistory {
                     }
                     Statement::Compare { rhs: _, lhs: _ } => {}
                 },
-                &StatementKindOwned::Reset(_) => {}
-                &StatementKindOwned::SendFrames(_) => {}
+                StatementKindOwned::Reset(_) => {}
+                StatementKindOwned::SendFrames(_) => {}
             }
         }
         Ok(val)
@@ -2670,7 +2666,7 @@ impl VariableHistory {
 
     pub fn resolve_ns(&self, namespace: &[&str]) -> Vec<(Var, Rhs)> {
         let owned_ns = namespace
-            .into_iter()
+            .iter()
             .map(|s| (*s).to_owned())
             .collect::<Vec<_>>();
         self.filter_by_namespace(&owned_ns, None, true)
@@ -2745,7 +2741,7 @@ impl VariableHistory {
 
     pub fn filter_ns(&self, namespace: &[&str]) -> Self {
         let owned_ns = namespace
-            .into_iter()
+            .iter()
             .map(|s| (*s).to_owned())
             .collect::<Vec<_>>();
         let filtered = self.filter_by_namespace(&owned_ns, None, true);
@@ -2834,19 +2830,16 @@ fn resolve_struct_in_ns(user_ns: &Vec<(Var, Rhs)>, var: &str) -> Option<AnySenso
     let mut short_lookup: HashMap<String, String> = HashMap::new();
 
     for (v, rhs) in user_ns.iter() {
-        match v {
-            Var::Predef { name, namespace } => {
-                if (*name).as_str() == "short" {
-                    let val = match rhs {
-                        Rhs::Val(Val::StringVal(s)) => s.clone(),
-                        _ => {
-                            return None;
-                        }
-                    };
-                    short_lookup.insert(val, namespace.first()?.clone());
-                }
+        if let Var::Predef { name, namespace } = v {
+            if (*name).as_str() == "short" {
+                let val = match rhs {
+                    Rhs::Val(Val::StringVal(s)) => s.clone(),
+                    _ => {
+                        return None;
+                    }
+                };
+                short_lookup.insert(val, namespace.first()?.clone());
             }
-            _ => {}
         }
     }
     for (v, rhs) in user_ns.iter() {
@@ -2865,9 +2858,9 @@ fn resolve_struct_in_ns(user_ns: &Vec<(Var, Rhs)>, var: &str) -> Option<AnySenso
                         }
                         let found_by_short = short_lookup.get(var);
                         if let Some(short_name) = found_by_short {
-                            return (*short_name).as_str() == (*s).as_str();
+                            (*short_name).as_str() == (*s).as_str()
                         } else {
-                            return false;
+                            false
                         }
                     })
                     .unwrap_or_default();
@@ -2931,7 +2924,7 @@ fn resolve_sensors(
 ) -> anyhow::Result<Vec<AnySensor>> {
     let mut mapped = vec![];
     for sensor in sensors {
-        let any = resolve_struct_in_ns(&user_ns, &sensor)
+        let any = resolve_struct_in_ns(user_ns, sensor)
             .ok_or(anyhow!("Could not find sensor: {}", &sensor))?;
         mapped.push(any);
     }
@@ -2945,7 +2938,7 @@ pub fn compile_code_with_state(
     mut out: impl std::io::Write,
     rich_out: bool,
 ) -> anyhow::Result<Evaluated> {
-    let token_iter = Token::lexer(&source_code_raw)
+    let token_iter = Token::lexer(source_code_raw)
         .spanned()
         // Convert logos errors into tokens. We want parsing to be recoverable and not fail at the lexing stage, so
         // we have a dedicated `Token::Error` variant that represents a token error that was previously encountered
@@ -2978,13 +2971,13 @@ pub fn compile_code_with_state(
             // let mut ast: Vec<StatementKindOwnedPass1> = Vec::new();
             for expr in &ast {
                 // clone for ease of use, but normally just use AST
-                match &expr {
-                    &StatementKindOwned::Rule(rule) => {
+                match expr {
+                    StatementKindOwned::Rule(rule) => {
                         rules.push(rule.clone());
                     }
-                    &StatementKindOwned::Reset(_) => winds.push(expr.clone()),
-                    &StatementKindOwned::SendFrames(_) => winds.push(expr.clone()),
-                    &StatementKindOwned::VariableDef(_) => {}
+                    StatementKindOwned::Reset(_) => winds.push(expr.clone()),
+                    StatementKindOwned::SendFrames(_) => winds.push(expr.clone()),
+                    StatementKindOwned::VariableDef(_) => {}
                 }
                 // ast.push(expr.into());
             }
@@ -3081,9 +3074,9 @@ pub fn compile_code_with_state(
                         "<{}-{}>  {}",
                         err.span().start,
                         err.span().end,
-                        err.reason().to_string(),
+                        err.reason(),
                     );
-                    out.write(msg.as_bytes()).unwrap();
+                    out.write_all(msg.as_bytes()).unwrap();
                 }
             }
         }

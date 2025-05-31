@@ -47,16 +47,10 @@ impl Rat {
                 sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None, false);
 
             match timeout {
-                None => {
-                    return Ok(Some(init_future.await?));
-                }
+                None => Ok(Some(init_future.await?)),
                 Some(t) => match tokio::time::timeout(t, init_future).await {
-                    Err(_) => {
-                        return Ok::<Option<NetworkShipImpl>, anyhow::Error>(None);
-                    }
-                    Ok(t) => {
-                        return Ok(Some(t?));
-                    }
+                    Err(_) => Ok::<Option<NetworkShipImpl>, anyhow::Error>(None),
+                    Ok(t) => Ok(Some(t?)),
                 },
             }
         })?;
@@ -274,7 +268,9 @@ type CFfiString = u8;
 type CFfiString = i8;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i32 {
+/// # Safety
+/// C interop
+pub unsafe extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i32 {
     let catch = std::panic::catch_unwind(|| {
         let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
         let node_name = node_name.to_str().unwrap();
@@ -302,8 +298,10 @@ pub extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rat_deinit() -> i32 {
-    let catch = std::panic::catch_unwind(|| deinit());
+/// # Safety
+/// C interop
+pub unsafe extern "C" fn rat_deinit() -> i32 {
+    let catch = std::panic::catch_unwind(deinit);
 
     match catch {
         Ok(Ok(_)) => 0,
@@ -320,7 +318,9 @@ pub extern "C" fn rat_deinit() -> i32 {
 
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_f32(
+/// # Safety
+/// C interop
+pub unsafe extern "C" fn rat_bacon_f32(
     variable_name: *const CFfiString,
     data: *mut f32,
     rows: usize,
@@ -359,7 +359,9 @@ pub extern "C" fn rat_bacon_f32(
 
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_f64(
+/// # Safety
+/// C interop
+pub unsafe extern "C" fn rat_bacon_f64(
     variable_name: *const CFfiString,
     data: *mut f64,
     rows: usize,
@@ -398,7 +400,9 @@ pub extern "C" fn rat_bacon_f64(
 
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_i32(
+/// # Safety
+/// C interop
+pub unsafe extern "C" fn rat_bacon_i32(
     variable_name: *const CFfiString,
     data: *mut i32,
     rows: usize,
@@ -437,7 +441,9 @@ pub extern "C" fn rat_bacon_i32(
 
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
-pub extern "C" fn rat_bacon_u8(
+/// # Safety
+/// C interop
+pub unsafe extern "C" fn rat_bacon_u8(
     variable_name: *const CFfiString,
     data: *mut u8,
     rows: usize,

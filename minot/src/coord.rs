@@ -20,7 +20,7 @@ pub fn topic_from_eval_or_default(
         match topic {
             rlc::Rhs::Path(topic) | rlc::Rhs::Val(rlc::Val::StringVal(topic)) => Ok(topic),
             _ => {
-                return Err(anyhow!("Expected String or Path for sending lidar topic"));
+                Err(anyhow!("Expected String or Path for sending lidar topic"))
             }
         }
     } else {
@@ -102,11 +102,8 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                 data: sea::net::PacketKind::Acknowledge,
             };
             for (_client_name, client) in clients.iter() {
-                match client.sender.send(ack.clone()).await {
-                    Err(e) => {
-                        error!("Could not send ack to unlock client: {e}");
-                    }
-                    Ok(_) => {}
+                if let Err(e) = client.sender.send(ack.clone()).await {
+                    error!("Could not send ack to unlock client: {e}");
                 }
             }
             // allow other clients to join after all predefined clients are connected
@@ -217,7 +214,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                         }
 
                                                         let res = wind_tx_inner.send(send_now);
-                                                        if let Err(_) = res {
+                                                        if res.is_err() {
                                                             error!(
                                                                 "Could not send wind data to proxy sender. Are you sure the winds are connected?",
                                                             );
@@ -314,8 +311,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     winds_inner.write().unwrap();
 
                                                                 let mut asked_for_dynamic = false;
-                                                                winds.get_mut(&variable).map(|wt| {
-                                                                    wt.iter_mut().for_each(|wte| {
+                                                                if let Some(wt) = winds.get_mut(&variable) { wt.iter_mut().for_each(|wte| {
                                                                         // TODO we saved many reguests here for the same var but only one will come through "already seen"
                                                                         if !wte.already_seen {
                                                                             match &mut wte.kind {
@@ -348,8 +344,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                             };
                                                                             wte.already_seen = true;
                                                                         }
-                                                                    });
-                                                                });
+                                                                    }); }
 
                                                                 // set all other to be sent again
                                                                 for (var, wind) in
@@ -454,7 +449,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                 data,
                                             })
                                             .unwrap();
-                                        _ = acked_wind_rx.recv().await.unwrap(); // wait for wind to have sent everything. TODO add feedback channel for LH so it knows when wind is available again
+                                        acked_wind_rx.recv().await.unwrap(); // wait for wind to have sent everything. TODO add feedback channel for LH so it knows when wind is available again
                                     }
                                 });
                             }
@@ -509,18 +504,14 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                     if unlock_first {
                         let clients = coordinator.rat_qs.read().await;
                         for (c, _) in clients.iter() {
-                            match coordinator
+                            if let Err(e) = coordinator
                                 .rat_send(c.clone(), PacketKind::Acknowledge)
-                                .await
-                            {
-                                Err(e) => {
-                                    error!(
-                                        "Error while sending ack for unlocking to Rat {}: {}",
-                                        c, e
-                                    );
-                                    std::process::exit(1);
-                                }
-                                Ok(_) => (),
+                                .await {
+                                error!(
+                                    "Error while sending ack for unlocking to Rat {}: {}",
+                                    c, e
+                                );
+                                std::process::exit(1);
                             }
                         }
                     }
@@ -530,26 +521,19 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                 MinotTask::Unlock => {
                     let clients = coordinator.rat_qs.read().await;
                     for (c, _) in clients.iter() {
-                        match coordinator
+                        if let Err(e) = coordinator
                             .rat_send(c.clone(), PacketKind::Acknowledge)
-                            .await
-                        {
-                            Err(e) => {
-                                error!("Error while sending ack for unlocking to Rat {}: {}", c, e);
-                                std::process::exit(1);
-                            }
-                            Ok(_) => (),
+                            .await {
+                            error!("Error while sending ack for unlocking to Rat {}: {}", c, e);
+                            std::process::exit(1);
                         }
                     }
                     lock_next = false;
                 }
                 MinotTask::SendWind { ship_name, data } => {
-                    match coordinator.blow_wind(ship_name.clone(), data).await {
-                        Err(e) => {
-                            error!("Error while blowing wind to {}: {}", ship_name, e);
-                            std::process::exit(1);
-                        }
-                        _ => (),
+                    if let Err(e) = coordinator.blow_wind(ship_name.clone(), data).await {
+                        error!("Error while blowing wind to {}: {}", ship_name, e);
+                        std::process::exit(1);
                     }
                 }
                 MinotTask::SendRatAction {
@@ -566,9 +550,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                 ActionPlan::Sail => data.clone(),
                                 ActionPlan::Shoot { target, id } => {
                                     let ntargets = target
-                                        .into_iter()
-                                        .cloned()
-                                        .filter(|t| t != COMPARE_NODE_NAME)
+                                        .iter().filter(|&t| t != COMPARE_NODE_NAME).cloned()
                                         .collect::<Vec<_>>();
                                     if ntargets.is_empty() {
                                         ActionPlan::Sail
@@ -587,21 +569,13 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                         }
                     }
 
-                    let lock_next = if lock_next && ship_name != COMPARE_NODE_NAME {
-                        true
-                    } else {
-                        false
-                    };
+                    let lock_next = lock_next && ship_name != COMPARE_NODE_NAME;
 
-                    match coordinator
+                    if let Err(e) = coordinator
                         .rat_action_send(ship_name.clone(), data, lock_next)
-                        .await
-                    {
-                        Err(e) => {
-                            error!("Error while sending action to Rat {}: {}", ship_name, e);
-                            std::process::exit(1);
-                        }
-                        Ok(_) => (),
+                        .await {
+                        error!("Error while sending action to Rat {}: {}", ship_name, e);
+                        std::process::exit(1);
                     }
                 }
                 MinotTask::RegisterShipAtVar { ship, var, kind } => {
@@ -652,10 +626,8 @@ pub fn get_clients(eval: &rlc::Evaluated) -> anyhow::Result<HashSet<String>> {
     let winds = if let Some(winds) = winds {
         match winds {
             rlc::Rhs::Array(items)
-                if items.iter().all(|item| match **item {
-                    rlc::Rhs::Val(rlc::Val::StringVal(_)) => true,
-                    _ => false,
-                }) =>
+                if items.iter().all(|item| matches!(**item, rlc::Rhs::Val(rlc::Val::StringVal(_))))
+                 => 
             {
                 items
                     .into_iter()

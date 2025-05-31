@@ -24,9 +24,9 @@ pub struct NetworkShipImpl {
 
 #[async_trait::async_trait]
 impl crate::Cannon for NetworkShipImpl {
-    async fn shoot<T: Sendable>(
+    async fn shoot<'b, T: Sendable>(
         &self,
-        targets: &Vec<crate::NetworkShipAddress>,
+        targets: &'b [crate::NetworkShipAddress],
         id: u32,
         data: &T,
         variable_type: VariableType,
@@ -47,7 +47,7 @@ impl crate::Cannon for NetworkShipImpl {
                     target.port,
                     data,
                     variable_type,
-                    &variable_name,
+                    variable_name,
                 )
                 .await?;
         }
@@ -237,7 +237,7 @@ impl crate::Ship for NetworkShipImpl {
         } else {
             drop(client);
             tokio::task::yield_now().await;
-            return self.ask_for_action(&variable_name).await;
+            return self.ask_for_action(variable_name).await;
         }
     }
 

@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eval = match &file {
         Some(path) => {
             println!("Compiling {:#?}", &path.canonicalize()?);
-            let compiled = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
+            let compiled = rlc::compile_file(path, None, None)?; // evaluate entire file at first
             // remove compile feedback
             print!("\x1b[1A"); // move cursor up 1 line
             print!("\x1b[2K"); // erase line
@@ -117,8 +117,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .expect("Should have failed in prev compilation.");
                 let joined = cfg_parent.join(cfpath);
                 println!("Compiling separate wind {:#?}", &joined);
-                let rl = rlc::compile_file(&joined, None, None)?;
-                rl
+
+                rlc::compile_file(&joined, None, None)?
             }
             (_, _) => rlc::Evaluated::new(),
         };
@@ -310,37 +310,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     sea::net::PacketKind::RatAction {
-                        action,
+                        action: crate::Action::Catch { source, id },
                         lock_until_ack: _,
-                    } => {
-                        if let crate::Action::Catch { source, id } = action {
-                            // info!("received catch: {source:?}");
-                            match comparer.get_cannon().catch_dyn(id).await {
-                                Ok(v) => {
-                                    let name = match &source.kind {
-                                        ShipKind::Rat(name) => name.clone(),
-                                        ShipKind::Wind(_) => {
-                                            error!("Received something from Wind.");
-                                            continue;
-                                        }
-                                    };
-
-                                    for (strrep, _var_type, var_name) in v {
-                                        match ndata_tx.send((name.clone(), strrep, var_name)).await
-                                        {
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                error!("Error sending received variable: {e}");
-                                            }
-                                        }
-                                    }
+                    } => match comparer.get_cannon().catch_dyn(id).await {
+                        Ok(v) => {
+                            let name = match &source.kind {
+                                ShipKind::Rat(name) => name.clone(),
+                                ShipKind::Wind(_) => {
+                                    error!("Received something from Wind.");
+                                    continue;
                                 }
-                                Err(e) => {
-                                    error!("Could not catch dynamic typed var: {e}");
+                            };
+
+                            for (strrep, _var_type, var_name) in v {
+                                match ndata_tx.send((name.clone(), strrep, var_name)).await {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        error!("Error sending received variable: {e}");
+                                    }
                                 }
                             }
                         }
-                    }
+                        Err(e) => {
+                            error!("Could not catch dynamic typed var: {e}");
+                        }
+                    },
                     _ => (),
                 },
                 Err(e) => {

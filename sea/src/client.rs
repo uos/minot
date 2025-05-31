@@ -153,12 +153,9 @@ impl Client {
                             .unwrap();
                         let stream: TcpStream = socket.into();
                         let stream = tokio::net::TcpStream::from_std(stream).unwrap();
-                        match stream.readable().await {
-                            Err(e) => {
-                                error!("TCP Listener stream not readable: {e}");
-                                continue;
-                            }
-                            Ok(_) => {}
+                        if let Err(e) = stream.readable().await {
+                            error!("TCP Listener stream not readable: {e}");
+                            continue;
                         };
 
                         let (rh, wh) = stream.into_split();
@@ -210,13 +207,10 @@ impl Client {
                                         Ok(Some(mut packet)) => {
                                             packet.header.source = addr.ship; // overwrite source with our id
                                             packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
-                                            match coord_raw_sender.send(packet).await {
-                                                Err(e) => {
-                                                    error!(
-                                                        "could not forward coordinator packet: {e}"
-                                                    );
-                                                }
-                                                Ok(_) => {}
+                                            if let Err(e) = coord_raw_sender.send(packet).await {
+                                                error!(
+                                                    "could not forward coordinator packet: {e}"
+                                                );
                                             }
                                         }
                                         Err(_e) => {
@@ -405,7 +399,7 @@ impl Client {
 
                     debug!("Packet details: {:?}", packet);
 
-                    if let Err(e) = channel.send((packet, partner.clone())) {
+                    if let Err(e) = channel.send((packet, partner)) {
                         error!(
                             "Could not send packet to internal broadcast channel for partner {:?}: {}",
                             partner, e
@@ -543,7 +537,7 @@ impl Client {
         variable_name: &str,
     ) -> anyhow::Result<()> {
         loop {
-            let addr = format!("{}:{}", address.to_string(), port);
+            let addr = format!("{}:{}", address, port);
             let stream = tokio::time::timeout(
                 CLIENT_TO_CLIENT_TIMEOUT,
                 tokio::net::TcpStream::connect(&addr),
@@ -693,7 +687,7 @@ impl Client {
                                     }
                                     warn!("Received something else than retry packet mid-stream.");
                             },
-                            fd_sent = stream_tx.write(&send_buf) => {
+                            fd_sent = stream_tx.write(send_buf) => {
                                 let n = fd_sent.expect("Could not write to tcp stream.");
                                 if n == 0 {
                                     error!("written 0 bytes to other client?");
@@ -869,7 +863,7 @@ impl Client {
                         lock.insert(msg_id, buff_rx);
                     }
 
-                    if let Err(_) = task_update_chan.send(msg_id) {
+                    if task_update_chan.send(msg_id).is_err() {
                         debug!("got a message for id: {msg_id} but no one cares :(");
                     }
 
@@ -886,7 +880,6 @@ impl Client {
                 }
 
                 debug!("Received data is not for us");
-                return;
             });
         }
     }

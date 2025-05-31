@@ -53,7 +53,7 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
         Self::from_data(nalgebra::VecStorage::new(
             nalgebra::Dyn(value.rows),
             nalgebra::Dyn(value.cols),
-            value.data.into(),
+            value.data,
         ))
     }
 }
@@ -259,7 +259,7 @@ impl Sea {
                         continue;
                     }
 
-                    let packet: Packet = match from_bytes::<Packet, rancor::Error>(&buffer) {
+                    let packet: Packet = match from_bytes::<Packet, rancor::Error>(buffer) {
                         Err(e) => {
                             error!("Received package is broken: {e}");
                             continue;
@@ -304,7 +304,7 @@ impl Sea {
                             debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
                             {
                                 let mut lock = rat_lock.lock().unwrap();
-                                if let Some(_) = lock.get(&ship_kind) {
+                                if lock.get(&ship_kind).is_some() {
                                     debug!(
                                         "requested client already exists or is in the progress of joining the network"
                                     );
@@ -466,11 +466,8 @@ impl Sea {
     // TODO never worked
     pub async fn cleanup(&mut self) {
         let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
-        match self.dissolve_network.send(answer_tx).await {
-            Err(e) => {
-                error!("Error while droppping network: {e}");
-            }
-            Ok(_) => {}
+        if let Err(e) = self.dissolve_network.send(answer_tx).await {
+            error!("Error while droppping network: {e}");
         }
 
         let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());

@@ -1,3 +1,9 @@
+!!! warning
+
+    There are no prebuilt binaries or packages yet.
+
+    But you can easily install everything from source, it just takes a little bit longer. You'll need to have [Rust installed](https://www.rust-lang.org/tools/install).
+
 Minot is the name of the TUI you usually run but also of the project with all of its modules and other binaries. They can run distributed over the network or be embedded into a single process in the TUI itself.
 
 Because of this, there is no *typical* use case for Minot so you are expected to add flags to match your needs and build from source. But fear not, building from source is easy.
@@ -19,80 +25,75 @@ With default settings, Minot builds with an integrated coordinator. When running
 
 **Here are some common flavours of the Minot TUI to get you started quickly.**
 
-This version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a bagfile.
-
-~~~bash title="With ROS2 publisher (with any-type, needs sourced ROS2)"
+~~~bash title="(Recommended) With ROS2 publisher (+ any-type, needs sourced ROS2)"
 cargo install \
-  --git ssh://git@github.com/uos/minot.git minot \
+  --git https://github.com/uos/minot minot \
   --locked \
   --features embed-ros2-c
 ~~~
 
 ---
 
-~~~bash title="Minimal with embedded Coordinator - expects nodes in the network when publishing"
+The next version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a bagfile:
+
+~~~bash title="Minimal with embedded Coordinator"
 cargo install \
-  --git ssh://git@github.com/uos/minot.git minot \
+  --git https://github.com/uos/minot minot \
   --locked
 ~~~
 
+Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the bagfile is ROS2, only mapped types are supported (no any-type).
 
-
-~~~bash title="With Ratpub publisher (no any-type)"
+~~~bash title="With ROS1 and ROS2 publishers"
 cargo install \
-  --git ssh://git@github.com/uos/minot.git minot \
-  --locked \
-  --features embed-ratpub
-~~~
-
-
-~~~bash title="With ROS1 and ROS2 publisher in the same process with no ROS installation (no any-type)"
-cargo install \
-  --git ssh://git@github.com/uos/minot.git minot \
+  --git https://github.com/uos/minot minot \
   --locked \
   --features embed-ros-native
 ~~~
 
 ## Standalone Coordinator
 
-The Minot Coordinator can work as a standalone static binary. To make it easy to start, there is a binary distribution for common operating system and architectures on GitHub.
+Installing Minot TUI as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
+
+<!-- The Minot Coordinator can work as a standalone static binary. To make it easy to start, there is a binary distribution for common operating system and architectures on GitHub. -->
 
 
 ## Standalone Wind Turbines (Bagfile Publishers)
 
-You can compile the embedded publishers standalone and distribute them in your network. For example: you could run the TUI on a Mac, connected to the Robot over Wi-Fi or LAN, which runs ROS1 or ROS2 and the wind nodes.
+!!! tip
 
-### Prebuild Binaries
-bla
+    You can compile the embedded publishers standalone and distribute them in your network.
+
+    For example: you could run the TUI on a Mac, connected to a Robot with a Raspberry Pi over Wi-Fi or LAN, which runs ROS1 or ROS2 and the wind nodes.
 
 
-### Build From Source
+Standalone publishers live inside the `wind` module. You can compile/install them to your `$PATH` by changing the previous command from `minot` to `wind`.
 
-They are inside the `wind` module. You can compile/install them to your `$PATH` by changing the previous command from `minot` to `wind`.
+With `--all-features`, you'll get all binaries but you need to have ROS2 sourced.
 
-With `--all-features`, you'll get all binaries but you need a to have ROS2 sourced.
-
-~~~bash title="ROS1 and ROS2 publisher in the same process with no ROS installation (no any-type)"
+~~~bash title="Standalone Publishers (needs sourced ROS2)"
 cargo install \
-  --git ssh://git@github.com/uos/minot.git wind \
+  --git https://github.com/uos/minot wind \
   --locked \
   --all-features
 ~~~
 
-The following binaries are available for publishing bagfile messages when specifying the respective feature:
+The following flavours are available for publishing bagfile messages when specifying the respective feature:
 
+- wind-ros2-c (with any-type) `--feature ros2-c`
 - wind-ros1-native `--feature ros1-native`
 - wind-ros2-native `--feature ros2-native`
-- wind-ros2-c (with any-type) `--feature ros2-c`
 - wind-rat `--feature ratpub`
 
 Only the C version requires a ROS2 installation at compile time.
 
 ## Rats (Variable Sharing)
 
-Nodes in the Minot system are called Rats ([here is why](./lore.md)). The functionality is shipped as a Rust and C library. You can get the precompiled shared or static library including the header file here.
+Nodes in the Minot network are called Rats ([here is why](./lore.md)). The functionality is shipped as a Rust and C library.
 
-You can also build the library from source. It generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
+<!-- You can get the precompiled shared or static library including the header file here. -->
+
+You need to build the library from source. It generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
 
 ~~~bash title="Build librat from source"
 git clone https://github.com/uos/minot
@@ -100,7 +101,7 @@ cd minot
 cargo build --package rat --release
 ~~~
 
-A typical installation is to copy the libraries to your system directory. Alternatively, change the link and include search paths.
+A typical system-wide installation is to copy the libraries to your linker path. Alternatively, you may change the link path and include search paths in your build system.
 
 ~~~bash
 sudo cp ./target/release/librat.* /usr/local/lib/
@@ -108,7 +109,7 @@ sudo mkdir -p /usr/local/include/rat/
 sudo cp ./rat/rat.h /usr/local/include/rat/
 ~~~
 
-Then you can use them in your C/C++ code.
+Then you can use the library in your C/C++ code.
 ~~~C
 #include <rat/rat.h>
 ~~~
@@ -117,20 +118,28 @@ And link with `-lrat`.
 
 ---
 
-For using the Rust library, add this to your `Cargo.toml`.
+For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-rat = { version = "0.1.0-rc.1", git = "ssh://git@github.com/uos/minot.git" }
+rat = { version = "0.1.0-rc.1", git = "https://github.com/uos/minot" }
 ~~~
 
 ## Ratpub (Native Publish/Subscribe)
 
 Ratpub is only available for Rust. It uses Tokio for async I/O.
-For using the library in your project, add this line to your `Cargo.toml`.
+For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-ratpub = { version = "0.1.0-rc.1", git = "ssh://git@github.com/uos/minot.git" }
+ratpub = { version = "0.1.0-rc.1", git = "https://github.com/uos/minot" }
 tokio = { version = "1", features = ["full"] }
+~~~
+
+Since you probably want to use existing ROS2 message definitions, you can also add the following crate which is auto-generated from the Jazzy release. It bundles all usual types and implements the required `rkyv` traits for sending them over the Minot network.
+
+~~~toml title="Cargo.toml"
+ros2-interfaces-jazzy-rkyv = { version = "0.0.4", features = [
+  "std_msgs", # add more here
+], git = "https://github.com/stelzo/ros2-interfaces-jazzy-rkyv.git" }
 ~~~
 
 Learn more on how to use it in your Code by visiting the [feature page](./pubsub.md).

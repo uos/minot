@@ -179,9 +179,9 @@ pub trait Cannon: Send + Sync + 'static {
     /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
-    async fn shoot<T: Sendable>(
+    async fn shoot<'b, T: Sendable>(
         &self,
-        targets: &Vec<crate::NetworkShipAddress>,
+        targets: &'b [crate::NetworkShipAddress],
         id: u32,
         data: &T,
         variable_type: VariableType,

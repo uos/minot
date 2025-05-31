@@ -1,0 +1,271 @@
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+
+permissions:
+  contents: write
+
+jobs:
+
+  rust-stable-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # - name: Linting
+        # run: cargo clippy --all-targets --features ros-native -- -D warnings
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+          curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
+      - name: Test
+        run: cargo test --verbose
+
+  linux-x86_64-musl:
+    runs-on: ubuntu-latest
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+      - name: Build
+        env:
+          RUST_TARGET: x86_64-unknown-linux-musl
+          TRIPLE: x86_64-linux-musl
+        run: |
+          rustup target add $RUST_TARGET
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+
+      - name: "Archive binary"
+        run: |
+          TARGET=x86_64-unknown-linux-musl
+          ARCHIVE_NAME=minot-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-x86_64-unknown-linux-musl
+          path: |
+            *.tar.gz
+            *.sha256
+
+  linux-x86_64-gnu:
+    runs-on: ubuntu-latest
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+      - name: Build
+        env:
+          RUST_TARGET: x86_64-unknown-linux-gnu
+        run: |
+          rustup target add $RUST_TARGET
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+
+      - name: "Archive binary"
+        run: |
+          TARGET=x86_64-unknown-linux-gnu
+          ARCHIVE_NAME=minot-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-x86_64-unknown-linux-gnu
+          path: |
+            *.tar.gz
+            *.sha256
+
+  linux-aarch64-gnu:
+    runs-on: ubuntu-latest
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+      - name: Build
+        env:
+          RUST_TARGET: aarch64-unknown-linux-gnu
+        run: |
+          rustup target add $RUST_TARGET
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+
+      - name: "Archive binary"
+        run: |
+          TARGET=aarch64-unknown-linux-gnu
+          ARCHIVE_NAME=minot-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-aarch64-unknown-linux-gnu
+          path: |
+            *.tar.gz
+            *.sha256
+
+  linux-armv7-gnu:
+    runs-on: ubuntu-latest
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+      - name: Build
+        env:
+          RUST_TARGET: armv7-unknown-linux-gnueabihf
+        run: |
+          rustup target add $RUST_TARGET
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+
+      - name: "Archive binary"
+        run: |
+          TARGET=armv7-unknown-linux-gnueabihf
+          ARCHIVE_NAME=minot-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-aarch64-unknown-linux-gnu
+          path: |
+            *.tar.gz
+            *.sha256
+
+  macos-aarch64:
+    runs-on: macos-latest
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        env:
+          RUST_TARGET: aarch64-apple-darwin
+          TRIPLE: aarch64-apple-darwin
+        run: |
+          rustup target add $RUST_TARGET
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+
+      - name: "Archive binary"
+        run: |
+          TARGET=aarch64-apple-darwin
+          ARCHIVE_NAME=minot-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-aarch64-apple-darwin
+          path: |
+            *.tar.gz
+            *.sha256
+
+  macos-x86_64:
+    runs-on: macos-latest
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        env:
+          RUST_TARGET: x86_64-apple-darwin
+          TRIPLE: x86_64-apple-darwin
+        run: |
+          rustup target add $RUST_TARGET
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
+
+      - name: "Archive binary"
+        run: |
+          TARGET=x86_64-apple-darwin
+          ARCHIVE_NAME=minot-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros1 $ARCHIVE_NAME/wind-ros1-native
+          cp target/$TARGET/release/wind-ros2 $ARCHIVE_NAME/wind-ros2-native
+          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
+          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-x86_64-apple-darwin
+          path: |
+            *.tar.gz
+            *.sha256
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu]

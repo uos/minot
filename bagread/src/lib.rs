@@ -261,7 +261,7 @@ pub enum SensorTypeMapped {
 fn collect_until<T>(
     reader: &mut IndexedReader,
     file: &mut T,
-    mut buffer: &mut Vec<u8>,
+    buffer: &mut Vec<u8>,
     last_iter_time: &mut Option<SystemTime>,
     start_time: &mut Option<SystemTime>,
     summary: &Summary,
@@ -301,7 +301,7 @@ where
     if let Some(lower_ts) = lower {
         let options =
             IndexedReaderOptions::new().log_time_on_or_after(system_time_to_nanos(&lower_ts));
-        *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(&summary, options)
+        *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(summary, options)
             .expect("could not construct reader");
         *last_iter_time = Some(lower_ts);
     }
@@ -315,8 +315,8 @@ where
             IndexedReadEvent::ReadChunkRequest { offset, length } => {
                 file.seek(std::io::SeekFrom::Start(offset))?;
                 buffer.resize(length, 0);
-                file.read_exact(&mut buffer)?;
-                reader.insert_chunk_record_data(offset, &buffer)?;
+                file.read_exact(buffer)?;
+                reader.insert_chunk_record_data(offset, buffer)?;
             }
             IndexedReadEvent::Message { header, data } => {
                 let channel = summary.channels.get(&header.channel_id).unwrap();
@@ -325,7 +325,7 @@ where
                 if time_iter_before.is_none() {
                     time_iter_before.replace(start_time);
                 } else {
-                    time_iter_before = last_iter_time.clone();
+                    time_iter_before = *last_iter_time;
                 }
                 *last_iter_time = Some(nanos_to_system_time(header.log_time)); // advance cursor
 
@@ -365,42 +365,39 @@ where
                     _ => {}
                 }
 
-                match &until_sensor {
-                    Some((until_sensors, pc)) => {
-                        for us in *until_sensors {
-                            let pass = match &us.id {
-                                SensorIdentification::Topic(topic) => {
-                                    topic.as_str() == &channel.topic
-                                }
-                                SensorIdentification::Type(t) => t.is(channel.topic.as_str()),
-                                SensorIdentification::TopicAndType { topic, msg_type: _ } => {
-                                    topic.as_str() == &channel.topic
-                                }
-                            };
+                if let Some((until_sensors, pc)) = &until_sensor {
+                    for us in *until_sensors {
+                        let pass = match &us.id {
+                            SensorIdentification::Topic(topic) => {
+                                topic.as_str() == &channel.topic
+                            }
+                            SensorIdentification::Type(t) => t.is(channel.topic.as_str()),
+                            SensorIdentification::TopicAndType { topic, msg_type: _ } => {
+                                topic.as_str() == &channel.topic
+                            }
+                        };
 
-                            if pass {
-                                until_sensor_counter += 1;
-                                match pc {
-                                    PlayCount::Amount(uc) => {
-                                        if until_sensor_counter >= *uc {
-                                            breaked_until = true;
-                                            break;
-                                        }
+                        if pass {
+                            until_sensor_counter += 1;
+                            match pc {
+                                PlayCount::Amount(uc) => {
+                                    if until_sensor_counter >= *uc {
+                                        breaked_until = true;
+                                        break;
                                     }
-                                    _ => {
-                                        return Err(anyhow!(
-                                            "Can only mix until_sensor with an amount. Timings are not specified to a sensor, use them in the stop criteria without a sensor."
-                                        ));
-                                    }
+                                }
+                                _ => {
+                                    return Err(anyhow!(
+                                        "Can only mix until_sensor with an amount. Timings are not specified to a sensor, use them in the stop criteria without a sensor."
+                                    ));
                                 }
                             }
                         }
-
-                        if breaked_until {
-                            break;
-                        }
                     }
-                    None => {}
+
+                    if breaked_until {
+                        break;
+                    }
                 }
 
                 let topic_meta = metadata
@@ -414,9 +411,9 @@ where
                         SensorIdentification::Topic(item) => {
                             (item.as_str() == &channel.topic, SensorType::Any)
                         }
-                        SensorIdentification::Type(t) => (t.is(channel.topic.as_str()), t.clone()),
+                        SensorIdentification::Type(t) => (t.is(channel.topic.as_str()), *t),
                         SensorIdentification::TopicAndType { topic, msg_type: t } => {
-                            (topic.as_str() == &channel.topic, t.clone())
+                            (topic.as_str() == &channel.topic, *t)
                         }
                     };
 
@@ -433,7 +430,7 @@ where
                     let data = match send_type {
                         SensorType::Lidar => {
                             let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
-                                cdr::deserialize(&data)
+                                cdr::deserialize(data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
@@ -441,7 +438,7 @@ where
                         }
                         SensorType::Imu => {
                             let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
-                                cdr::deserialize(&data)
+                                cdr::deserialize(data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             let data: Imu = unsafe { std::mem::transmute(dec) };
 
@@ -450,7 +447,7 @@ where
                         SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
                                 let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
-                                    cdr::deserialize(&data)
+                                    cdr::deserialize(data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
@@ -458,7 +455,7 @@ where
                             }
                             IMU_ROS2_TYPE => {
                                 let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
-                                    cdr::deserialize(&data)
+                                    cdr::deserialize(data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: Imu = unsafe { std::mem::transmute(dec) };
 
@@ -468,14 +465,7 @@ where
                         },
                         SensorType::Any => SensorTypeMapped::Any(data.to_vec()),
                     };
-                    let qos = if let Some(last) = topic_meta.offered_qos_profiles.last() {
-                        // TODO ROS2 allows many nodes publishing to a topic and everyone setting a different qos. So new subscribers have to be set and the key
-                        // is the tuple from topic and qos. But right now we take a topic as unique so we can not find the respective qos.
-                        // TODO override with settings from ratslang file
-                        Some(Qos::Custom(last.clone()))
-                    } else {
-                        None
-                    };
+                    let qos = topic_meta.offered_qos_profiles.last().map(|last| Qos::Custom(last.clone()));
                     let enc = BagMsg {
                         topic: topic_meta.name.clone(),
                         msg_type: topic_meta.topic_type.clone(),
@@ -486,17 +476,11 @@ where
                 }
                 if len_before != msgs.len() {
                     rel_since_begin += 1;
-                    match until {
-                        Some(pc) => match pc {
-                            PlayCount::Amount(count) => {
-                                if rel_since_begin >= *count {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        },
-                        None => {}
-                    }
+                    if let Some(pc) = until { if let PlayCount::Amount(count) = pc {
+                        if rel_since_begin >= *count {
+                            break;
+                        }
+                    } }
                 }
             }
         }
@@ -506,9 +490,9 @@ where
     if breaked_until {
         let options = IndexedReaderOptions::new()
             .log_time_on_or_after(system_time_to_nanos(&time_iter_before.unwrap()));
-        *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(&summary, options)
+        *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(summary, options)
             .expect("could not construct reader");
-        *last_iter_time = time_iter_before.clone();
+        *last_iter_time = time_iter_before;
     };
 
     Ok(msgs)
@@ -653,7 +637,7 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
 impl Bagfile {
     pub fn next(&mut self, kind: &PlayKindUnitedPass3) -> anyhow::Result<Vec<(u64, BagMsg)>> {
         match self.reader.as_mut() {
-            Some(mut reader) => {
+            Some(reader) => {
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
                 match kind {
                     PlayKindUnitedPass3::SensorCount {
@@ -662,7 +646,7 @@ impl Bagfile {
                         trigger: _,
                         play_mode: _,
                     } => collect_until(
-                        &mut reader,
+                        reader,
                         &mut self.file.as_mut().unwrap(),
                         &mut self.read_buffer,
                         &mut self.last_iter_time,
@@ -680,7 +664,7 @@ impl Bagfile {
                         trigger: _,
                         play_mode: _,
                     } => collect_until(
-                        &mut reader,
+                        reader,
                         &mut self.file.as_mut().unwrap(),
                         &mut self.read_buffer,
                         &mut self.last_iter_time,

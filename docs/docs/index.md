@@ -20,15 +20,34 @@ When developing, we want to solve a small problem that plays nicely with the lar
 
 All the provided features are meant to be used at development time to give you full control over the incoming data. It gives you transparency for complex systems where thousands of small sensor data packets are processed each second. With Minot, you regain control and explainability over what's happening when developing and integrating your Robot.
 
+## A short taste
+
+The following example gives you a general idea of what Minot can do.
+
+![Debugging a LIO](./assets/lio_example.jpg){ width="1000" }
+/// caption
+!!! note
+        
+    This example showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and believe will benefit others.
+///
+
+You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialization, only the necessary frames are played from a Bagfile to the node. 
+
+We synchronise the Bagfile with our node using a unique approach: an empty variable in the LIO acts as a trigger for publishing a new batch of messages. This triggers the registration part in the LIO, which then triggers the variable again, creating an endless loop. Thanks to Minot's locking feature, the process doesn't need to run until the end of the Bagfile; we can press comma (`,`) on the keyboard to advance to the next registration, or stop it entirely to compare and visualize the state using debuggers, visualizers, or [logging to the TUI](./tui.md#variable-sharing-log-and-compare).
+
+*Notably, everything is running natively on a Macbook with no containers or ROS installation.*
+
+
+
 **How?**
 
-Minot is a collection of binaries and libraries. Some of them usable in any existing ROS1 or ROS2 node, others completely separate from any system. This allows cross-ROS communication using its own networking layer without adding dependencies. With minot you can write, test and debug ROS perception nodes without needing ROS on your system.
+Minot is a collection of binaries and libraries. They can be used in your existing ROS1 or ROS2 nodes or completely separate from any system. This allows cross-ROS communication using its own networking layer without adding dependencies. With Minot you can also write, test and debug ROS perception nodes without needing ROS on your system (currently Rust-only). This is especially useful for testing, where determinism is essential. When you are done, just comment out a few lines or change a compile flag and you are ready to run your node in ROS.
 
-This is enabled by 3 features, we call them *primitives*. They can be used standalone but when combined, they enable superpowers.
+There are 3 features. They can be used standalone but when combined, they enable superpowers.
 
 ## Bagfile Querying
 
-With ROS you can record and play everything published to the ROS network. This enables reproducability for nodes and greatly improves the safety of developing real robots. Bagfiles are great! But the ROS tooling for playing the Bagfile is limited. It's still enough for most use cases but there are times where you need complete control over the data that is published to your subscribers. Some kind of query language for fine grained filtering and cursor control inside your bagfile for fast iterations. This is Bagfile Querying in Minot.
+With ROS you can record and play everything published to the ROS network. This enables reproducability for nodes and greatly improves the safety of developing real robots. Bagfiles are great! But the ROS tooling for playing the Bagfile is limited. It's still enough for most use cases but there are times where you need complete control over the data that is published to your subscribers. Minot packages a (kind of) query language for fine grained filtering and cursor control inside your Bagfile for fast iterations. This is Bagfile Querying in Minot.
 
 It introduces a small, embedded language and functions for maximal control over your node while keeping flexibility. For more information, visit the [feature page](bagquery.md).
 
@@ -60,7 +79,7 @@ source /opt/ros/$ROS_DISTRO/setup.bash
 
 # Get Minot with ROS2 publisher
 cargo install \
-  --git ssh://git@github.com/uos/minot.git minot \
+  --git https://github.com/uos/minot minot \
   --locked \
   --features embed-ros2-c
 
@@ -130,11 +149,11 @@ For these cases, the native publisher and subscriber Rust library *ratpub* can h
 
 ~~~bash title="Quickstart"
 # Clone the example nodes
-git clone ssh://git@github.com/stelzo/ratpub-demo.git && cd ratpub-demo
+git clone https://github.com/stelzo/ratpub-demo && cd ratpub-demo
 
 # Install the Coordinator
 cargo install \
-  --git ssh://git@github.com/uos/minot.git minot \
+  --git https://github.com/uos/minot minot \
   --locked
 
 # Run it
@@ -156,21 +175,3 @@ Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r
 
 Find out how this nodes works and how to write them [here](./pubsub.md).
 
-## Putting it together
-
-While useful individually, these features combine to form a powerful toolbelt for understanding complex stateful systems.
-
-The following example gives you a general idea of what Minot can do.
-
-![Debugging a LIO](./assets/lio_example.jpg){ width="1000" }
-/// caption
-!!! note
-        
-    This example showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and believe will benefit others.
-///
-
-You are looking at a Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialization, only the necessary frames are played from a Bagfile to the node. 
-
-Because the LIO node currently has a bug, we synchronise the Bagfile with our node using a unique approach: an empty variable in the LIO acts as a trigger for publishing a new batch of messages. This triggers registration, which then triggers the variable again, creating an endless loop. Thanks to Minot's locking feature, the process doesn't need to run to completion; we can press comma (`,`) on the keyboard to advance to the next registration, or stop it entirely to compare and visualize the state using debuggers, visualizers, or [logging to Minot](./tui.md#variable-sharing-log-and-compare).
-
-Notably, everything is running natively on a Macbook with no containers or ROS installation.

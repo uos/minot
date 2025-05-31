@@ -2,7 +2,7 @@ use anyhow::anyhow;
 pub use sea;
 #[cfg(feature = "ratpub")]
 pub mod ratpub;
-#[cfg(feature = "ros1")]
+#[cfg(feature = "ros1-native")]
 pub mod ros1;
 #[cfg(feature = "ros2-native")]
 pub mod ros2;

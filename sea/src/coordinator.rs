@@ -148,7 +148,7 @@ impl CoordinatorImpl {
             rlc::ActionPlan::Sail => crate::Action::Sail,
             rlc::ActionPlan::Shoot { target, id } => {
                 let mut targets = Vec::with_capacity(target.len());
-                for client_name in target.into_iter() {
+                for client_name in target.iter() {
                     let rat = self.rat_qs.read().await;
                     let client_info = rat
                         .get(client_name)

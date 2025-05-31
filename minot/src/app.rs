@@ -2,7 +2,7 @@ use core::panic;
 use std::{
     collections::HashMap,
     fmt::Display,
-    i8, io,
+    io,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
@@ -49,9 +49,9 @@ pub enum LockedState {
 
 impl Display for LockedState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            &LockedState::Locked => f.write_str("🔒"),
-            &LockedState::Unlocked => f.write_str("🔓"),
+        match *self {
+            LockedState::Locked => f.write_str("🔒"),
+            LockedState::Unlocked => f.write_str("🔓"),
         }
     }
 }
@@ -172,7 +172,7 @@ impl Tolerance {
 
         // trim firsts when moving to right
         let ndig = if self.value.ends_with(".") && ndig > 0 && self.value.len() > 2 {
-            let diff = (ndig as i8 - self.pot_cursor as i8).abs() as usize;
+            let diff = (ndig as i8 - self.pot_cursor as i8).unsigned_abs() as usize;
             self.value = self.value[diff..].to_owned();
             0
         } else {
@@ -267,10 +267,10 @@ impl History {
         let idx = buff
             .iter()
             .position(|hentry| matches!(hentry.state, MatSelectState::Focused))?;
-        return Some(MatHistIdx {
+        Some(MatHistIdx {
             history_key: key.clone(),
             buffer_idx: idx,
-        });
+        })
     }
 
     pub fn key_of_diff_by_key(&self, key: &HistoryKey) -> Option<MatHistIdx> {
@@ -279,10 +279,10 @@ impl History {
         let idx = buff
             .iter()
             .position(|hentry| matches!(hentry.state, MatSelectState::Diff))?;
-        return Some(MatHistIdx {
+        Some(MatHistIdx {
             history_key: key.clone(),
             buffer_idx: idx,
-        });
+        })
     }
 
     pub fn key_of_ref(&self) -> Option<MatHistIdx> {
@@ -302,7 +302,7 @@ impl History {
             .find(|(k, _)| *k == key.history_key)
             .map(|(_, v)| {
                 let buf = v.lock().unwrap();
-                buf.iter().nth(key.buffer_idx).cloned()
+                buf.get(key.buffer_idx).cloned()
             })??;
         Some((entry.mat, entry.client))
     }
@@ -324,11 +324,10 @@ impl History {
                     .call_id
             };
 
-            let key = HistoryKey {
+            HistoryKey {
                 variable: variable.clone(),
                 call_id,
-            };
-            key
+            }
         } else {
             let changed = self.history.is_empty();
             let call_id = if changed {
@@ -337,11 +336,10 @@ impl History {
                 unreachable!("no var but history wasn't empty");
             };
 
-            let key = HistoryKey {
+            HistoryKey {
                 variable: variable.clone(),
                 call_id,
-            };
-            key
+            }
         };
 
         let mut is_new = false;
@@ -411,8 +409,7 @@ impl History {
             buff.lock()
                 .unwrap()
                 .iter()
-                .find(|el| matches!(el.state, MatSelectState::Focused))
-                .is_some()
+                .any(|el| matches!(el.state, MatSelectState::Focused))
         } else {
             false
         }
@@ -431,8 +428,7 @@ impl History {
             buff.lock()
                 .unwrap()
                 .iter()
-                .find(|el| matches!(el.state, MatSelectState::Diff))
-                .is_some()
+                .any(|el| matches!(el.state, MatSelectState::Diff))
         } else {
             false
         }
@@ -559,7 +555,7 @@ impl History {
                             next_ref.state = MatSelectState::Focused;
                         }
 
-                        if let Some(next_diff) = next_buff.iter_mut().nth(2) {
+                        if let Some(next_diff) = next_buff.get_mut(2) {
                             next_diff.state = MatSelectState::Diff;
                         }
                     }
@@ -658,10 +654,10 @@ pub struct Coordinator {
 
 impl Default for Coordinator {
     fn default() -> Self {
-        return Self {
+        Self {
             state: "".to_owned(),
             locked: false,
-        };
+        }
     }
 }
 
@@ -689,9 +685,9 @@ pub enum WindCompile {
     Done,
 }
 
-pub const WIND_POPUP_TITLE_NOERR: &'static str = "Wind Cursor to Line";
-pub const POPUP_TITLE_ERR: &'static str = "Could not parse!";
-pub const COMPARE_POPUP_TITLE_NOERR: &'static str = "Compare Cursor to row[:col]";
+pub const WIND_POPUP_TITLE_NOERR: &str = "Wind Cursor to Line";
+pub const POPUP_TITLE_ERR: &str = "Could not parse!";
+pub const COMPARE_POPUP_TITLE_NOERR: &str = "Compare Cursor to row[:col]";
 
 #[derive(Debug, Default)]
 pub enum WindMode {
@@ -760,9 +756,7 @@ impl Display for WindCursor {
                     format!("{}-{}", line_start, line_end)
                 }
             }
-            _ => {
-                format!("*")
-            }
+            _ => "*".to_string(),
         };
 
         let queue_len = self.wind_work_queue;
@@ -793,7 +787,7 @@ impl Display for WindCursor {
 impl WindCursor {
     fn selected_lines(&self) -> Vec<u32> {
         match (self.line_start, self.line_end) {
-            (Some(line_start), Some(line_end)) => (line_start..line_end + 1).map(|i| i).collect(),
+            (Some(line_start), Some(line_end)) => (line_start..line_end + 1).collect(),
             _ => vec![],
         }
     }
@@ -891,7 +885,7 @@ impl From<DiffMatrix> for Matrix {
     }
 }
 
-const ROWS_COLS_CELL: &'static str = "↓ →";
+const ROWS_COLS_CELL: &str = "↓ →";
 const ROWS_COLS_CELL_LEN: u16 = 3;
 
 impl DiffMatrix {
@@ -918,19 +912,15 @@ impl DiffMatrix {
                         if let Some(tolerance) = tolerance {
                             if (l - r).abs() <= tolerance {
                                 CellDiff::WithinTolerance
+                            } else if l < r {
+                                CellDiff::Higher(r - l - tolerance)
                             } else {
-                                if l < r {
-                                    CellDiff::Higher(r - l - tolerance)
-                                } else {
-                                    CellDiff::Lower(l - r - tolerance)
-                                }
+                                CellDiff::Lower(l - r - tolerance)
                             }
+                        } else if l < r {
+                            CellDiff::Higher(r - l)
                         } else {
-                            if l < r {
-                                CellDiff::Higher(r - l)
-                            } else {
-                                CellDiff::Lower(l - r)
-                            }
+                            CellDiff::Lower(l - r)
                         }
                     }
                     (_, _) => CellDiff::OutOfBounds,
@@ -1035,6 +1025,12 @@ pub struct Matrix {
     pub curr_offset_rows: usize,
     pub max_rows: usize,
     pub max_cols: usize,
+}
+
+impl Default for Matrix {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Matrix {
@@ -1273,7 +1269,7 @@ impl ClientCompare {
                 .left
                 .as_ref()
                 .expect("Wants to update diff but no mat ref present!");
-            let right = DiffMatrix::new(&mat_ref, tolerance, mat.max_cols, mat.max_rows, mat);
+            let right = DiffMatrix::new(mat_ref, tolerance, mat.max_cols, mat.max_rows, mat);
             self.right.replace((idx, right));
         } else {
             self.right.take();
@@ -1288,13 +1284,11 @@ impl ClientCompare {
                         if i + r.curr_offset_rows == r.nrows - 1 {
                             r.curr_offset_rows = 0;
                             0
+                        } else if i == r.max_rows - 1 {
+                            r.curr_offset_rows += 1;
+                            i
                         } else {
-                            if i == r.max_rows - 1 {
-                                r.curr_offset_rows += 1;
-                                i
-                            } else {
-                                i + 1
-                            }
+                            i + 1
                         }
                     }
                     None => 0,
@@ -1316,13 +1310,11 @@ impl ClientCompare {
                         if i + l.curr_offset_rows == l.nrows - 1 {
                             l.curr_offset_rows = 0;
                             0
+                        } else if i == l.max_rows - 1 {
+                            l.curr_offset_rows += 1;
+                            i
                         } else {
-                            if i == l.max_rows - 1 {
-                                l.curr_offset_rows += 1;
-                                i
-                            } else {
-                                i + 1
-                            }
+                            i + 1
                         }
                     }
                     None => 0,
@@ -1348,13 +1340,11 @@ impl ClientCompare {
                                     (r.nrows as i32 - r.max_rows as i32).max(0) as usize;
                             }
                             (r.max_rows.min(r.nrows) as i32 - 1).max(0) as usize
+                        } else if i == 0 {
+                            r.curr_offset_rows -= 1;
+                            i
                         } else {
-                            if i == 0 {
-                                r.curr_offset_rows -= 1;
-                                i
-                            } else {
-                                i - 1
-                            }
+                            i - 1
                         }
                     }
                     None => 0,
@@ -1377,13 +1367,11 @@ impl ClientCompare {
                             l.curr_offset_rows =
                                 (l.nrows as i32 - l.max_rows as i32).max(0) as usize;
                             (l.max_rows.min(l.nrows) as i32 - 1).max(0) as usize
+                        } else if i == 0 {
+                            l.curr_offset_rows -= 1;
+                            i
                         } else {
-                            if i == 0 {
-                                l.curr_offset_rows -= 1;
-                                i
-                            } else {
-                                i - 1
-                            }
+                            i - 1
                         }
                     }
                     None => 0,
@@ -1463,13 +1451,11 @@ impl ClientCompare {
                         if i + r.curr_offset_cols == r.ncols {
                             r.curr_offset_cols = 0;
                             1
+                        } else if i == r.max_cols {
+                            r.curr_offset_cols += 1;
+                            i
                         } else {
-                            if i == r.max_cols {
-                                r.curr_offset_cols += 1;
-                                i
-                            } else {
-                                i + 1
-                            }
+                            i + 1
                         }
                     }
                     None => 1,
@@ -1491,13 +1477,11 @@ impl ClientCompare {
                         if i + l.curr_offset_cols == l.ncols {
                             l.curr_offset_cols = 0;
                             1
+                        } else if i == l.max_cols {
+                            l.curr_offset_cols += 1;
+                            i
                         } else {
-                            if i == l.max_cols {
-                                l.curr_offset_cols += 1;
-                                i
-                            } else {
-                                i + 1
-                            }
+                            i + 1
                         }
                     }
                     None => 1,
@@ -1522,13 +1506,11 @@ impl ClientCompare {
                                 r.curr_offset_cols = r.ncols - r.max_cols;
                             }
                             r.max_cols.min(r.ncols)
+                        } else if i == 1 {
+                            r.curr_offset_cols -= 1;
+                            i
                         } else {
-                            if i == 1 {
-                                r.curr_offset_cols -= 1;
-                                i
-                            } else {
-                                i - 1
-                            }
+                            i - 1
                         }
                     }
                     None => 1,
@@ -1552,13 +1534,11 @@ impl ClientCompare {
                                 l.curr_offset_cols = l.ncols - l.max_cols;
                             }
                             l.max_cols.min(l.ncols)
+                        } else if i == 1 {
+                            l.curr_offset_cols -= 1;
+                            i
                         } else {
-                            if i == 1 {
-                                l.curr_offset_cols -= 1;
-                                i
-                            } else {
-                                i - 1
-                            }
+                            i - 1
                         }
                     }
                     None => 1,
@@ -1582,8 +1562,8 @@ impl Default for ClientCompare {
             right_state: TableState::default()
                 .with_selected(0)
                 .with_selected_column(1),
-            horizontal_scroll_state: ScrollbarState::new(1 * ITEM_HEIGHT),
-            vertical_scroll_state: ScrollbarState::new(1 * ITEM_HEIGHT),
+            horizontal_scroll_state: ScrollbarState::new(ITEM_HEIGHT),
+            vertical_scroll_state: ScrollbarState::new(ITEM_HEIGHT),
             left: None,
             right: None,
             show_line_input_popup: false,
@@ -1793,7 +1773,7 @@ impl App {
                                                     play_mode: _,
                                                 } => PlayKindUnitedPass3::SensorCount {
                                                     sensors: sensors.clone(),
-                                                    count: count.clone(),
+                                                    count: *count,
                                                     trigger: None,
                                                     play_mode: PlayMode::Fix,
                                                 },
@@ -1806,7 +1786,7 @@ impl App {
                                                 } => PlayKindUnitedPass3::UntilSensorCount {
                                                     sending: sending.clone(),
                                                     until_sensors: until_sensors.clone(),
-                                                    until_count: until_count.clone(),
+                                                    until_count: *until_count,
                                                     trigger: None,
                                                     play_mode: PlayMode::Fix,
                                                 },
@@ -2095,7 +2075,11 @@ impl App {
     }
 
     pub fn render_history(&self) -> String {
-        format!("{}", self.history.read().unwrap().render_var_history())
+        self.history
+            .read()
+            .unwrap()
+            .render_var_history()
+            .to_string()
     }
 
     pub fn render_tolerance(&self) -> String {
@@ -2158,7 +2142,7 @@ impl App {
         self.tolerance.change_tolerance_at_current_cursor(direction);
         if let Some((matidx, old_mat)) = self.compare.right.as_ref() {
             let curr_history = self.history.read().unwrap();
-            if let Some((mut mat, _)) = curr_history.mat_with_key(&matidx) {
+            if let Some((mut mat, _)) = curr_history.mat_with_key(matidx) {
                 mat.max_rows = old_mat.max_rows;
                 mat.max_cols = old_mat.max_cols;
                 self.compare.update_diff(
@@ -2316,7 +2300,7 @@ impl App {
         let state = state.map(|pkus| {
             let wf = pkus
                 .into_iter()
-                .map(|pku| WindFunction::SendFrames(pku))
+                .map(WindFunction::SendFrames)
                 .collect::<Vec<_>>();
             Evaluated {
                 rules: Rules::new(),
@@ -2413,7 +2397,6 @@ impl App {
                     WindSendState::Acked | WindSendState::Sent => {
                         wind_queue.send(eval).unwrap();
                         wind_cursor.wind_work_queue += 1;
-                        return;
                     }
                     WindSendState::NotRun => {
                         wind_queue.send(eval).unwrap();
