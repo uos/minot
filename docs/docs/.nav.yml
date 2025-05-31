@@ -1,0 +1,11 @@
+nav:
+  - Introduction: index.md
+  - Installation: installation.md
+  - Features:
+    - Bagfile Query: bagquery.md
+    - Variable Sharing: varshare.md
+    - Native Pub/Sub: pubsub.md
+  - UI:
+    - Minot TUI: tui.md
+    - Keybindings: keybindings.md
+  - Lore: lore.md

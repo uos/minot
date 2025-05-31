@@ -1,115 +1,28 @@
-# minot
+# Minot
 
-A toolchain for building and testing distributed robot systems with ROS1 and ROS2.
+Primitives for developing and validating stateful robot software.
 
-## Use cases
-* Debugging LIO/SLAM systems
-* Synchronous Testing of Nodes
-* ROS1 -> ROS2 migrations
-* Language migrations
-* Method evaluation (functional and performance)
+Visit the [Documentation](https://uos.github.io/minot) to find out more.
+
+## Use Cases
+
+* Debugging stateful ROS nodes
 * Fine-grained Bagfile publishing
+* Synchronous, reproducable testing
+* ROS1 -> ROS2 or language migrations
+* Functional method evaluations
 
-## Syncing with C
+### License
 
-```bash
-cargo build
-cd rat/examples
-gcc rat2.c -o rat2 -L../../target/debug -lrat
-
-RUST_LOG=debug ./rat2
-```
-
-## Minot TUI Keybindings
-
-### Basics
-
-**Quit** = q *or* <kbd>Esc</kbd> *or* <kbd>Ctrl</kbd>+c
-
-**Toggle Info Window** = ?
-
-### Wind Cursor
-
-**Toggle Mode** = w
-
-**Toggle Manual Enter** (in wind mode) = g
-
-**Apply Current Input in Popup** = <kbd>Enter</kbd>
+<sup>
+Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
+2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
+</sup>
 
 <br>
 
-**Move Cursor** (in wind mode)
-- **up** = k *or* <kbd>↑</kbd>
-- **down** = j *or* <kbd>↓</kbd>
-
-<br>
-
-**Select Entire File** = *
-
-**Toggle Select Mode** (in wind mode) = v
-
-**Compile and Run Wind Selection** (in wind mode) = <kbd>Space</kbd>
-
-### Rules
-
-**Clear** = <kbd>Space</kbd> (in compare mode)
-
-Adding new ones happens automatically when firing the .rl file if it contains some.
-
-### Matrix Compare Window
-
-**Move Cursor** (in compare mode)
-- **left** = h *or* <kbd>←</kbd>
-- **up** = k *or* <kbd>↑</kbd>
-- **down** = j *or* <kbd>↓</kbd>
-- **right** = l *or* <kbd>→</kbd> 
-
-<br>
-
-
-**Toggle Cursor Popup** = g (in compare mode)
-
-**Apply Current Input in Popup** = <kbd>Enter</kbd>
-
-**Scroll History**
-- **older** = <kbd>Shift</kbd>+<kbd>Tab</kbd>
-- **newer** = <kbd>Tab</kbd>
-
-**Swap Compare Buffers** = <kbd>Shift</kbd>+f
-
-**Move Through Rats at Current Var** = <kbd>PageUp</kbd> / <kbd>PageDown</kbd>
-
-<br>
-
-
-**Unlock Next Var** = <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+l
-
-**Lock Next Var** = <kbd>Ctrl</kbd>+l
-
-**Unlock Until Next Var** = <kbd>Ctrl</kbd>+n
-
-#### Difference Tolerance
-
-**Tolerance at Current Cursor**
-- **increase** = <kbd>Shift</kbd>+t
-- **decrease** = t
-<br>
-
-
-**Move Tolerance Cursor**
-- **left** = p
-- **right** = <kbd>Shift</kbd>+p
-<br>
-
-
-
-**Left Window Column Width**
-- **increase** = <kbd>Ctrl</kbd>+q
-- **decrease** = <kbd>Ctrl</kbd>+a
-<br>
-
-
-**Right Window Column Width**
-- **increase** = <kbd>Ctrl</kbd>+w
-- **decrease** = <kbd>Ctrl</kbd>+s
-
+<sub>
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+</sub>

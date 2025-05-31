@@ -8,8 +8,13 @@ repo_url: https://github.com/uos/minot
 plugins:
   - search
   - offline
+  - awesome-nav
+  - glightbox
 theme:
   name: material
+  logo: assets/minot_92.png
+  favicon: assets/favicon.ico
+    
   palette: 
   
   # Palette toggle for automatic mode
@@ -35,7 +40,11 @@ theme:
       # accent: custom
   features:
     - navigation.footer
+    - navigation.expand
     - content.code.copy
+    - navigation.tracking
+    - navigation.sections
+    - toc.integrate
 
 markdown_extensions:
   - attr_list
@@ -54,7 +63,9 @@ markdown_extensions:
       combine_header_slug: true
   - admonition
   - pymdownx.details
-
+  - abbr
+  - md_in_html
+  - pymdownx.blocks.caption
 
 extra:
   social:

@@ -1,6 +1,9 @@
-name: ci 
+name: Docs
+
 on:
   push:
+    paths:
+      - docs/**
     branches:
       - master 
       - main

@@ -9,7 +9,7 @@ The only requirement is to have a recent version of the [Rust Toolchain](https:/
 
 To build the Minot TUI, there are some feature flags for embedding common network participants for convenience. A detailed list of supported flags can be found in the [Minot features definition](https://github.com/uos/minot/blob/main/minot/Cargo.toml#L45).
 
-With default settings, Minot builds with an integrated coordinator. When running the following command with no changes, you will get a `minot` binary with integrated Coordinator and a `minot-coord` binary, that is *just* a Coordinator. The standalone Coordinator is enough for sharing variables with the rat library TODOLINK.
+With default settings, Minot builds with an integrated coordinator. When running the following command with no changes, you will get a `minot` binary with integrated Coordinator and a `minot-coord` binary, that is *just* a Coordinator. The standalone Coordinator is enough for sharing variables [with the rat library](./varshare.md#library).
 
 
 ??? "Publishing custom and any-type messages"
@@ -20,8 +20,6 @@ With default settings, Minot builds with an integrated coordinator. When running
 **Here are some common flavours of the Minot TUI to get you started quickly.**
 
 This version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a bagfile.
-
-!!! TODO https
 
 ~~~bash title="With ROS2 publisher (with any-type, needs sourced ROS2)"
 cargo install \
@@ -58,10 +56,9 @@ cargo install \
 ## Standalone Coordinator
 
 The Minot Coordinator can work as a standalone static binary. To make it easy to start, there is a binary distribution for common operating system and architectures on GitHub.
-TODO cargo release
 
 
-## Standalone Wind Turbines (bagfile publishing nodes)
+## Standalone Wind Turbines (Bagfile Publishers)
 
 You can compile the embedded publishers standalone and distribute them in your network. For example: you could run the TUI on a Mac, connected to the Robot over WIFI or LAN, which runs ROS1 or ROS2 and the wind nodes.
 
@@ -91,9 +88,9 @@ The following binaries are available for publishing bagfile messages when specif
 
 Only the C version requires a ROS2 installation at compile time.
 
-## Rats (sharing variables)
+## Rats (Variable Sharing)
 
-Nodes in the Minot system are called Rats (TODO Link to lore). The functionality is shipped as a Rust and C library. You can get the precompiled shared or static library including the header file here.
+Nodes in the Minot system are called Rats ([here is why](./lore.md)). The functionality is shipped as a Rust and C library. You can get the precompiled shared or static library including the header file here.
 
 You can also build the library from source. It generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
 
@@ -122,11 +119,22 @@ And link with `-lrat`.
 
 For using the Rust library, add this to your `Cargo.toml`.
 
-<!-- !!! TODO to crates iwann -->
-
 ~~~toml title="Cargo.toml"
 rat = { version = "0.1.0-rc.1", git = "ssh://git@github.com/uos/minot.git" }
 ~~~
+
+## Ratpub (Native Publish/Subscribe)
+
+Ratpub is only available for Rust. It uses Tokio for async I/O.
+For using the library in your project, add this line to your `Cargo.toml`.
+
+~~~toml title="Cargo.toml"
+ratpub = { version = "0.1.0-rc.1", git = "ssh://git@github.com/uos/minot.git" }
+tokio = { version = "1", features = ["full"] }
+~~~
+
+Learn more on how to use it in your Code by visiting the [feature page](./pubsub.md).
+
 
 ## Uninstall
 
