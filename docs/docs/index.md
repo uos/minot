@@ -20,7 +20,7 @@ When developing, we want to solve a small problem that plays nicely with the lar
 
 All the provided features are meant to be used at development time to give you full control over the incoming data. It gives you transparency for complex systems where thousands of small sensor data packets are processed each second. With Minot, you regain control and explainability over what's happening when developing and integrating your Robot.
 
-## A short taste
+## First Look
 
 The following example gives you a general idea of what Minot can do.
 
