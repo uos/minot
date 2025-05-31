@@ -272,7 +272,7 @@ jobs:
             *.tar.gz
             *.sha256
 
-  create-release:
-    runs-on: ubuntu-latest
-    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu]
+  # create-release:
+    # runs-on: ubuntu-latest
+    # needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu]
 
