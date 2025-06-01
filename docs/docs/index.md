@@ -24,8 +24,9 @@ All the provided features are meant to be used at development time to give you f
 
 The following example gives you a general idea of what Minot can do.
 
-![Debugging a LIO](./assets/lio_example.jpg){ width="840" loading="lazy" }
+![Debugging a LIO](./assets/lio_example.jpg){ width="1000" loading="lazy" }
 /// caption
+Click the image to explore it in more detail.
 !!! note
         
     This example showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and believe will benefit others.
