@@ -280,7 +280,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
           sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
           sudo locale-gen en_US en_US.UTF-8
           sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
@@ -322,6 +322,56 @@ jobs:
             *.tar.gz
             *.sha256
 
+  jazzy-linux-aarch64-gnu:
+    runs-on: ubuntu-24.04-arm
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang
+          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
+          sudo locale-gen en_US en_US.UTF-8
+          sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+          export LANG=en_US.UTF-8
+          sudo apt-get install software-properties-common --assume-yes
+          # ROS2 Jazzy
+          sudo add-apt-repository universe -y
+          sudo apt-get update --assume-yes
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+          
+      - name: Build
+        env:
+          RUST_TARGET: aarch64-unknown-linux-gnu
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          rustup target add $RUST_TARGET
+          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c
+          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c
+
+      - name: "Archive binary"
+        run: |
+          TARGET=aarch64-unknown-linux-gnu
+          ARCHIVE_NAME=minot-jazzy-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros2-c $ARCHIVE_NAME/wind-ros2-c
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-jazzy-aarch64-unknown-linux-gnu
+          path: |
+            *.tar.gz
+            *.sha256
+
   humble-linux-x86_64-gnu:
     runs-on: ubuntu-22.04
     needs: [rust-stable-test]
@@ -330,7 +380,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+          sudo apt-get install -y curl git unzip clang
           sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
           sudo locale-gen en_US en_US.UTF-8
           sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
@@ -349,8 +399,8 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c
-          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c
+          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c,humble
+          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c,humble
 
       - name: "Archive binary"
         run: |
@@ -372,9 +422,59 @@ jobs:
             *.tar.gz
             *.sha256
 
+  humble-linux-aarch64-gnu:
+    runs-on: ubuntu-22.04-arm
+    needs: [rust-stable-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang
+          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
+          sudo locale-gen en_US en_US.UTF-8
+          sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+          export LANG=en_US.UTF-8
+          sudo apt-get install software-properties-common --assume-yes
+          # ROS2 Humble
+          sudo add-apt-repository universe -y
+          sudo apt-get update --assume-yes
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+          
+      - name: Build
+        env:
+          RUST_TARGET: aarch64-unknown-linux-gnu
+        run: |
+          source /opt/ros/humble/setup.bash
+          rustup target add $RUST_TARGET
+          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c,humble
+          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c,humble
+
+      - name: "Archive binary"
+        run: |
+          TARGET=aarch64-unknown-linux-gnu
+          ARCHIVE_NAME=minot-humble-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/wind-ros2-c $ARCHIVE_NAME/wind-ros2-c
+          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-humble-aarch64-unknown-linux-gnu
+          path: |
+            *.tar.gz
+            *.sha256
+
   create-release:
     runs-on: ubuntu-latest
-    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu]
+    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4

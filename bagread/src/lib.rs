@@ -368,9 +368,7 @@ where
                 if let Some((until_sensors, pc)) = &until_sensor {
                     for us in *until_sensors {
                         let pass = match &us.id {
-                            SensorIdentification::Topic(topic) => {
-                                topic.as_str() == &channel.topic
-                            }
+                            SensorIdentification::Topic(topic) => topic.as_str() == &channel.topic,
                             SensorIdentification::Type(t) => t.is(channel.topic.as_str()),
                             SensorIdentification::TopicAndType { topic, msg_type: _ } => {
                                 topic.as_str() == &channel.topic
@@ -465,7 +463,10 @@ where
                         },
                         SensorType::Any => SensorTypeMapped::Any(data.to_vec()),
                     };
-                    let qos = topic_meta.offered_qos_profiles.last().map(|last| Qos::Custom(last.clone()));
+                    let qos = topic_meta
+                        .offered_qos_profiles
+                        .last()
+                        .map(|last| Qos::Custom(last.clone()));
                     let enc = BagMsg {
                         topic: topic_meta.name.clone(),
                         msg_type: topic_meta.topic_type.clone(),
@@ -476,11 +477,13 @@ where
                 }
                 if len_before != msgs.len() {
                     rel_since_begin += 1;
-                    if let Some(pc) = until { if let PlayCount::Amount(count) = pc {
-                        if rel_since_begin >= *count {
-                            break;
+                    if let Some(pc) = until {
+                        if let PlayCount::Amount(count) = pc {
+                            if rel_since_begin >= *count {
+                                break;
+                            }
                         }
-                    } }
+                    }
                 }
             }
         }
@@ -565,11 +568,9 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
                     RmwQosReliabilityPolicy::Unknown => {
                         return Err(anyhow!("Unknown reliability"));
                     }
+                    #[cfg(not(feature = "humble"))]
                     RmwQosReliabilityPolicy::BestAvailable => {
-                        // TODO maybe warn here, qos not found
-                        Reliability::Reliable {
-                            max_blocking_time: Duration::INFINITE,
-                        }
+                        return Err(anyhow!("Unsupported QoS: Reliability::BestAvailable."));
                     }
                 };
 
@@ -580,7 +581,10 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
                     RmwQosDurabilityPolicy::Unknown => {
                         return Err(anyhow!("Durability set to unknown."));
                     }
-                    RmwQosDurabilityPolicy::BestAvailable => Durability::TransientLocal,
+                    #[cfg(not(feature = "humble"))]
+                    RmwQosDurabilityPolicy::BestAvailable => {
+                        return Err(anyhow!("Unsupported QoS: Durability::BestAvailable."));
+                    }
                 };
 
                 let history = match RmwQosHistoryPolicy::from_str(&q.history)? {
@@ -618,7 +622,10 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
                     RmwQosLivelinessPolicy::Unknown => {
                         return Err(anyhow!("Liveliness set to unknown."));
                     }
-                    RmwQosLivelinessPolicy::BestAvailable => todo!(),
+                    #[cfg(not(feature = "humble"))]
+                    RmwQosLivelinessPolicy::BestAvailable => {
+                        return Err(anyhow!("Unsupported QoS: Liveliness::BestAvailable."));
+                    }
                 };
                 ros2::QosPolicyBuilder::new()
                     .durability(durability)

@@ -88,6 +88,7 @@ impl TryFrom<bagread::Qos> for QosR2RMap {
                     RmwQosReliabilityPolicy::Reliable => ReliabilityPolicy::Reliable,
                     RmwQosReliabilityPolicy::BestEffort => ReliabilityPolicy::BestEffort,
                     RmwQosReliabilityPolicy::Unknown => ReliabilityPolicy::Unknown,
+                    #[cfg(not(feature = "humble"))]
                     RmwQosReliabilityPolicy::BestAvailable => ReliabilityPolicy::BestAvailable,
                 };
 
@@ -96,6 +97,7 @@ impl TryFrom<bagread::Qos> for QosR2RMap {
                     RmwQosDurabilityPolicy::TransientLocal => DurabilityPolicy::TransientLocal,
                     RmwQosDurabilityPolicy::Volatile => DurabilityPolicy::Volatile,
                     RmwQosDurabilityPolicy::Unknown => DurabilityPolicy::Unknown,
+                    #[cfg(not(feature = "humble"))]
                     RmwQosDurabilityPolicy::BestAvailable => DurabilityPolicy::BestAvailable,
                 };
 
@@ -117,6 +119,7 @@ impl TryFrom<bagread::Qos> for QosR2RMap {
                     RmwQosLivelinessPolicy::ManualByNode => LivelinessPolicy::ManualByNode,
                     RmwQosLivelinessPolicy::ManualByTopic => LivelinessPolicy::ManualByTopic,
                     RmwQosLivelinessPolicy::Unknown => LivelinessPolicy::Unknown,
+                    #[cfg(not(feature = "humble"))]
                     RmwQosLivelinessPolicy::BestAvailable => LivelinessPolicy::BestAvailable,
                 };
 

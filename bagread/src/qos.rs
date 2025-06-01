@@ -67,6 +67,7 @@ pub enum RmwQosReliabilityPolicy {
     /// Reliability policy has not yet been set
     Unknown = 3,
     /// Will match the majority of endpoints and use a reliable policy if possible
+    #[cfg(not(feature = "humble"))]
     BestAvailable = 4,
 }
 
@@ -79,6 +80,7 @@ impl FromStr for RmwQosReliabilityPolicy {
             "system_default" => Ok(RmwQosReliabilityPolicy::SystemDefault),
             "reliable" => Ok(RmwQosReliabilityPolicy::Reliable),
             "best_effort" => Ok(RmwQosReliabilityPolicy::BestEffort),
+            #[cfg(not(feature = "humble"))]
             "best_available" => Ok(RmwQosReliabilityPolicy::BestAvailable),
             "unknown" => Ok(RmwQosReliabilityPolicy::Unknown),
             _ => {
@@ -89,6 +91,7 @@ impl FromStr for RmwQosReliabilityPolicy {
                         1 => Ok(RmwQosReliabilityPolicy::Reliable),
                         2 => Ok(RmwQosReliabilityPolicy::BestEffort),
                         3 => Ok(RmwQosReliabilityPolicy::Unknown),
+                        #[cfg(not(feature = "humble"))]
                         4 => Ok(RmwQosReliabilityPolicy::BestAvailable),
                         _ => Err(anyhow!("Unknown number for Reliability kind")),
                     }
@@ -151,6 +154,7 @@ pub enum RmwQosDurabilityPolicy {
     /// Durability policy has not yet been set
     Unknown = 3,
     /// Will match the majority of endpoints and use a transient local policy if possible
+    #[cfg(not(feature = "humble"))]
     BestAvailable = 4,
 }
 
@@ -163,6 +167,7 @@ impl FromStr for RmwQosDurabilityPolicy {
             "system_default" => Ok(RmwQosDurabilityPolicy::SystemDefault),
             "transient_local" => Ok(RmwQosDurabilityPolicy::TransientLocal),
             "volatile" => Ok(RmwQosDurabilityPolicy::Volatile),
+            #[cfg(not(feature = "humble"))]
             "best_available" => Ok(RmwQosDurabilityPolicy::BestAvailable),
             "unknown" => Ok(RmwQosDurabilityPolicy::Unknown),
             _ => {
@@ -173,6 +178,7 @@ impl FromStr for RmwQosDurabilityPolicy {
                         1 => Ok(RmwQosDurabilityPolicy::TransientLocal),
                         2 => Ok(RmwQosDurabilityPolicy::Volatile),
                         3 => Ok(RmwQosDurabilityPolicy::Unknown),
+                        #[cfg(not(feature = "humble"))]
                         4 => Ok(RmwQosDurabilityPolicy::BestAvailable),
                         _ => Err(anyhow!("Unknown number for Durability kind")),
                     }
@@ -200,6 +206,7 @@ pub enum RmwQosLivelinessPolicy {
     /// Liveliness policy has not yet been set
     Unknown = 4,
     /// Will match the majority of endpoints and use a manual by topic policy if possible
+    #[cfg(not(feature = "humble"))]
     BestAvailable = 5,
 }
 
@@ -214,6 +221,7 @@ impl FromStr for RmwQosLivelinessPolicy {
             // #[allow(deprecated)] // Allow parsing into deprecated variant
             "manual_by_node" => Ok(RmwQosLivelinessPolicy::ManualByNode),
             "manual_by_topic" => Ok(RmwQosLivelinessPolicy::ManualByTopic),
+            #[cfg(not(feature = "humble"))]
             "best_available" => Ok(RmwQosLivelinessPolicy::BestAvailable),
             "unknown" => Ok(RmwQosLivelinessPolicy::Unknown),
             _ => {
@@ -225,6 +233,7 @@ impl FromStr for RmwQosLivelinessPolicy {
                         2 => Ok(RmwQosLivelinessPolicy::ManualByNode),
                         3 => Ok(RmwQosLivelinessPolicy::ManualByTopic),
                         4 => Ok(RmwQosLivelinessPolicy::Unknown),
+                        #[cfg(not(feature = "humble"))]
                         5 => Ok(RmwQosLivelinessPolicy::BestAvailable),
                         _ => Err(anyhow!("Unknown number for Liveliness kind")),
                     }
