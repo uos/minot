@@ -8,9 +8,7 @@ You'll likely want to remove Minot before releasing your software. You'll also n
 
 However, there's a more interesting story behind the names.
 
-<img style="float: right; width: 350px; margin: 30px;" src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Minot_light.gif/500px-Minot_light.gif">
-<!-- ![Minot's Ledge Lighthouse](https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Minot_light.gif/500px-Minot_light.gif){ align=right } -->
-
+![Minot's Ledge Lighthouse in a storm](https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Minot_light.gif/500px-Minot_light.gif){ width="350" loading="lazy" align=right }
 
 Minot is named after *Minot's Ledge Lighthouse* near Boston (see [Wikipedia](https://en.wikipedia.org/wiki/Minot%27s_Ledge_Light)). Early versions of the lighthouse didn't last, so a new one was built with a solid granite base. This formidable structure, standing alone at the edge of shallows, was a statement of permanence. Completed in 1860, it still stands today.
 

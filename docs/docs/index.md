@@ -24,14 +24,14 @@ All the provided features are meant to be used at development time to give you f
 
 The following example gives you a general idea of what Minot can do.
 
-![Debugging a LIO](./assets/lio_example.jpg){ width="1000" }
+![Debugging a LIO](./assets/lio_example.jpg){ width="840" loading="lazy" }
 /// caption
 !!! note
         
     This example showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and believe will benefit others.
 ///
 
-You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialization, only the necessary frames are played from a Bagfile to the node. 
+You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialisation, only the necessary frames are played from a Bagfile to the node. 
 
 We synchronise the Bagfile with our node using a unique approach: an empty variable in the LIO acts as a trigger for publishing a new batch of messages. This triggers the registration part in the LIO, which then triggers the variable again, creating an endless loop. Thanks to Minot's locking feature, the process doesn't need to run until the end of the Bagfile; we can press comma (`,`) on the keyboard to advance to the next registration, or stop it entirely to compare and visualize the state using debuggers, visualizers, or [logging to the TUI](./tui.md#variable-sharing-log-and-compare).
 

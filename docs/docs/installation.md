@@ -1,15 +1,20 @@
-!!! warning
+## Prebuilt Binaries
 
-    There are no prebuilt binaries or packages yet.
+Binaries for common system configurations are available [here](https://github.com/uos/minot/releases).
 
-    But you can easily install everything from source, it just takes a little bit longer. You'll need to have [Rust installed](https://www.rust-lang.org/tools/install).
+The `minot-$ROS_DISTRO-*` archives will only give you ROS specific binaries:
 
-Minot is the name of the TUI you usually run but also of the project with all of its modules and other binaries. They can run distributed over the network or be embedded into a single process in the TUI itself.
+- `minot` TUI + Coordinator + ROS2 Publisher (with any-type)
+- `wind-ros2-c` Standalone ROS2 Publisher (with any-type)
 
-Because of this, there is no *typical* use case for Minot so you are expected to add flags to match your needs and build from source. But fear not, building from source is easy.
+Archives not specific to a ROS distribution contain builds that can be used independently.
 
+- `minot` TUI + Coordinator
+- `minot-coord` Standalone Coordinator
+- `librat.*, rat.h` C libraries for Variable Sharing
+- `wind-ros*-native` ROS Publisher using [roslibrust](https://crates.io/crates/roslibrust) for ROS1 and [ros2-client](https://crates.io/crates/ros2-client) for ROS2
 
-The only requirement is to have a recent version of the [Rust Toolchain](https://www.rust-lang.org/tools/install) installed on your system.
+While the prebuilt binaries cover many common use cases, you may need to build Minot from source to tailor it to your specific needs. Building from source requires the [Rust toolchain](https://www.rust-lang.org/tools/install) to be installed on your system.
 
 ## Minot TUI
 
@@ -20,10 +25,10 @@ With default settings, Minot builds with an integrated coordinator. When running
 
 ??? "Publishing custom and any-type messages"
 
-    Publishing any-type messages from a bagfile (like `ros2 bag play`) needs the ROS2 C implementation to be linked to the message. When building the Rust bindings, it will link with every message in your `$PATH`. So if you use custom messages, you want to build Minot after you sourced your new message.
+    Publishing any-type messages from a Bagfile (like `ros2 bag play`) needs the ROS2 C implementation to be linked to the message. When building the Rust bindings, it will link with every message in your `$PATH`. So if you use custom messages, you want to build Minot after you sourced your new message.
 
 
-**Here are some common flavours of the Minot TUI to get you started quickly.**
+**To help you get up and running quickly, here are some popular configurations.**
 
 ~~~bash title="(Recommended) With ROS2 publisher (+ any-type, needs sourced ROS2)"
 cargo install \
@@ -34,7 +39,7 @@ cargo install \
 
 ---
 
-The next version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a bagfile:
+The next version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a Bagfile:
 
 ~~~bash title="Minimal with embedded Coordinator"
 cargo install \
@@ -42,7 +47,7 @@ cargo install \
   --locked
 ~~~
 
-Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the bagfile is ROS2, only mapped types are supported (no any-type).
+Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the input is always a ROS2 Bagfile, only mapped types can be published (no any-type).
 
 ~~~bash title="With ROS1 and ROS2 publishers"
 cargo install \
@@ -54,9 +59,6 @@ cargo install \
 ## Standalone Coordinator
 
 Installing Minot TUI as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
-
-<!-- The Minot Coordinator can work as a standalone static binary. To make it easy to start, there is a binary distribution for common operating system and architectures on GitHub. -->
-
 
 ## Standalone Wind Turbines (Bagfile Publishers)
 
