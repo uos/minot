@@ -399,7 +399,7 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c,humble
+          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c-humble
           cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c,humble
 
       - name: "Archive binary"
@@ -449,7 +449,7 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c,humble
+          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c-humble
           cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c,humble
 
       - name: "Archive binary"

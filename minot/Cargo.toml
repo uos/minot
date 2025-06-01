@@ -48,6 +48,9 @@ default = ["embed-coord"]
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
 embed-ros2-c = ["embed-ros2-c-turbine"]
 
+# Same as above but removing BestAvailable QoS to be compatible with Humble
+embed-ros2-c-humble = ["embed-ros2-c-turbine", "wind/humble"]
+
 # Use a native Rust implementation of ROS2 (ros2-client crate). Not stable for publishing the "any" type.
 embed-ros2-native = ["embed-ros2-turbine"]
 
