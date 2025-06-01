@@ -189,7 +189,7 @@ jobs:
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
         with:
-          name: artifacts-aarch64-unknown-linux-gnu
+          name: artifacts-armv7-unknown-linux-gnueabihf
           path: |
             *.tar.gz
             *.sha256
@@ -220,7 +220,7 @@ jobs:
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp target/$TARGET/release/librat.dylib $ARCHIVE_NAME/librat.dylib
           cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
@@ -259,7 +259,7 @@ jobs:
           cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
           cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
           cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
+          cp target/$TARGET/release/librat.dylib $ARCHIVE_NAME/librat.dylib
           cp rat/rat.h $ARCHIVE_NAME/rat.h
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
@@ -297,6 +297,7 @@ jobs:
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
+          source /opt/ros/jazzy/setup.bash
           rustup target add $RUST_TARGET
           cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c
           cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c
@@ -346,6 +347,7 @@ jobs:
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
+          source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
           cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c
           cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c
