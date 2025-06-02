@@ -116,7 +116,7 @@ Variable sharing is a powerful building block and it can easily be used outside 
 Build and run the libraries and run the Coordinator.
 
 ~~~bash
-git clone git@github.com:uos/minot.git && cd minot
+git clone https://github.com/uos/minot && cd minot
 cargo build --release
 
 ./target/release/minot-coord rl/varshare_demo.rl
