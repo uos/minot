@@ -29,7 +29,7 @@ The following example gives you a general idea of what Minot can do.
 Click the image to explore it in more detail.
 !!! note
         
-    This example showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and believe will benefit others.
+    This example just showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and, I believe, will benefit others.
 ///
 
 You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialisation, only the necessary frames are played from a Bagfile to the node. 
