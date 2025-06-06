@@ -112,7 +112,7 @@ jobs:
             *.tar.gz
             *.sha256
 
-  linux-x86_64-gnu-glibc-2.27:
+  linux-x86_64-gnu-glibc-2-27:
     runs-on: ubuntu-latest
     needs: [rust-stable-test]
 
@@ -147,7 +147,7 @@ jobs:
       - name: "Archive binary"
         run: |
           TARGET=x86_64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-$TARGET-glibc-old # Differentiate archive name
+          ARCHIVE_NAME=minot-$TARGET-glibc-2-27 # Differentiate archive name
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
@@ -164,7 +164,7 @@ jobs:
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
         with:
-          name: artifacts-x86_64-unknown-linux-gnu-glibc-2.27
+          name: artifacts-x86_64-unknown-linux-gnu-glibc-2-27
           path: |
             *.tar.gz
             *.sha256
@@ -532,7 +532,7 @@ jobs:
 
   create-release:
     runs-on: ubuntu-latest
-    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu, linux-x86_64-gnu-glibc-2.27]
+    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu, linux-x86_64-gnu-glibc-2-27]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
