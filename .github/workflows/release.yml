@@ -25,7 +25,7 @@ jobs:
         # run: cargo clippy --all-targets --features ros-native -- -D warnings
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+          sudo apt-get install -y curl git unzip clang
           curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
       - name: Test
         run: cargo test --verbose
@@ -121,12 +121,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v1
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
 
-      - name: Install Dependencies inside Docker container
+      - name: Install Dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
@@ -136,6 +132,11 @@ jobs:
             clang \
             gcc \
             pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
 
       - name: Build
         env:
