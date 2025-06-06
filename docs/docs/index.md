@@ -54,35 +54,67 @@ It introduces a small, embedded language and functions for maximal control over 
 
 
 ### Quickstart
-~~~ bash title="Setup"
-mkdir minot-bagfile-demo && cd minot-bagfile-demo
-source /opt/ros/$ROS_DISTRO/setup.bash
-sudo apt install rustup curl unzip
+=== "Ubuntu 24.04 + Jazzy"
 
-# Get a Bagfile
-curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
-    && unzip dlg_cut.zip \
-    && rm dlg_cut.zip
+    ~~~ bash title="Setup"
+    mkdir minot-bagfile-demo && cd minot-bagfile-demo
+    source /opt/ros/jazzy/setup.bash
+    sudo apt install rustup curl unzip
 
-# Get the query
-curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+    # Get Minot with ROS2 publisher
+    cargo install \
+      --git https://github.com/uos/minot minot \
+      --locked \
+      --features embed-ros2-c
 
-# Get the rviz demo preset
-curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+    # Get a Bagfile saved with mcap storage
+    curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
+        && unzip dlg_cut.zip \
+        && rm dlg_cut.zip
 
-# Run rviz and wait for data
-rviz2 -d demo.rviz
-~~~
+    # Get the query
+    curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+
+    # Get the rviz demo preset
+    curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+
+    # Run rviz and wait for data
+    rviz2 -d demo.rviz
+    ~~~
+
+=== "Ubuntu 22.04 + Humble"
+
+    Make sure you have [Rust installed](https://www.rust-lang.org/tools/install).
+    ~~~ bash title="Setup"
+    mkdir minot-bagfile-demo && cd minot-bagfile-demo
+    source /opt/ros/humble/setup.bash
+    sudo apt install curl unzip
+
+    # Get Minot with ROS2 publisher
+    cargo install \
+      --git https://github.com/uos/minot minot \
+      --locked \
+      --features embed-ros2-c-humble
+
+    # Get a Bagfile saved with mcap storage
+    curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
+        && unzip dlg_cut.zip \
+        && rm dlg_cut.zip
+
+    # Get the query
+    curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+
+    # Get the rviz demo preset
+    curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+
+    # Run rviz and wait for data
+    rviz2 -d demo.rviz
+    ~~~
+
 
 Open a new terminal.
-~~~ bash hl_lines="10" title="Install and Run Minot TUI"
+~~~ bash title="Run Minot TUI"
 source /opt/ros/$ROS_DISTRO/setup.bash
-
-# Get Minot with ROS2 publisher
-cargo install \
-  --git https://github.com/uos/minot minot \
-  --locked \
-  --features embed-ros2-c
 
 # Run
 minot demo.rl
