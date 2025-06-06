@@ -112,65 +112,6 @@ jobs:
             *.tar.gz
             *.sha256
 
-  linux-x86_64-gnu-glibc-2-27:
-    runs-on: ubuntu-latest
-    needs: [rust-stable-test]
-
-    container: ubuntu:18.04
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v1
-
-      - name: Install Dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            curl \
-            git \
-            unzip \
-            clang \
-            gcc \
-            pkg-config
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-
-      - name: Build
-        env:
-          RUST_TARGET: x86_64-unknown-linux-gnu
-        run: |
-          rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
-
-      - name: "Archive binary"
-        run: |
-          TARGET=x86_64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-$TARGET-glibc-2-27 # Differentiate archive name
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
-
-      - name: "Upload binary"
-        uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-x86_64-unknown-linux-gnu-glibc-2-27
-          path: |
-            *.tar.gz
-            *.sha256
-
-  
   linux-aarch64-gnu:
     runs-on: ubuntu-latest
     needs: [rust-stable-test]
@@ -533,7 +474,7 @@ jobs:
 
   create-release:
     runs-on: ubuntu-latest
-    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu, linux-x86_64-gnu-glibc-2-27]
+    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
