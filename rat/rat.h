@@ -1,6 +1,10 @@
 #ifndef RAT_H
 #define RAT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 #ifdef __arm__
@@ -22,5 +26,9 @@ int rat_bacon_f32(const char *variable_name, float *data, size_t rows, size_t co
 int rat_bacon_f64(const char *variable_name, double *data, size_t rows, size_t cols);
 int rat_bacon_i32(const char *variable_name, int *data, size_t rows, size_t cols);
 int rat_bacon_u8(const char *variable_name, ratbaconbyte *data, size_t rows, size_t cols);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
