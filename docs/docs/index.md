@@ -24,14 +24,15 @@ All the provided features are meant to be used at development time to give you f
 
 The following example gives you a general idea of what Minot can do.
 
-![Debugging a LIO](./assets/lio_example.jpg){ width="1000" }
+![Debugging a LIO](./assets/lio_example.jpg){ width="1000" loading="lazy" }
 /// caption
+Click the image to explore it in more detail.
 !!! note
         
-    This example showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and believe will benefit others.
+    This example just showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and, I believe, will benefit others.
 ///
 
-You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialization, only the necessary frames are played from a Bagfile to the node. 
+You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialisation, only the necessary frames are played from a Bagfile to the node. 
 
 We synchronise the Bagfile with our node using a unique approach: an empty variable in the LIO acts as a trigger for publishing a new batch of messages. This triggers the registration part in the LIO, which then triggers the variable again, creating an endless loop. Thanks to Minot's locking feature, the process doesn't need to run until the end of the Bagfile; we can press comma (`,`) on the keyboard to advance to the next registration, or stop it entirely to compare and visualize the state using debuggers, visualizers, or [logging to the TUI](./tui.md#variable-sharing-log-and-compare).
 
@@ -53,35 +54,67 @@ It introduces a small, embedded language and functions for maximal control over 
 
 
 ### Quickstart
-~~~ bash title="Setup"
-mkdir minot-bagfile-demo && cd minot-bagfile-demo
-source /opt/ros/$ROS_DISTRO/setup.bash
-sudo apt install rustup curl unzip
+=== "Ubuntu 24.04 + Jazzy"
 
-# Get a Bagfile
-curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
-    && unzip dlg_cut.zip \
-    && rm dlg_cut.zip
+    ~~~ bash title="Setup"
+    mkdir minot-bagfile-demo && cd minot-bagfile-demo
+    source /opt/ros/jazzy/setup.bash
+    sudo apt install rustup curl unzip
 
-# Get the query
-curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+    # Get Minot with ROS2 publisher
+    cargo install \
+      --git https://github.com/uos/minot minot \
+      --locked \
+      --features embed-ros2-c
 
-# Get the rviz demo preset
-curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+    # Get a Bagfile saved with mcap storage
+    curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
+        && unzip dlg_cut.zip \
+        && rm dlg_cut.zip
 
-# Run rviz and wait for data
-rviz2 -d demo.rviz
-~~~
+    # Get the query
+    curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+
+    # Get the rviz demo preset
+    curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+
+    # Run rviz and wait for data
+    rviz2 -d demo.rviz
+    ~~~
+
+=== "Ubuntu 22.04 + Humble"
+
+    Make sure you have [Rust installed](https://www.rust-lang.org/tools/install).
+    ~~~ bash title="Setup"
+    mkdir minot-bagfile-demo && cd minot-bagfile-demo
+    source /opt/ros/humble/setup.bash
+    sudo apt install curl unzip
+
+    # Get Minot with ROS2 publisher
+    cargo install \
+      --git https://github.com/uos/minot minot \
+      --locked \
+      --features embed-ros2-c-humble
+
+    # Get a Bagfile saved with mcap storage
+    curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
+        && unzip dlg_cut.zip \
+        && rm dlg_cut.zip
+
+    # Get the query
+    curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+
+    # Get the rviz demo preset
+    curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+
+    # Run rviz and wait for data
+    rviz2 -d demo.rviz
+    ~~~
+
 
 Open a new terminal.
-~~~ bash hl_lines="10" title="Install and Run Minot TUI"
+~~~ bash title="Run Minot TUI"
 source /opt/ros/$ROS_DISTRO/setup.bash
-
-# Get Minot with ROS2 publisher
-cargo install \
-  --git https://github.com/uos/minot minot \
-  --locked \
-  --features embed-ros2-c
 
 # Run
 minot demo.rl
@@ -115,7 +148,7 @@ Variable sharing is a powerful building block and it can easily be used outside 
 Build and run the libraries and run the Coordinator.
 
 ~~~bash
-git clone git@github.com:uos/minot.git && cd minot
+git clone https://github.com/uos/minot && cd minot
 cargo build --release
 
 ./target/release/minot-coord rl/varshare_demo.rl

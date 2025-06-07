@@ -25,7 +25,7 @@ jobs:
         # run: cargo clippy --all-targets --features ros-native -- -D warnings
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+          sudo apt-get install -y curl git unzip clang
           curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
       - name: Test
         run: cargo test --verbose
@@ -454,7 +454,7 @@ jobs:
 
       - name: "Archive binary"
         run: |
-          TARGET=aarch64-unknown-linux-gnu
+  
           ARCHIVE_NAME=minot-humble-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
@@ -482,7 +482,7 @@ jobs:
           path: artifacts
       - name: List downloaded artifacts (for verification)
         run: ls -R artifacts
-      - name: Create Release
+      - name: Create Releae
         id: create_release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')

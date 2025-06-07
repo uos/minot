@@ -9,12 +9,12 @@ The Path is optional. It defines the Ratslang file for [Bagfile Querying](bagque
 
 On startup, Minot searches for a Coordinator. If you embedded one in the binary (the default setting), it will be found immediately, and the following interface will appear.
 
-![TUI Startup](./assets/fresh_open.jpg){ width="500" }
+![TUI Startup](./assets/fresh_open.jpg){ width="500" loading=lazy }
 /// caption
 The freshly opened TUI with embedded Coordinator.
 ///
 
-??? info "Background Image"
+??? info "Background"
 
     The fonts, logos, and image in the background reflect my personal desktop setup as seen through my transparent terminal.
 
@@ -28,6 +28,9 @@ At the bottom of the UI, you'll find the *Compare* indicator, which shows the cu
 
 With Wind mode activated, you can move the Wind Cursor in the bottom right corner using Vim-like motions. Consider this a selection of lines from the file specified when launching the binary from the terminal. You can also select multiple lines simultaneously using *Select Mode*. It will change to a [W], and you can use the same motions to expand the selection. By default, it selects all lines with `*`.
 
+
+![Query a Bagfile](./assets/play_bag_w_mat.jpg){ width="500" loading=lazy align=right }
+
 At this point, it should become obvious that you'll need the Ratsfile open at the same time since you have no feedback like contents of the file. The file can also be modified, but be sure to save changes before returning to the TUI. You can then evaluate the selected lines.
 
 Ratsfile evaluation is stateful. If you select a large variable definition part, the variable state will be cached by the TUI for all following evaluations. This allows you to subsequently select only the lines needed for execution, even if they depend on previous context.
@@ -38,10 +41,7 @@ Ratsfile evaluation is stateful. If you select a large variable definition part,
 
 After evaluation, new log messages will appear (at least with _log_level = info), providing feedback on your commands.
 
-![Query a Bagfile](./assets/play_bag_w_mat.jpg){ width="500" }
-/// caption
-Logs while using the Bagfile Query feature (top) along with the Ratsfile code (bottom). The bottom right of the Minot TUI indicates that line 28 was successfully evaluated, playing `/ouster/imu` until a message was found from `/ouster/points`. The logs also show that an embedded Ratpub publisher was used to distribute the message over a network.
-///
+The screenshot shows an example for the logs while using the Bagfile Query feature (top) along with the Ratsfile code (bottom). The bottom right of the Minot TUI indicates that line 28 was successfully evaluated, playing `/ouster/imu` until a message was found from `/ouster/points`. The logs also show that an embedded Ratpub publisher was used to distribute the message over a network.
 
 ## Variable Sharing (LOG and Compare)
 
@@ -55,7 +55,7 @@ The final UI element is the lock indicator in the top left. Locking a variable c
 
 By default, variables are not locked. You can overwrite this by setting `_start_locked = true` in your Ratsfile.
 
-![Complete matrix comparison](./assets/comparing_full.jpg){ width="500" }
-/// caption
-The difference between floating matrices sent from two different Rats in the network. The tolerance is set to 0.9, and the right side shows the differences compared to the left. Red values indicate a lower value, with the absolute difference displayed inside the cell. Blue cells represent higher values than the reference, also with the absolute difference in the cell. The cursor is currently positioned on row 38, column 10.
-///
+![Complete matrix comparison](./assets/comparing_full.jpg){ width="500" loading=lazy align=left }
+Here is an example for the difference between floating matrices sent from two different Rats in the network. The tolerance is set to 0.9, and the right side shows the differences compared to the left.
+
+Red values indicate a lower value, with the absolute difference displayed inside the cell. Blue cells represent higher values than the reference, also with the absolute difference in the cell. The cursor is currently positioned on row 38, column 10.

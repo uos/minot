@@ -137,11 +137,11 @@ There are 3 functions.
 
     !!! info "VariableType Argument in `fn bacon`"
 
-        This argument is currently(!) needed for the C interop. So if you want to send a matrix to C or Mino TUI, the underlying datatype for the matrix must be specified. If you share variables with other Rusty Rats, you can set `VariableType::default()`.
+        This argument is currently needed for the C interop. So if you want to send a matrix to C or Mino TUI, the underlying datatype for the matrix must be specified. If you share variables with other Rusty Rats, you can set `VariableType::default()`.
 
 The [example section](https://github.com/uos/minot/tree/main/rat/examples) on GitHub should give you enough code to use the library in your project without any more explanations.
 
 For a general description of data, the shared datatype in C is a 2D Matrix, which is also the only supported format for the Minot TUI Variable Viewer. If you want to share more abstract data than  1D Vectors or 2D Arrays, you'll need to encode the data yourself. Either into a different typed Matrix or into raw bytes (unsigned char on non-ARM). The `rows` argument is then `0` and `cols` is the length of your buffer.
 
-On the Rust side, there is a type called `NetArray` to assure C and TUI viewer compatibility. If you don't need that compatibility, you can also transport any type with automatic serialization by deriving `Serialize`, `Deserialize` and `Archive` from the powerful [`rkyv`](https://crates.io/crates/rkyv) crate -- just like in the next feature Native Pub/Sub.
+On the Rust side, there is a type called `NetArray` to assure C and TUI viewer compatibility. If you don't need that compatibility, you can also transport any type with automatic serialization by deriving `Serialize`, `Deserialize` and `Archive` from the powerful [`rkyv`](https://crates.io/crates/rkyv) crate – just like in the next feature: [Native Pub/Sub](./pubsub.md).
 
