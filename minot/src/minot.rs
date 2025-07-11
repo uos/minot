@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match res {
                     Ok(_) => {} // will never return
                     Err(e) => {
-                        error!("Error in embedded ROS2 turbine. Reload the App. {e}")
+                        error!("Error in embedded ratpub turbine. Reload the App. {e}")
                     }
                 }
             });

@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::anyhow;
+use deadpool::managed::{Manager, RecycleError};
 use log::{debug, error, info, warn};
 use pnet::datalink::{self, NetworkInterface};
 use rkyv::{api::low::from_bytes, to_bytes, util::AlignedVec};
@@ -26,6 +27,48 @@ use crate::{
 const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
 
 #[derive(Debug)]
+pub struct TcpManager {
+    pub addr: String,
+}
+
+impl Manager for TcpManager {
+    type Type = tokio::net::TcpStream;
+    type Error = anyhow::Error;
+
+    // Return a Pinned Future instead of using async fn
+    fn create(
+        &self,
+    ) -> impl Future<Output = Result<<Self as Manager>::Type, <Self as Manager>::Error>> + Send
+    {
+        let addr = self.addr.clone();
+        Box::pin(async move {
+            let stream = tokio::net::TcpStream::connect(addr.clone())
+                .await
+                .map_err(|e| anyhow!("Failed to connect to {}: {}", addr, e));
+            stream
+        })
+    }
+
+    // Return a Pinned Future here as well
+    fn recycle(
+        &self,
+        conn: &mut Self::Type,
+        _metrics: &deadpool::managed::Metrics,
+    ) -> impl Future<Output = Result<(), RecycleError<<Self as Manager>::Error>>> + Send {
+        Box::pin(async move {
+            let mut buf = [0; 1];
+            match conn.peek(&mut buf).await {
+                Ok(0) => Err(anyhow!("Connection closed by peer").into()),
+                Ok(_) => Ok(()),
+                Err(e) => Err(RecycleError::Backend(e.into())),
+            }
+        })
+    }
+}
+
+type TcpPool = deadpool::managed::Pool<TcpManager>;
+
+#[derive(Debug)]
 pub struct Client {
     pub coordinator_receive: std::sync::Arc<
         std::sync::RwLock<
@@ -46,6 +89,7 @@ pub struct Client {
             HashMap<u32, tokio::sync::mpsc::Receiver<(Vec<u8>, VariableType, String)>>,
         >,
     >,
+    pools: std::sync::Arc<tokio::sync::Mutex<HashMap<String, TcpPool>>>,
 }
 
 impl Client {
@@ -68,6 +112,20 @@ impl Client {
             .await
             .expect("udp socket not writable");
         udp_socket
+    }
+
+    async fn get_pool(&self, addr: &String) -> TcpPool {
+        let mut pools = self.pools.lock().await;
+        if let Some(pool) = pools.get(addr) {
+            return pool.clone();
+        }
+        let manager = TcpManager { addr: addr.clone() };
+        let pool = deadpool::managed::Pool::builder(manager)
+            .max_size(8)
+            .build()
+            .unwrap();
+        pools.insert(addr.clone(), pool.clone());
+        pool
     }
 
     pub async fn init(
@@ -208,9 +266,7 @@ impl Client {
                                             packet.header.source = addr.ship; // overwrite source with our id
                                             packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
                                             if let Err(e) = coord_raw_sender.send(packet).await {
-                                                error!(
-                                                    "could not forward coordinator packet: {e}"
-                                                );
+                                                error!("could not forward coordinator packet: {e}");
                                             }
                                         }
                                         Err(_e) => {
@@ -254,6 +310,7 @@ impl Client {
             rm_rules_on_disconnect,
             updated_raw_recv,
             raw_recv_buff,
+            pools: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -538,30 +595,16 @@ impl Client {
     ) -> anyhow::Result<()> {
         loop {
             let addr = format!("{}:{}", address, port);
-            let stream = tokio::time::timeout(
-                CLIENT_TO_CLIENT_TIMEOUT,
-                tokio::net::TcpStream::connect(&addr),
-            )
-            .await;
+            let pool = self.get_pool(&addr).await;
+            let stream = pool.get().await;
 
             let padded_var_name = Sea::pad_string(variable_name);
 
             match stream {
-                Err(_) => {
-                    return Err(anyhow!(
-                        "Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}"
-                    ));
+                Err(e) => {
+                    return Err(anyhow!("Could not connect to other client: {e}"));
                 }
-                Ok(Err(e)) => match e.kind() {
-                    std::io::ErrorKind::ConnectionRefused => {
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-                    _ => {
-                        return Err(anyhow!("Could not connect to other client: {e}"));
-                    }
-                },
-                Ok(Ok(mut stream)) => {
+                Ok(mut stream) => {
                     // ask if ready to receive by sending ack and wait for ack answer
                     let init_request = crate::net::Packet {
                         header: Header::default(),

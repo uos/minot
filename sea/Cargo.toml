@@ -22,6 +22,7 @@ rkyv.workspace = true
 bincode.workspace = true
 pnet = "0.35.0"
 socket2 = "0.5.8"
+deadpool.workspace = true
 async-trait.workspace = true
 rlc.workspace = true
 bagread.workspace = true
