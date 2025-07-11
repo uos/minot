@@ -454,7 +454,7 @@ jobs:
 
       - name: "Archive binary"
         run: |
-  
+          TARGET=aarch64-unknown-linux-gnu
           ARCHIVE_NAME=minot-humble-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 

@@ -5,14 +5,21 @@ use std::sync::Mutex;
 use bagread::qos::{
     RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
 };
-use byteorder::LittleEndian;
-use r2r::qos::{DurabilityPolicy, HistoryPolicy, LivelinessPolicy, ReliabilityPolicy};
-use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
+use r2r::{
+    WrappedTypesupport,
+    builtin_interfaces::msg::Time,
+    geometry_msgs::msg::{Quaternion, Vector3},
+    qos::{DurabilityPolicy, HistoryPolicy, LivelinessPolicy, ReliabilityPolicy},
+    sensor_msgs::msg::PointField,
+    std_msgs::msg::Header,
+};
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use log::{debug, error, info, warn};
 use sea::{SensorTypeMapped, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
+
+use r2r::sensor_msgs::msg::{Imu, PointCloud2};
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
@@ -174,31 +181,72 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
             let pubber = existing_pubber.expect("Should be inserted manually if not exists.");
             match data.data {
                 SensorTypeMapped::Lidar(l) => {
-                    // reinterpret-cast from rkyv serializable type to serde serial type
-                    let l = unsafe {
-                        std::mem::transmute::<
-                            ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::PointCloud2,
-                            _,
-                        >(l)
+                    let native_t = PointCloud2 {
+                        header: Header {
+                            stamp: Time {
+                                sec: l.header.stamp.sec,
+                                nanosec: l.header.stamp.nanosec,
+                            },
+                            frame_id: l.header.frame_id,
+                        },
+                        height: l.height,
+                        width: l.width,
+                        fields: l
+                            .fields
+                            .into_iter()
+                            .map(|f| PointField {
+                                name: f.name,
+                                offset: f.offset,
+                                datatype: f.datatype,
+                                count: f.count,
+                            })
+                            .collect(),
+                        is_bigendian: l.is_bigendian,
+                        point_step: l.point_step,
+                        row_step: l.row_step,
+                        data: l.data,
+                        is_dense: l.is_dense,
                     };
-                    let raw = cdr_encoding::to_vec::<
-                        ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2,
-                        LittleEndian,
-                    >(&l)
-                    .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding CDR")?;
 
                     pubber.publish_raw(&raw)?;
 
                     debug!("published cloud");
                 }
                 SensorTypeMapped::Imu(imu) => {
-                    let imu = unsafe {
-                        std::mem::transmute::<ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::Imu, _>(
-                            imu,
-                        )
+                    let native_t = Imu {
+                        header: Header {
+                            stamp: Time {
+                                sec: imu.header.stamp.sec,
+                                nanosec: imu.header.stamp.nanosec,
+                            },
+                            frame_id: imu.header.frame_id,
+                        },
+                        orientation: Quaternion {
+                            x: imu.orientation.x,
+                            y: imu.orientation.y,
+                            z: imu.orientation.z,
+                            w: imu.orientation.w,
+                        },
+                        orientation_covariance: imu.orientation_covariance.to_vec(),
+                        angular_velocity: Vector3 {
+                            x: imu.angular_velocity.x,
+                            y: imu.angular_velocity.y,
+                            z: imu.angular_velocity.z,
+                        },
+                        angular_velocity_covariance: imu.angular_velocity_covariance.to_vec(),
+                        linear_acceleration: Vector3 {
+                            x: imu.linear_acceleration.x,
+                            y: imu.linear_acceleration.y,
+                            z: imu.linear_acceleration.z,
+                        },
+                        linear_acceleration_covariance: imu.linear_acceleration_covariance.to_vec(),
                     };
-                    let raw = cdr_encoding::to_vec::<Imu, LittleEndian>(&imu)
-                        .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding CDR: {e}")?;
 
                     pubber.publish_raw(&raw)?;
                     debug!("published imu");
