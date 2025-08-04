@@ -278,9 +278,8 @@ impl Rules {
                         // Case 1: Variable was in store AND had Shoot rules.
                         // Combine clients from existing rules and new cache registrations, then regenerate Shoot rules.
                         let mut all_pubs: HashSet<String> = HashSet::new();
-                        let mut all_subs: HashSet<String> = HashSet::new(); // We still need subscribers to be targets
-                        let mut other_vh: Vec<VariableHuman> = Vec::new(); // Rules with Sail, Catch or None strategies
-
+                        let mut all_subs: HashSet<String> = HashSet::new();
+                        let mut other_vh: Vec<VariableHuman> = Vec::new();
                         let id = **id;
                         if let Some(existing_rules) = existing_rules_option {
                             for vh in existing_rules {

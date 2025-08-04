@@ -131,7 +131,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                 }
                                 let mut client_news = client.recv.subscribe();
                                 let inner_name = name.clone();
-                                let rat_rules = rules.clone();
+                                let rat_rules = std::sync::Arc::clone(&rules);
                                 let rat_coord_tx = coord_tx_new_client.clone();
                                 let winds_inner = std::sync::Arc::clone(&winds_changer);
                                 let rules_change_for_disconnect_inner = std::sync::Arc::clone(&rules_change_for_disconnect);
@@ -257,16 +257,23 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                             PacketKind::VariableTaskRequest(
                                                                 variable,
                                                             ) => {
-                                                                let rat_rules_ref =
-                                                                    rat_rules.read().unwrap();
-                                                                let minot_actions =
-                                                                    sea::get_strategies(
-                                                                        &rat_rules_ref,
-                                                                        &minot_compare_name,
-                                                                        variable.clone(),
-                                                                        Some(&inner_name),
-                                                                    );
+                                                                    let (minot_actions, mut my_actions) = {
+                                                                        let rat_rules_ref =
+                                                                            rat_rules.read().unwrap();
 
+                                                                            (sea::get_strategies(
+                                                                                &rat_rules_ref,
+                                                                                &minot_compare_name,
+                                                                                variable.clone(),
+                                                                                Some(&inner_name),
+                                                                            ), sea::get_strategies(
+                                                                                &rat_rules_ref,
+                                                                                &inner_name,
+                                                                                variable.clone(),
+                                                                                None,
+                                                                            ))
+                                                                        
+                                                                    };
                                                                 for action in minot_actions {
                                                                     if !matches!(
                                                                         action,
@@ -283,13 +290,6 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     }
                                                                 }
 
-                                                                let mut my_actions =
-                                                                    sea::get_strategies(
-                                                                        &rat_rules_ref,
-                                                                        &inner_name,
-                                                                        variable.clone(),
-                                                                        None,
-                                                                    );
 
                                                                 if my_actions.is_empty() {
                                                                     my_actions

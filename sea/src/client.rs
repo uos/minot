@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr, TcpStream},
+    time::Duration,
 };
 
 use anyhow::anyhow;
-use deadpool::managed::{Manager, RecycleError};
-use log::{debug, error, info, warn};
+use deadpool::managed::{Manager, Object, RecycleError};
+use log::{debug, error, info};
 use pnet::datalink::{self, NetworkInterface};
 use rkyv::{api::low::from_bytes, to_bytes, util::AlignedVec};
 use tokio::{
@@ -20,8 +21,7 @@ use crate::{
     ShipKind, ShipName, VariableType,
     net::{
         CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
-        CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT, CLIENT_TO_CLIENT_TIMEOUT, CONTROLLER_CLIENT_ID,
-        Header, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
+        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
     },
 };
 const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
@@ -35,11 +35,7 @@ impl Manager for TcpManager {
     type Type = tokio::net::TcpStream;
     type Error = anyhow::Error;
 
-    // Return a Pinned Future instead of using async fn
-    fn create(
-        &self,
-    ) -> impl Future<Output = Result<<Self as Manager>::Type, <Self as Manager>::Error>> + Send
-    {
+    fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
         let addr = self.addr.clone();
         Box::pin(async move {
             let stream = tokio::net::TcpStream::connect(addr.clone())
@@ -49,20 +45,15 @@ impl Manager for TcpManager {
         })
     }
 
-    // Return a Pinned Future here as well
+    /// Corrected recycle logic.
+    /// We simply assume the connection is healthy. If it's not, the next
+    /// operation on it will fail, and deadpool will discard it correctly.
     fn recycle(
         &self,
-        conn: &mut Self::Type,
+        _conn: &mut Self::Type,
         _metrics: &deadpool::managed::Metrics,
-    ) -> impl Future<Output = Result<(), RecycleError<<Self as Manager>::Error>>> + Send {
-        Box::pin(async move {
-            let mut buf = [0; 1];
-            match conn.peek(&mut buf).await {
-                Ok(0) => Err(anyhow!("Connection closed by peer").into()),
-                Ok(_) => Ok(()),
-                Err(e) => Err(RecycleError::Backend(e.into())),
-            }
-        })
+    ) -> impl Future<Output = Result<(), RecycleError<Self::Error>>> + Send {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -593,167 +584,80 @@ impl Client {
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
-        loop {
-            let addr = format!("{}:{}", address, port);
-            let pool = self.get_pool(&addr).await;
-            let stream = pool.get().await;
+        let addr = format!("{}:{}", address, port);
+        let pool = self.get_pool(&addr).await;
 
-            let padded_var_name = Sea::pad_string(variable_name);
-
-            match stream {
+        // A small retry loop for getting a connection or handling a write error
+        const MAX_RETRIES: u32 = 2;
+        for attempt in 0..MAX_RETRIES {
+            let mut stream = match pool.get().await {
+                Ok(s) => s,
                 Err(e) => {
-                    return Err(anyhow!("Could not connect to other client: {e}"));
+                    error!(
+                        "Attempt {}: Failed to get connection from pool: {}",
+                        attempt + 1,
+                        e
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
                 }
-                Ok(mut stream) => {
-                    // ask if ready to receive by sending ack and wait for ack answer
-                    let init_request = crate::net::Packet {
-                        header: Header::default(),
-                        data: PacketKind::RequestVarSend(padded_var_name),
-                    };
-                    let init_request_data = to_bytes::<rkyv::rancor::Error>(&init_request)
-                        .expect("non serializable ack");
-                    let ack_data = crate::net::Packet {
-                        header: Header::default(),
-                        data: PacketKind::Acknowledge,
-                    };
-                    let ack_data =
-                        to_bytes::<rkyv::rancor::Error>(&ack_data).expect("non serializable ack");
-                    debug!("connected to {}", addr);
-                    stream.writable().await?;
+            };
 
-                    // ask for other client to get ready
-                    {
-                        let mut buf = vec![0; ack_data.len()];
-                        loop {
-                            stream.write_all(&init_request_data).await?;
-                            debug!("written ack_data, wait for response");
+            // --- Frame the message once ---
+            let mut padded_name = [0u8; 64];
+            let name_bytes = variable_name.as_bytes();
+            let len = name_bytes.len().min(64);
+            padded_name[..len].copy_from_slice(&name_bytes[..len]);
 
-                            let timeout = tokio::time::timeout(
-                                CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT,
-                                stream.read_exact(&mut buf),
-                            )
-                            .await;
+            let packet_size = data.len() as u32;
+            let packet_size_buffer = packet_size.to_be_bytes();
+            let id_buffer = id.to_be_bytes();
 
-                            match timeout {
-                                Ok(Ok(_)) => {
-                                    let received_packet =
-                                        from_bytes::<crate::net::Packet, rkyv::rancor::Error>(
-                                            &buf,
-                                        )?;
-                                    if matches!(
-                                        received_packet.data,
-                                        crate::net::PacketKind::Acknowledge
-                                    ) {
-                                        break;
-                                    }
-                                    warn!("Did not receive ack packet");
-                                }
-                                Err(_) => {
-                                    warn!(
-                                        "Timeout receiving ack to start sending from other client."
-                                    );
-                                }
-                                Ok(Err(e)) => {
-                                    error!("Could not read from socket: {e}");
-                                }
-                            }
-                        }
-                    }
+            let mut header = vec![
+                PROTO_IDENTIFIER,      // 1 byte
+                packet_size_buffer[0], // 4 bytes for size
+                packet_size_buffer[1],
+                packet_size_buffer[2],
+                packet_size_buffer[3],
+                variable_type.into(), // 1 byte
+                id_buffer[0],         // 4 bytes for ID
+                id_buffer[1],
+                id_buffer[2],
+                id_buffer[3],
+            ];
+            header.extend_from_slice(&padded_name); // 64 bytes for name
 
-                    debug!("received ack from other client, sending now");
-                    let packet_size = data.len() as u32;
-                    let packet_size_buffer = packet_size.to_be_bytes();
-                    let id_buffer = id.to_be_bytes();
-                    let mut buffer = vec![
-                        PROTO_IDENTIFIER,
-                        packet_size_buffer[0],
-                        packet_size_buffer[1],
-                        packet_size_buffer[2],
-                        packet_size_buffer[3],
-                        variable_type.into(),
-                        id_buffer[0],
-                        id_buffer[1],
-                        id_buffer[2],
-                        id_buffer[3],
-                    ];
-                    buffer.extend_from_slice(&data);
+            match stream.write_all(&header).await {
+                Ok(_) => (),
+                Err(e) => {
+                    error!(
+                        "Attempt {}: Failed to write header: {}. Invalidating connection.",
+                        attempt + 1,
+                        e
+                    );
+                    let _ = Object::take(stream); // Purge bad connection
+                    continue; // Retry
+                }
+            }
 
-                    let expected_retry = crate::net::Packet {
-                        header: Header::default(),
-                        data: PacketKind::Retry,
-                    };
-                    let retry_data = to_bytes::<rkyv::rancor::Error>(&expected_retry)
-                        .expect("non serializable retry");
-                    let mut recv_buf = vec![0; retry_data.len()];
-                    let mut send_buf = [0; 1024];
-                    let mut send_cursor = 0;
-
-                    let (mut stream_rx, mut stream_tx) = stream.split();
-                    loop {
-                        let mut sent_all = false;
-                        let mut last_i = 0;
-                        for i in 0..send_buf.len() {
-                            if send_cursor >= buffer.len() {
-                                sent_all = true;
-                                break;
-                            }
-                            last_i = i;
-                            send_buf[i] = buffer[send_cursor];
-                            send_cursor += 1;
-                        }
-
-                        if send_cursor == buffer.len() {
-                            sent_all = true;
-                        }
-
-                        // truncating buffer to not send trash bytes
-                        let send_buf = if sent_all && last_i + 1 < send_buf.len() {
-                            &send_buf[0..last_i + 1]
-                        } else {
-                            &send_buf
-                        };
-                        tokio::select! {
-                            fd_recv = stream_rx.read_exact(&mut recv_buf) => {
-                                let n = fd_recv.expect("Could not read from tcp stream.");
-                                if n == 0 {
-                                    debug!("read empty stream while sending to other client.");
-                                    continue;
-                                }
-                                    let received_packet =
-                                        from_bytes::<crate::net::Packet, rkyv::rancor::Error>(&recv_buf)?;
-                                    if matches!(
-                                        received_packet.data,
-                                        crate::net::PacketKind::Retry
-                                    ) {
-                                        send_cursor = 0;
-                                        continue;
-                                    }
-                                    warn!("Received something else than retry packet mid-stream.");
-                            },
-                            fd_sent = stream_tx.write(send_buf) => {
-                                let n = fd_sent.expect("Could not write to tcp stream.");
-                                if n == 0 {
-                                    error!("written 0 bytes to other client?");
-                                    break;
-                                }
-                                debug!("written");
-                            }
-                        };
-                        if sent_all {
-                            stream_tx.flush().await?;
-                            break;
-                        }
-                    }
-
-                    // TODO in the current impl, the last packet can not be retried. maybe we could wait for an ack or retry here in loop and wait until we get one
-                    // TODO maybe change every stream for rule conversation etc. to use this communication pattern
-
-                    // stream.write_all(&buffer).await?;
-                    debug!("written all");
+            match stream.write_all(&data).await {
+                Ok(_) => {
+                    debug!("Successfully wrote data for id {} to stream.", id);
                     return Ok(());
+                }
+                Err(e) => {
+                    error!(
+                        "Attempt {}: Failed to write data: {}. Invalidating connection.",
+                        attempt + 1,
+                        e
+                    );
+                    let _ = Object::take(stream); // Purge bad connection
+                    continue; // Retry
                 }
             }
         }
+
+        Err(anyhow!("Failed to send data after {} retries", MAX_RETRIES))
     }
 
     /// A task to distribute received messages from other clients via 1 to 1 TCP connections
@@ -766,163 +670,93 @@ impl Client {
             >,
         >,
     ) -> ! {
+        const HEADER_SIZE: usize = 1 + 4 + 1 + 4 + 64; // PROTO(1) + SIZE(4) + TYPE(1) + ID(4) + NAME(64)
         loop {
-            let stream = tokio::time::timeout(CLIENT_TO_CLIENT_TIMEOUT, tcp_port.accept()).await;
-            let (mut stream, _) = match stream {
-                Err(_) => {
-                    error!("Could not connect to other client within {CLIENT_TO_CLIENT_TIMEOUT:?}");
+            let (mut stream, addr) = match tcp_port.accept().await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("Failed to accept connection: {e}");
                     continue;
                 }
-                Ok(Err(e)) => match e.kind() {
-                    std::io::ErrorKind::ConnectionRefused => {
-                        debug!("connection not yet ready, wait a bit");
-                        continue;
-                    }
-                    _ => {
-                        error!("Could not connect to other client: {e}");
-                        continue;
-                    }
-                },
-                Ok(Ok(res)) => res,
             };
+            debug!("Accepted new connection from {}", addr);
 
             let task_update_chan = updated_raw_recv.clone();
             let task_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
+
             tokio::spawn(async move {
-                let mut variable_type = VariableType::default();
-                if let Err(_) = stream.readable().await {
-                    error!("Stream not readable");
-                    return;
-                }
-
-                // Ask for other client if it is ready. Normally you would assume TCP handles handshakes etc but it seems to write
-                // to the socket into the void without the receiver being ready to receive anything. Tokio then merges the buffers when calling recv()?
-                // Another option would be to init the socket on each receive but then the socket could be set in the meantime by the operating system.
-                let handshake_init_data = crate::net::Packet {
-                    header: Header::default(),
-                    data: PacketKind::RequestVarSend(Sea::pad_string(" ")),
-                };
-                let handshake_init_data = to_bytes::<rkyv::rancor::Error>(&handshake_init_data)
-                    .expect("non serializable ack");
-                let mut buf = vec![0; handshake_init_data.len()];
-                if let Err(e) = stream.read_exact(&mut buf).await {
-                    error!("Could not read exact in receiver for other client comm: {e}");
-                    return;
-                };
-                let received_packet =
-                    match from_bytes::<crate::net::Packet, rkyv::rancor::Error>(&buf) {
-                        Ok(packet) => packet,
-                        Err(e) => {
-                            error!("Could not decode packet from bytes: {e}");
-                            return;
-                        }
-                    };
-
-                let var_name = if let crate::net::PacketKind::RequestVarSend(var_name) =
-                    received_packet.data
-                {
-                    var_name
-                } else {
-                    error!("Received packet for 1-1 handshake is of unexpected type");
-                    return;
-                };
-                let var_name = Sea::reverse_padding(&var_name);
-
-                let handshake_start_ack = crate::net::Packet {
-                    header: Header::default(),
-                    data: PacketKind::Acknowledge,
-                };
-                let handshake_start_ack_data =
-                    to_bytes::<rkyv::rancor::Error>(&handshake_start_ack)
-                        .expect("non serializable ack");
-
-                if let Err(e) = stream.write_all(&handshake_start_ack_data).await {
-                    error!("Could not write handshake start to sending client: {e}");
-                    return;
-                }
-                debug!("handshake sucess {}", var_name);
-
-                let mut buffer = Vec::with_capacity(1024);
-                let mut first = true;
-                let mut msg_size = 0;
-                let mut msg_id = 0;
+                let mut header_buf = [0u8; HEADER_SIZE];
 
                 loop {
-                    // Hint: This process only works as long as no other client is writing to our current stream. With the coordinator socket we sometimes get 2 messages into the same stream but they are from different clients talking to the same socket.
-                    let mut buf = [0; 1024];
-                    let n = match stream.read(&mut buf).await {
+                    match stream.read_exact(&mut header_buf).await {
+                        Ok(_) => (),
                         Err(e) => {
-                            error!(
-                                "Could not read from TCP stream when receiving from other client: {e}"
-                            );
-                            return;
+                            // "early eof" is normal when the client disconnects cleanly.
+                            if e.kind() != std::io::ErrorKind::UnexpectedEof {
+                                error!(
+                                    "Could not read message header from {}: {}. Closing connection.",
+                                    addr, e
+                                );
+                            } else {
+                                debug!("Connection closed by {}.", addr);
+                            }
+                            break;
                         }
-                        Ok(n) => n,
                     };
 
-                    if n == 0 {
+                    if header_buf[0] != PROTO_IDENTIFIER {
+                        error!(
+                            "Invalid protocol identifier from {}. Closing connection.",
+                            addr
+                        );
+                        break;
+                    }
+
+                    let size_bytes = [header_buf[1], header_buf[2], header_buf[3], header_buf[4]];
+                    let msg_size = u32::from_be_bytes(size_bytes);
+
+                    let variable_type = VariableType::from(header_buf[5]);
+
+                    let id_bytes = [header_buf[6], header_buf[7], header_buf[8], header_buf[9]];
+                    let msg_id = u32::from_be_bytes(id_bytes);
+
+                    let name_bytes = &header_buf[10..];
+                    let var_name = String::from_utf8_lossy(
+                        name_bytes.split(|&b| b == 0).next().unwrap_or_default(),
+                    )
+                    .to_string();
+
+                    let mut payload_buf = vec![0; msg_size as usize];
+                    if let Err(e) = stream.read_exact(&mut payload_buf).await {
+                        error!(
+                            "Failed to read payload of size {} for id {}: {}. Closing connection.",
+                            msg_size, msg_id, e
+                        );
+                        break;
+                    }
+
+                    let (tx, rx) = tokio::sync::mpsc::channel(1);
+
+                    let response_data = (payload_buf, variable_type, var_name);
+                    if tx.send(response_data).await.is_err() {
+                        error!(
+                            "IMPOSSIBLE: Failed to send to a newly created channel for id {}.",
+                            msg_id
+                        );
                         continue;
                     }
 
-                    if first {
-                        if buf[0] != PROTO_IDENTIFIER {
-                            let retry_packet = crate::net::Packet {
-                                header: Header::default(),
-                                data: PacketKind::Retry,
-                            };
-                            let retry_packet_data = to_bytes::<rkyv::rancor::Error>(&retry_packet)
-                                .expect("non serializable retry");
-
-                            if let Err(e) = stream.write_all(&retry_packet_data).await {
-                                error!("Could not write to 1-to-1 TCP socket: {e}");
-                                return;
-                            }
-                            buffer.clear();
-                            first = true;
-                            warn!("Unexpected start token, asking for retry");
-                            continue;
-                        } else {
-                            let msg_size_buf = [buf[1], buf[2], buf[3], buf[4]];
-                            variable_type = VariableType::from(buf[5]);
-                            msg_size = u32::from_be_bytes(msg_size_buf);
-                            let msg_id_buf = [buf[6], buf[7], buf[8], buf[9]];
-                            msg_id = u32::from_be_bytes(msg_id_buf);
-                            first = false;
-                        }
-                    }
-
-                    buffer.extend_from_slice(&buf[..n]);
-
-                    if buffer.len() as u32 == msg_size + 10 {
-                        break;
-                    }
-                }
-
-                if !buffer.is_empty() {
-                    let out_buff = buffer[10..buffer.len()].to_vec();
-                    let (buff_tx, buff_rx) = tokio::sync::mpsc::channel(1);
                     {
-                        let mut lock = task_recv_buff.write().unwrap();
-                        lock.insert(msg_id, buff_rx);
+                        task_recv_buff.write().unwrap().insert(msg_id, rx);
                     }
 
                     if task_update_chan.send(msg_id).is_err() {
-                        debug!("got a message for id: {msg_id} but no one cares :(");
+                        debug!(
+                            "Data for id {} is ready, but no consumers are listening.",
+                            msg_id
+                        );
                     }
-
-                    tokio::spawn(async move {
-                        match buff_tx.send((out_buff, variable_type, var_name)).await {
-                            Ok(_) => {}
-                            Err(_) => {
-                                error!(
-                                    "Could not send to received 1-1 buffer to respective task waiting for the result."
-                                );
-                            }
-                        }
-                    });
                 }
-
-                debug!("Received data is not for us");
             });
         }
     }
