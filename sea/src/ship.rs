@@ -79,11 +79,14 @@ impl crate::Cannon for NetworkShipImpl {
             Some(mut en) => {
                 // missed update call, the data is already waiting for us. gather all.
                 loop {
-                    let (raw, _, _) = en.recv().await.unwrap();
-                    let mat = from_bytes::<T, rkyv::rancor::Error>(&raw)
-                        .expect("Could not decode data to T");
-                    out_buf.push(mat);
-                    if en.is_empty() {
+                    if let Some((raw, _, _)) = en.recv().await {
+                        let mat = from_bytes::<T, rkyv::rancor::Error>(&raw)
+                            .expect("Could not decode data to T");
+                        out_buf.push(mat);
+                        if en.is_empty() {
+                            break;
+                        }
+                    } else {
                         break;
                     }
                 }
