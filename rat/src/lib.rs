@@ -250,11 +250,11 @@ where
 }
 
 // C FFI
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
 type CFfiString = i8;
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[cfg(all(
     not(target_arch = "x86"),
     not(target_arch = "x86_64"),
@@ -262,7 +262,7 @@ type CFfiString = i8;
 ))]
 type CFfiString = u8;
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[cfg(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -270,7 +270,7 @@ type CFfiString = u8;
 ))]
 type CFfiString = i8;
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// # Safety
 /// C interop
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i3
     }
 }
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// # Safety
 /// C interop
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn rat_deinit() -> i32 {
     }
 }
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -363,7 +363,7 @@ pub unsafe extern "C" fn rat_bacon_f32(
     }
 }
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -405,7 +405,7 @@ pub unsafe extern "C" fn rat_bacon_f64(
     }
 }
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -447,7 +447,7 @@ pub unsafe extern "C" fn rat_bacon_i32(
     }
 }
 
-#[cfg(build_c_interop)]
+#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety

@@ -949,7 +949,7 @@ impl DiffMatrix {
         self.max_cols = show_max_cols as usize;
     }
 
-    pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
+    pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table<'_>>> {
         let header_cols_nums: Vec<Cell> = (0..self.ncols)
             .skip(self.curr_offset_cols)
             .take(self.max_cols)
@@ -1062,7 +1062,7 @@ impl Matrix {
         self.max_cols = show_max_cols as usize;
     }
 
-    pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table>> {
+    pub fn render(&self, precision: usize) -> anyhow::Result<Option<Table<'_>>> {
         let header_cols_nums: Vec<Cell> = (0..self.ncols)
             .skip(self.curr_offset_cols)
             .take(self.max_cols)
