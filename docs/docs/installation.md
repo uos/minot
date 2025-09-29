@@ -100,7 +100,7 @@ You need to build the library from source. It generates a static and shared libr
 ~~~bash title="Build librat from source"
 git clone https://github.com/uos/minot
 cd minot
-cargo build --package rat --release
+cargo build --package rat --release --features ffi
 ~~~
 
 A typical system-wide installation is to copy the libraries to your linker path. Alternatively, you may change the link path and include search paths in your build system.
