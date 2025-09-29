@@ -250,11 +250,9 @@ where
 }
 
 // C FFI
-#[cfg(feature = "ffi")]
 #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
 type CFfiString = i8;
 
-#[cfg(feature = "ffi")]
 #[cfg(all(
     not(target_arch = "x86"),
     not(target_arch = "x86_64"),
@@ -262,7 +260,6 @@ type CFfiString = i8;
 ))]
 type CFfiString = u8;
 
-#[cfg(feature = "ffi")]
 #[cfg(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -270,7 +267,6 @@ type CFfiString = u8;
 ))]
 type CFfiString = i8;
 
-#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// # Safety
 /// C interop
@@ -301,27 +297,40 @@ pub unsafe extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i3
     }
 }
 
-#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// # Safety
 /// C interop
 pub unsafe extern "C" fn rat_deinit() -> i32 {
-    let catch = std::panic::catch_unwind(deinit);
+    #[cfg(panic = "unwind")]
+    {
+        let catch = std::panic::catch_unwind(deinit);
 
-    match catch {
-        Ok(Ok(_)) => 0,
-        Ok(Err(e)) => {
-            error!("Could not deinitialize Rat: {e}.");
-            -1
+        match catch {
+            Ok(Ok(_)) => 0,
+            Ok(Err(e)) => {
+                error!("Could not deinitialize Rat: {e}.");
+                -1
+            }
+            Err(_) => {
+                error!("Rust did panic unexpectedly.");
+                -2
+            }
         }
-        Err(_) => {
-            error!("Rust did panic unexpectedly.");
-            -2
+    }
+
+    #[cfg(not(panic = "unwind"))]
+    {
+        let d = deinit();
+        match d {
+            Ok(_) => 0,
+            Err(e) => {
+                error!("Could not deinitialize Rat: {e}.");
+                -1
+            }
         }
     }
 }
 
-#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -332,7 +341,7 @@ pub unsafe extern "C" fn rat_bacon_f32(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let catch = std::panic::catch_unwind(|| {
+    let f = || {
         let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
         let variable_name = variable_name.to_str().unwrap();
 
@@ -348,22 +357,38 @@ pub unsafe extern "C" fn rat_bacon_f32(
                 }
             }
         })
-    });
+    };
 
-    match catch {
-        Ok(Ok(_)) => 0,
-        Ok(Err(e)) => {
-            error!("Failed to bacon: {}", e);
-            -1
+    #[cfg(panic = "unwind")]
+    {
+        let catch = std::panic::catch_unwind(f);
+
+        match catch {
+            Ok(Ok(_)) => 0,
+            Ok(Err(e)) => {
+                error!("Failed to bacon: {}", e);
+                -1
+            }
+            Err(_) => {
+                error!("Rust did panic unexpectedly.");
+                -2
+            }
         }
-        Err(_) => {
-            error!("Rust did panic unexpectedly.");
-            -2
+    }
+
+    #[cfg(not(panic = "unwind"))]
+    {
+        let d = f();
+        match d {
+            Ok(_) => 0,
+            Err(e) => {
+                error!("Could not deinitialize Rat: {e}.");
+                -1
+            }
         }
     }
 }
 
-#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -374,7 +399,7 @@ pub unsafe extern "C" fn rat_bacon_f64(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let catch = std::panic::catch_unwind(|| {
+    let f = || {
         let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
         let variable_name = variable_name.to_str().unwrap();
 
@@ -390,22 +415,37 @@ pub unsafe extern "C" fn rat_bacon_f64(
                 }
             }
         })
-    });
+    };
 
-    match catch {
-        Ok(Ok(_)) => 0,
-        Ok(Err(e)) => {
-            error!("Failed to bacon: {}", e);
-            -1
+    #[cfg(panic = "unwind")]
+    {
+        let catch = std::panic::catch_unwind(f);
+
+        match catch {
+            Ok(Ok(_)) => 0,
+            Ok(Err(e)) => {
+                error!("Failed to bacon: {}", e);
+                -1
+            }
+            Err(_) => {
+                error!("Rust did panic unexpectedly.");
+                -2
+            }
         }
-        Err(_) => {
-            error!("Rust did panic unexpectedly.");
-            -2
+    }
+    #[cfg(not(panic = "unwind"))]
+    {
+        let d = f();
+        match d {
+            Ok(_) => 0,
+            Err(e) => {
+                error!("Could not deinitialize Rat: {e}.");
+                -1
+            }
         }
     }
 }
 
-#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -416,7 +456,7 @@ pub unsafe extern "C" fn rat_bacon_i32(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let catch = std::panic::catch_unwind(|| {
+    let f = || {
         let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
         let variable_name = variable_name.to_str().unwrap();
 
@@ -432,22 +472,37 @@ pub unsafe extern "C" fn rat_bacon_i32(
                 }
             }
         })
-    });
+    };
 
-    match catch {
-        Ok(Ok(_)) => 0,
-        Ok(Err(e)) => {
-            error!("Failed to bacon: {}", e);
-            -1
+    #[cfg(panic = "unwind")]
+    {
+        let catch = std::panic::catch_unwind(f);
+
+        match catch {
+            Ok(Ok(_)) => 0,
+            Ok(Err(e)) => {
+                error!("Failed to bacon: {}", e);
+                -1
+            }
+            Err(_) => {
+                error!("Rust did panic unexpectedly.");
+                -2
+            }
         }
-        Err(_) => {
-            error!("Rust did panic unexpectedly.");
-            -2
+    }
+    #[cfg(not(panic = "unwind"))]
+    {
+        let d = f();
+        match d {
+            Ok(_) => 0,
+            Err(e) => {
+                error!("Could not deinitialize Rat: {e}.");
+                -1
+            }
         }
     }
 }
 
-#[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
 /// Matrix must be in column-major order.
 /// # Safety
@@ -458,7 +513,7 @@ pub unsafe extern "C" fn rat_bacon_u8(
     rows: usize,
     cols: usize,
 ) -> i32 {
-    let catch = std::panic::catch_unwind(|| {
+    let f = || {
         let variable_name = unsafe { std::ffi::CStr::from_ptr(variable_name) };
         let variable_name = variable_name.to_str().unwrap();
 
@@ -474,17 +529,33 @@ pub unsafe extern "C" fn rat_bacon_u8(
                 }
             }
         })
-    });
+    };
 
-    match catch {
-        Ok(Ok(_)) => 0,
-        Ok(Err(e)) => {
-            error!("Failed to bacon: {}", e);
-            -1
+    #[cfg(panic = "unwind")]
+    {
+        let catch = std::panic::catch_unwind(f);
+
+        match catch {
+            Ok(Ok(_)) => 0,
+            Ok(Err(e)) => {
+                error!("Failed to bacon: {}", e);
+                -1
+            }
+            Err(_) => {
+                error!("Rust did panic unexpectedly.");
+                -2
+            }
         }
-        Err(_) => {
-            error!("Rust did panic unexpectedly.");
-            -2
+    }
+    #[cfg(not(panic = "unwind"))]
+    {
+        let d = f();
+        match d {
+            Ok(_) => 0,
+            Err(e) => {
+                error!("Could not deinitialize Rat: {e}.");
+                -1
+            }
         }
     }
 }
