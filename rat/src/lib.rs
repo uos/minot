@@ -271,7 +271,7 @@ type CFfiString = i8;
 /// # Safety
 /// C interop
 pub unsafe extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i32) -> i32 {
-    let catch = std::panic::catch_unwind(|| {
+    let init = || {
         let node_name = unsafe { std::ffi::CStr::from_ptr(node_name) };
         let node_name = node_name.to_str().unwrap();
 
@@ -282,17 +282,34 @@ pub unsafe extern "C" fn rat_init(node_name: *const CFfiString, timeout_secs: i3
         };
 
         init(node_name, timeout, None)
-    });
+    };
 
-    match catch {
-        Ok(Ok(_)) => 0,
-        Ok(Err(e)) => {
-            error!("Could not initialize Rat: {e}.");
-            -1
+    #[cfg(panic = "unwind")]
+    {
+        let catch = std::panic::catch_unwind(init);
+
+        match catch {
+            Ok(Ok(_)) => 0,
+            Ok(Err(e)) => {
+                error!("Could not initialize Rat: {e}.");
+                -1
+            }
+            Err(_) => {
+                error!("Rust did panic unexpectedly.");
+                -2
+            }
         }
-        Err(_) => {
-            error!("Rust did panic unexpectedly.");
-            -2
+    }
+
+    #[cfg(not(panic = "unwind"))]
+    {
+        let d = init();
+        match d {
+            Ok(_) => 0,
+            Err(e) => {
+                error!("Could not initialize Rat: {e}.");
+                -1
+            }
         }
     }
 }
