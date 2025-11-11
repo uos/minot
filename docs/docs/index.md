@@ -117,7 +117,7 @@ Open a new terminal.
 source /opt/ros/$ROS_DISTRO/setup.bash
 
 # Run
-minot demo.rl
+minot tui demo.rl
 
 # Press w and then Space
 # You should see a 3D Pointcloud in rviz2 now.

@@ -2,8 +2,7 @@ use core::panic;
 use std::{
     collections::HashMap,
     fmt::Display,
-    io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
@@ -11,31 +10,51 @@ use std::{
 
 use anyhow::{Error, anyhow};
 use log::{error, info, warn};
+use once_cell::sync::Lazy;
 use ratatui::{
     layout::Constraint,
     style::Stylize,
     widgets::{Cell, Paragraph, Row, ScrollbarState, Table, TableState},
 };
+use regex::Regex;
 use rlc::{
     Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, Rules, VariableHistory, WindFunction,
 };
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 use sea::net::{PacketKind, WindAt};
 
+// --- Add this static regex ---
+// This regex matches lines like:
+// #--- SOME_NAME
+// #---SOME_NAME_123
+// #---    SOME_NAME_WITH_SPACES (Note: my regex below does *not* allow spaces, only one optional space after #---)
+// The regex: r"^#--- ?[a-zA-Z0-9_]+$"
+// ^      - start of the line
+// #---   - literal characters
+//  ?     - an optional space
+// [a-zA-Z0-9_]+ - one or more letters, numbers, or underscores for the name
+// $      - end of the line
+static START_MARKER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^#--- ?([a-zA-Z0-9_]+)$").unwrap());
+
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn core::error::Error>>;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub enum Mode {
-    Wind,
-    #[default]
+    Wind { hide_compare: bool },
     Compare,
+}
+
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Wind { hide_compare: true }
+    }
 }
 
 impl Display for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Mode::Wind => f.write_str("Wind"),
+            Mode::Wind { hide_compare: _ } => f.write_str("Wind"),
             Mode::Compare => f.write_str("Compare"),
         }
     }
@@ -691,8 +710,8 @@ pub const COMPARE_POPUP_TITLE_NOERR: &str = "Compare Cursor to row[:col]";
 
 #[derive(Debug, Default)]
 pub enum WindMode {
-    #[default]
     Inactive, // shown but not changable
+    #[default]
     Active,
     ActiveSelect,
 }
@@ -701,16 +720,17 @@ pub enum WindMode {
 pub struct WindCursor {
     line_start: Option<u32>,
     line_end: Option<u32>,
+    section_label: Option<String>,
     pub showing_popup: bool,
     mode: WindMode,
     pub popup_title: &'static str,
     pub popup_buffer: Vec<char>,
-    wind_send_state: WindSendState,
-    wind_work_queue: usize,
-    compile_state: WindCompile,
+    pub(crate) wind_send_state: WindSendState,
+    pub(crate) wind_work_queue: usize,
+    pub(crate) compile_state: WindCompile,
     wind_file_path: PathBuf,
     bagfile: Arc<RwLock<bagread::Bagfile>>,
-    variable_cache: HashMap<rlc::Var, rlc::Rhs>,
+    pub(crate) variable_cache: HashMap<rlc::Var, rlc::Rhs>,
     dynamic_vars: HashMap<String, Vec<PlayKindUnitedPass3>>,
 }
 
@@ -730,12 +750,17 @@ impl Default for WindCursor {
             wind_work_queue: 0,
             compile_state: WindCompile::default(),
             dynamic_vars: HashMap::new(),
+            section_label: None,
         }
     }
 }
 
 impl Display for WindCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(section_name) = self.section_label.as_ref() {
+            f.write_str(&section_name).unwrap();
+            f.write_str(" ").unwrap();
+        }
         match self.mode {
             WindMode::Inactive => {
                 f.write_str("W")?;
@@ -1592,7 +1617,7 @@ impl Default for InfoView {
     }
 }
 
-struct ErrorWriter {}
+pub(crate) struct ErrorWriter {}
 impl std::io::Write for ErrorWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let s = String::from_utf8_lossy(buf);
@@ -1600,7 +1625,7 @@ impl std::io::Write for ErrorWriter {
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
@@ -2216,6 +2241,7 @@ impl App {
         match wind_cursor.mode {
             WindMode::Active => match direction {
                 Some(VerticalDirection::Up) => {
+                    wind_cursor.section_label = None;
                     wind_cursor.line_start = Some(wind_cursor.line_start.unwrap_or(0));
                     wind_cursor.line_start =
                         Some(wind_cursor.line_start.unwrap().saturating_sub(1).max(1));
@@ -2225,6 +2251,7 @@ impl App {
                     wind_cursor.line_end = wind_cursor.line_start;
                 }
                 Some(VerticalDirection::Down) => {
+                    wind_cursor.section_label = None;
                     wind_cursor.line_start = Some(wind_cursor.line_end.unwrap_or(0));
                     wind_cursor.line_start =
                         Some(wind_cursor.line_start.unwrap().saturating_add(1));
@@ -2235,16 +2262,19 @@ impl App {
                         .clamp(0, u32::MAX as usize)
                         .try_into()
                         .expect("just clamped");
+                    wind_cursor.section_label = None;
                     wind_cursor.line_start = Some(lineu32);
                     wind_cursor.line_end = wind_cursor.line_start;
                 }
                 None => {
+                    wind_cursor.section_label = None;
                     wind_cursor.line_start = None;
                     wind_cursor.line_end = None;
                 }
             },
             WindMode::ActiveSelect => match direction {
                 Some(VerticalDirection::Up) => {
+                    wind_cursor.section_label = None;
                     wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(0));
                     if wind_cursor.line_end == wind_cursor.line_start {
                         wind_cursor.line_start =
@@ -2264,6 +2294,7 @@ impl App {
                     if wind_cursor.line_start.is_none() {
                         wind_cursor.line_start = Some(1);
                     }
+                    wind_cursor.section_label = None;
                     wind_cursor.line_end = Some(wind_cursor.line_end.unwrap_or(0));
                     wind_cursor.line_end = Some(wind_cursor.line_end.unwrap().saturating_add(1));
                 }
@@ -2273,8 +2304,10 @@ impl App {
                         .try_into()
                         .expect("just clamped");
                     wind_cursor.line_end = Some(lineu32);
+                    wind_cursor.section_label = None;
                 }
                 None => {
+                    wind_cursor.section_label = None;
                     wind_cursor.line_start = None;
                     wind_cursor.line_end = None;
                 }
@@ -2447,9 +2480,24 @@ impl App {
         }
 
         if self.wind_mode() {
-            self.mode = Mode::Wind;
+            self.mode = Mode::Wind {
+                hide_compare: false,
+            };
         } else {
             self.mode = Mode::Compare;
+        }
+    }
+
+    pub fn wind_toggle_zen(&mut self) {
+        if self.wind_mode() {
+            match self.mode {
+                Mode::Wind { hide_compare } => {
+                    self.mode = Mode::Wind {
+                        hide_compare: !hide_compare,
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -2460,6 +2508,198 @@ impl App {
             WindMode::Active => true,
             WindMode::ActiveSelect => true,
         }
+    }
+
+    fn find_section_bounds(
+        &self,
+        lines: &Vec<String>,
+        start_marker_idx_0: usize,
+    ) -> Option<((usize, usize), String)> {
+        let start_marker_line = &lines[start_marker_idx_0];
+
+        // Extract the name from the capture group
+        let Some(caps) = START_MARKER_RE.captures(start_marker_line) else {
+            eprintln!("Regex match failed internally. This is a bug.");
+            return None;
+        };
+        let name = caps.get(1).map_or("", |m| m.as_str()).to_string();
+
+        let section_start_0 = start_marker_idx_0 + 1;
+
+        if section_start_0 >= lines.len() {
+            return None;
+        }
+        let mut end_marker_idx_0: Option<usize> = None;
+        for (i, line) in lines.iter().enumerate().skip(section_start_0) {
+            if line.starts_with("#---") {
+                end_marker_idx_0 = Some(i);
+                break;
+            }
+        }
+
+        let section_end_0 = match end_marker_idx_0 {
+            Some(end_marker_idx) => end_marker_idx.saturating_sub(1),
+            None => lines.len().saturating_sub(1),
+        };
+
+        if section_end_0 < section_start_0 {
+            return None;
+        }
+
+        let cursor_line_start = section_start_0 + 1;
+        let cursor_line_end = section_end_0 + 1;
+
+        Some(((cursor_line_start, cursor_line_end), name))
+    }
+
+    fn find_next_section(
+        &self,
+        lines: &Vec<String>,
+        start_line_1based: usize,
+    ) -> Option<((usize, usize), String)> {
+        let search_from_index_0 = start_line_1based.saturating_sub(1);
+
+        for (i, line) in lines.iter().enumerate().skip(search_from_index_0) {
+            if START_MARKER_RE.is_match(line) {
+                return self.find_section_bounds(lines, i);
+            }
+        }
+
+        None
+    }
+
+    fn find_previous_section(
+        &self,
+        lines: &Vec<String>,
+        start_line_1based: usize,
+    ) -> Option<((usize, usize), String)> {
+        let current_section_marker_idx_0 = start_line_1based.saturating_sub(2);
+
+        if start_line_1based <= 1 {
+            return None;
+        }
+
+        for i in (0..current_section_marker_idx_0).rev() {
+            if START_MARKER_RE.is_match(&lines[i]) {
+                return self.find_section_bounds(lines, i);
+            }
+        }
+
+        None
+    }
+
+    fn read_rl_file(path: &Path) -> Option<String> {
+        let mut err = ErrorWriter {};
+        let file = std::fs::read_to_string(path);
+        let file = match file {
+            Ok(file) => file,
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    std::io::Write::write(
+                        &mut err,
+                        format!("Could not find file: {}", path.display()).as_bytes(),
+                    )
+                    .unwrap();
+                    return None;
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    std::io::Write::write(
+                        &mut err,
+                        format!("No permission to read file: {}", path.display()).as_bytes(),
+                    )
+                    .unwrap();
+                    return None;
+                }
+                std::io::ErrorKind::IsADirectory => {
+                    std::io::Write::write(
+                        &mut err,
+                        format!("File is a directory: {}", path.display()).as_bytes(),
+                    )
+                    .unwrap();
+                    return None;
+                }
+                _ => {
+                    std::io::Write::write(
+                        &mut err,
+                        format!("Unexpected error for file: {}", path.display()).as_bytes(),
+                    )
+                    .unwrap();
+                    return None;
+                }
+            },
+        };
+
+        Some(file)
+    }
+
+    pub fn select_next_label(&mut self) {
+        let Some(file) = self
+            .rats_file
+            .as_ref()
+            .and_then(|path| Self::read_rl_file(path))
+            .and_then(|file| Some(file.lines().map(String::from).collect::<Vec<_>>()))
+        else {
+            return;
+        };
+        {}
+        let mut cursor = self.wind_cursor.write().unwrap();
+        let start_line = match (cursor.line_start, cursor.line_end) {
+            (None, None) => 1,
+            (None, Some(last)) => last + 1,
+            (Some(first), None) => first + 1,
+            (Some(_), Some(last)) => last + 1,
+        };
+
+        let found = Self::find_next_section(&self, &file, start_line as usize);
+
+        let Some(((start_cursor, end_cursor), section_name)) =
+            found.or_else(|| Self::find_next_section(&self, &file, 1))
+        else {
+            return;
+        };
+
+        cursor.line_start = Some(start_cursor as u32);
+        cursor.line_end = Some(end_cursor as u32);
+        cursor.section_label = Some(section_name);
+    }
+
+    fn find_last_section(&self, lines: &Vec<String>) -> Option<((usize, usize), String)> {
+        for i in (0..lines.len()).rev() {
+            if START_MARKER_RE.is_match(&lines[i]) {
+                return self.find_section_bounds(lines, i);
+            }
+        }
+        None
+    }
+
+    pub fn select_prev_label(&mut self) {
+        let Some(file) = self
+            .rats_file
+            .as_ref()
+            .and_then(|path| Self::read_rl_file(path))
+            .and_then(|file| Some(file.lines().map(String::from).collect::<Vec<_>>()))
+        else {
+            return;
+        };
+        let mut cursor = self.wind_cursor.write().unwrap();
+        let start_line = match (cursor.line_start, cursor.line_end) {
+            (None, None) => 1,
+            (None, Some(last)) => last,
+            (Some(first), None) => first,
+            (Some(first), Some(_)) => first,
+        };
+
+        let found = Self::find_previous_section(&self, &file, start_line as usize);
+
+        let Some(((start_cursor, end_cursor), section_name)) =
+            found.or_else(|| Self::find_last_section(&self, &file))
+        else {
+            return;
+        };
+
+        cursor.line_start = Some(start_cursor as u32);
+        cursor.line_end = Some(end_cursor as u32);
+        cursor.section_label = Some(section_name);
     }
 
     pub fn wind_toggle_popup(&mut self) {

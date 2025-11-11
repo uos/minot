@@ -2,14 +2,14 @@ TUI stands for Terminal User Interface. In Minot, it functions as a dashboard wi
 
 After [installing the binary with your chosen embeddings](installation.md#minot-tui), you can run the TUI with:
 ~~~bash
-minot [<Path>]
+minot tui <Path>
 ~~~
 
-The Path is optional. It defines the Ratslang file for [Bagfile Querying](bagquery.md) and [Variable Sharing](varshare.md#minot-tui-with-embedded-coordinator).
+The Path defines the configuration file for [Bagfile Querying](bagquery.md) and [Variable Sharing](varshare.md#minot-tui-with-embedded-coordinator).
 
-On startup, Minot searches for a Coordinator. If you embedded one in the binary (the default setting), it will be found immediately, and the following interface will appear.
+On startup, Minot searches for a Coordinator and will immediately find it, since it starts one itself. The following interface will appear.
 
-![TUI Startup](./assets/fresh_open.jpg){ width="500" loading=lazy }
+![Terminal Startup](./assets/fresh_open.jpg){ width="500" loading=lazy }
 /// caption
 The freshly opened TUI with embedded Coordinator.
 ///

@@ -16,8 +16,11 @@ Keybindings for the Minot TUI. They cannot be changed after compile time for the
 
 | Command                            | Key         |
 | :--------------------------------- | :---------- |
+| Toggle Zen Mode (in wind mode)                | <kbd>z</kbd>     |
 | Move Cursor up                     | <kbd>k</kbd>, <kbd>↑</kbd> |
 | Move Cursor down                   | <kbd>j</kbd>, <kbd>↓</kbd> |
+| Select next label                     | <kbd>PageDown</kbd> |
+| Select previous label                   | <kbd>PageUp</kbd> |
 | Toggle Goto Line Window (in wind mode)           | <kbd>g</kbd>     |
 | Apply Goto Line Input              | <kbd>Enter</kbd> |
 | Select All Lines                   | <kbd>*</kbd>    |
@@ -47,7 +50,7 @@ Adding new ones happens automatically when firing the `.rl` file if it contains 
 | Scroll History Older                | <kbd>Shift</kbd>+<kbd>Tab</kbd>      |
 | Scroll History Newer                | <kbd>Tab</kbd>                        |
 | Swap Compare Buffers                | <kbd>Shift</kbd>+<kbd>f</kbd>        |
-| Move Through Rats at Current Var    | <kbd>PageUp</kbd> / <kbd>PageDown</kbd> |
+| Move Through Rats at Current Var    | <kbd>Ctrl</kbd>+<kbd>PageUp</kbd> / <kbd>Ctrl</kbd>+<kbd>PageDown</kbd> |
 | Unlock Vars                         | <kbd>.</kbd>                         |
 | Lock Next Var                       | <kbd>-</kbd>                         |
 | Unlock Until Next Var (Step forward)| <kbd>,</kbd>                         |

@@ -6,32 +6,13 @@ In this case, the problem is transparency. We want to know what happens in our s
 
 This is where *librat* comes in. It is a dependency free library to synchronise data between processes.
 
-!!! info
 
-    We'll start with a Ratslang file. To learn more about Ratslang, read the [Bagfile Query](./bagquery.md) chapter.
+We'll start with a descriptive file. To learn more about the used language, read the [Bagfile Query](./bagquery.md) chapter.
 
 ## `rule!`
 
 Define a strategy how a variable should be shared with a different Rat.
 
-
-~~~ title="Definition"
-rule! (<Var>
-  <Rats> <Operator> <Rats>
-  ...
-)
-~~~
-
-~~~ title="Definition Primitives"
-<Rats> := (String | LOG) [, <Rats>]
-<Operator> := -> | <- | == | =
-~~~
-
-!!! warning "Single Source Only"
-
-    Even though both sides of the operator can be an Array, the source side of it can never have more than one Rat. A line like `rat_a, rat_c -> rat_b` is not valid. `rat_b -> rat_a, rat_c` works and is interpreted as `rat_b` sending its variable to both `rat_a` and `rat_c`.
-
-Every variable inside a `rule!` block is expected to resolve to a connected Rat.
 
 ~~~awk title="Example"
 rule! (myvar
@@ -49,6 +30,25 @@ rule! (myvar
   rat1 -> LOG
 )
 ~~~
+
+!!! info "Formal Definition"
+    ~~~ title="Definition"
+    rule! (<Var>
+      <Rats> <Operator> <Rats>
+      ...
+    )
+    ~~~
+
+    ~~~ title="Definition Primitives"
+    <Rats> := (String | LOG) [, <Rats>]
+    <Operator> := -> | <- | == | =
+    ~~~
+
+
+    Even though both sides of the operator can be an Array, the source side of it can never have more than one Rat. A line like `rat_a, rat_c -> rat_b` is not valid. `rat_b -> rat_a, rat_c` works and is interpreted as `rat_b` sending its variable to both `rat_a` and `rat_c`.
+
+
+Every variable inside a `rule!` block is expected to resolve to a connected Rat.
 
 The `->` operator signalises sending the variable defined at the head from the left side of the operator to the right side. The data of the Rats on the right are overwritten. These operations are synchronised, meaning they wait for each other and block your thread.
 
