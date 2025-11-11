@@ -1,3 +1,66 @@
+## Quick Install
+
+For most users, the easiest way to install Minot is using the installation script with a single command:
+
+~~~bash title="Install with embedded Coordinator"
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s --embed coord
+~~~
+
+~~~bash title="Install with ROS2 publisher"
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --embed coord --ros-distro jazzy
+~~~
+
+Or download and run the script manually for more control:
+
+~~~bash
+wget https://raw.githubusercontent.com/uos/minot/main/install.sh
+chmod +x install.sh
+./install.sh --help
+~~~
+
+The installation script will:
+
+- Automatically detect your operating system and architecture
+- Download prebuilt binaries from GitHub releases if available
+- Fall back to building from source with `cargo install` if needed
+- Install binaries to `~/.local/bin` (customizable with `--dir`)
+- Offer to install Rust automatically if needed for building from source
+
+**Embedded Components:**
+
+Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed when building from source:
+
+- `jazzy` - ROS2 publisher (C API, needs sourced ROS2)
+- `humble` - ROS2 publisher (C API, needs sourced ROS2)
+
+Use the `--embed` option to specify which components to embed when building from source:
+
+- `coord` - Embedded coordinator (default)
+- `ratpub` - Ratpub publisher
+- `ros` - Both ROS1 and ROS2-C (needs ROS2 sourced)
+- `ros1` - ROS1 publisher (native, no system dependencies)
+- `ros2` - ROS2 publisher with RustDDS (native, no system dependencies)
+- `ros-native` - Both ROS1 and ROS2 native (no system dependencies)
+
+**Common usage examples:**
+
+~~~bash
+# Install with ROS2 Jazzy support
+./install.sh --ros-distro jazzy
+
+# Install specific version
+./install.sh --version v0.1.0-rc.5
+
+# Build with multiple components
+./install.sh --build --embed ros1 --ros-distro jazzy
+
+# Install to custom directory
+./install.sh --dir /usr/local/bin
+
+# Non-interactive mode (useful for CI/CD)
+./install.sh --yes --build --embed ratpub
+~~~
+
 ## Prebuilt Binaries
 
 Binaries for common system configurations are available [here](https://github.com/uos/minot/releases).
