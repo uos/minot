@@ -1,3 +1,46 @@
+## Quick Install
+
+For most users, the easiest way to install Minot is using the installation script:
+
+~~~bash title="Install latest version"
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
+~~~
+
+Or download and run the script manually:
+
+~~~bash
+wget https://raw.githubusercontent.com/uos/minot/main/install.sh
+chmod +x install.sh
+./install.sh --help
+~~~
+
+The installation script will:
+
+- Automatically detect your operating system and architecture
+- Download prebuilt binaries from GitHub releases if available
+- Fall back to building from source if needed
+- Install binaries to `~/.local/bin` (customizable with `--dir`)
+- Guide you through Rust installation if needed for building from source
+
+**Common usage examples:**
+
+~~~bash
+# Install with ROS2 Jazzy support
+./install.sh --ros-distro jazzy
+
+# Install with ROS2 Humble support
+./install.sh --ros-distro humble
+
+# Install specific version
+./install.sh --version v0.1.0-rc.5
+
+# Force build from source with custom features
+./install.sh --build --features embed-ros2-native,embed-ros1-native
+
+# Install to custom directory
+./install.sh --dir /usr/local/bin
+~~~
+
 ## Prebuilt Binaries
 
 Binaries for common system configurations are available [here](https://github.com/uos/minot/releases).
