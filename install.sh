@@ -17,13 +17,13 @@ FORCE_BUILD=0
 YES_TO_ALL=0
 
 # Color output (always enabled for better readability)
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+RED=$(printf '\033[0;31m')
+GREEN=$(printf '\033[0;32m')
+YELLOW=$(printf '\033[1;33m')
+BLUE=$(printf '\033[0;34m')
+CYAN=$(printf '\033[0;36m')
+BOLD=$(printf '\033[1m')
+NC=$(printf '\033[0m') # No Color
 
 info() {
     printf "${BLUE}${BOLD}==>${NC} ${BOLD}%s${NC}\n" "$1"
@@ -231,7 +231,7 @@ get_target_triple() {
     case "$OS_NAME" in
         linux)
             case "$ARCH_NAME" in
-                x86_64)
+                x86_66)
                     # ROS builds use gnu, otherwise prefer musl for better portability
                     if [ "$PREFER_GNU" = "1" ]; then
                         echo "x86_64-unknown-linux-gnu"
@@ -265,18 +265,22 @@ get_latest_version() {
     info "Fetching latest release version..."
     
     if command -v curl >/dev/null 2>&1; then
-        VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        # Use a cautious curl invocation; if it fails, fall back to build-from-source
+        VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
     elif command -v wget >/dev/null 2>&1; then
-        VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
     else
-        error "Neither curl nor wget found. Please install one of them."
+        warn "Neither curl nor wget found. Will fall back to building from source."
+        return 1
     fi
     
     if [ -z "$VERSION" ]; then
-        error "Failed to fetch latest version from GitHub"
+        warn "Failed to fetch latest version from GitHub. Will fall back to building from source."
+        return 1
     fi
-    
+
     success "Latest version: ${CYAN}$VERSION${NC}"
+    return 0
 }
 
 # Check if binary exists for target
@@ -313,43 +317,66 @@ download_and_install() {
     
     TMP_DIR=$(mktemp -d)
     trap "rm -rf '$TMP_DIR'" EXIT
-    
-    cd "$TMP_DIR"
-    
+
+    cd "$TMP_DIR" || { warn "Failed to enter temp dir; falling back to build"; return 1; }
+
     if command -v curl >/dev/null 2>&1; then
-        curl -sSfL "$URL" -o "$ARCHIVE_FILE" || error "Failed to download binary"
+        if ! curl -sSfL "$URL" -o "$ARCHIVE_FILE"; then
+            warn "Failed to download binary archive from GitHub: $URL"
+            return 1
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$URL" -O "$ARCHIVE_FILE" || error "Failed to download binary"
+        if ! wget -q "$URL" -O "$ARCHIVE_FILE"; then
+            warn "Failed to download binary archive from GitHub: $URL"
+            return 1
+        fi
+    else
+        warn "Neither curl nor wget found; cannot download binaries"
+        return 1
     fi
-    
+
     info "Extracting archive..."
-    tar xzf "$ARCHIVE_FILE" || error "Failed to extract archive"
-    
+    if ! tar xzf "$ARCHIVE_FILE"; then
+        warn "Failed to extract archive: $ARCHIVE_FILE"
+        return 1
+    fi
+
     # Create install directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
-    
+
     info "Installing binaries to $INSTALL_DIR..."
-    
+
+    INSTALLED_ANY=0
     # Install all binaries from the archive
-    for binary in "$ARCHIVE_NAME"/*; do
-        if [ -f "$binary" ] && [ -x "$binary" ]; then
-            BINARY_NAME=$(basename "$binary")
-            cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
-            chmod +x "$INSTALL_DIR/$BINARY_NAME"
-            success "Installed: $BINARY_NAME"
-        fi
-    done
-    
+    if [ -d "$ARCHIVE_NAME" ]; then
+        for binary in "$ARCHIVE_NAME"/*; do
+            if [ -f "$binary" ] && [ -x "$binary" ]; then
+                BINARY_NAME=$(basename "$binary")
+                cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
+                chmod +x "$INSTALL_DIR/$BINARY_NAME"
+                success "Installed: $BINARY_NAME"
+                INSTALLED_ANY=1
+            fi
+        done
+    fi
+
     # Install library files if present
     for lib_file in "$ARCHIVE_NAME"/*.a "$ARCHIVE_NAME"/*.so "$ARCHIVE_NAME"/*.dylib "$ARCHIVE_NAME"/*.h; do
         if [ -f "$lib_file" ]; then
             FILENAME=$(basename "$lib_file")
             cp "$lib_file" "$INSTALL_DIR/$FILENAME"
             success "Installed library: $FILENAME"
+            INSTALLED_ANY=1
         fi
     done
-    
-    cd - >/dev/null
+
+    if [ $INSTALLED_ANY -eq 0 ]; then
+        warn "Archive did not contain any installable files; falling back to building from source"
+        return 1
+    fi
+
+    cd - >/dev/null || true
+    return 0
 }
 
 # Check if Rust is installed
@@ -389,11 +416,11 @@ check_rust() {
 # Build from source
 build_from_source() {
     info "Building Minot from source..."
-    
+
     if ! check_rust; then
         error "Rust is required to build from source"
     fi
-    
+
     # Convert embed components to features if specified
     if [ -n "$EMBED_COMPONENTS" ]; then
         EMBED_FEATURES=$(embed_to_features "$EMBED_COMPONENTS")
@@ -403,39 +430,99 @@ build_from_source() {
             FEATURES="$EMBED_FEATURES"
         fi
     fi
-    
+
     # Determine features to build with
     BUILD_FEATURES="$FEATURES"
     if [ -z "$BUILD_FEATURES" ]; then
         # Default to embed-coord if no features specified
         BUILD_FEATURES="embed-coord"
     fi
-    
+
     info "Building with features: ${CYAN}$BUILD_FEATURES${NC}"
-    
+
+    # If a ROS distro was requested, only require that ROS is sourced into the environment.
+    # We can't reliably detect every install location, so check PATH for a sourced ROS
+    # (e.g. /opt/ros/<distro>/bin) or a ros2 binary. If not sourced, offer to source any
+    # setup script we can find under /opt/ros/*.
+    USE_BASH_SOURCE=0
+    ROS_SETUP=""
+    if [ -n "$ROS_DISTRO" ]; then
+        # Check for any /opt/ros/*/bin entry in PATH (this indicates ROS was sourced)
+        if echo ":${PATH}:" | grep -Eq '/opt/ros/[^:]+/bin'; then
+            info "ROS appears to be sourced (PATH contains /opt/ros/*/bin)."
+        elif command -v ros2 >/dev/null 2>&1; then
+            info "ROS appears to be available (found 'ros2' in PATH)."
+        else
+            # Not obviously sourced. Try to locate any setup script under /opt/ros
+            FOUND_SETUP=""
+            for p in /opt/ros/*/setup.bash /opt/ros/*/setup.sh /opt/ros/*/setup.zsh; do
+                if [ -f "$p" ]; then
+                    FOUND_SETUP="$p"
+                    break
+                fi
+            done
+
+            if [ -n "$FOUND_SETUP" ]; then
+                ROS_SETUP="$FOUND_SETUP"
+                if [ $YES_TO_ALL -eq 1 ]; then
+                    info "Auto-sourcing ${ROS_SETUP} for the build (--yes)."
+                    USE_BASH_SOURCE=1
+                else
+                    printf "\n"
+                    prompt "ROS does not appear to be sourced. Source ${ROS_SETUP} now for the build? [Y/n]"
+                    read -r resp
+                    case "$resp" in
+                        [nN][oO]|[nN])
+                            error "Please source ROS in your shell (or open a terminal with ROS sourced) and re-run this script."
+                            ;;
+                        *)
+                            USE_BASH_SOURCE=1
+                            ;;
+                    esac
+                fi
+            else
+                error "ROS does not appear to be sourced and no setup script was found under /opt/ros. Please source ROS in your shell or install ROS."
+            fi
+        fi
+    fi
+
     # Create install directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
-    
+
     # Prepare cargo install command
     CARGO_CMD="cargo install --git https://github.com/${REPO}.git minot --locked --features $BUILD_FEATURES"
-    
+
     # Add version/tag if specified
     if [ -n "$VERSION" ]; then
         CARGO_CMD="$CARGO_CMD --tag $VERSION"
     fi
-    
+
     # Set custom installation root if not using default cargo bin
     if [ "$INSTALL_DIR" != "${HOME}/.cargo/bin" ]; then
         # Calculate the root (parent of bin directory)
         INSTALL_ROOT=$(dirname "$INSTALL_DIR")
         CARGO_CMD="$CARGO_CMD --root $INSTALL_ROOT"
     fi
-    
+
     printf "\n${BOLD}Build command:${NC} ${CYAN}%s${NC}\n\n" "$CARGO_CMD"
-    
-    # Run cargo install
-    eval "$CARGO_CMD" || error "Build failed"
-    
+
+    # Run cargo install. If we need to source ROS, run the build in a bash subshell that sources the setup file first.
+    if [ "$USE_BASH_SOURCE" -eq 1 ]; then
+        if [ -n "$ROS_SETUP" ]; then
+            if command -v bash >/dev/null 2>&1; then
+                info "Running build in a bash subshell with ROS sourced: ${ROS_SETUP}"
+                bash -lc ". \"${ROS_SETUP}\" && ${CARGO_CMD}" || error "Build failed"
+            else
+                warn "bash not found; attempting to source using sh. This may fail for some ROS setups."
+                . "${ROS_SETUP}" && eval "$CARGO_CMD" || error "Build failed"
+            fi
+        else
+            error "Internal error: requested to source ROS but no setup script found."
+        fi
+    else
+        eval "$CARGO_CMD" || error "Build failed"
+    fi
+
     printf "\n"
     success "Installed: minot"
     success "Installed: minot-coord"
@@ -483,13 +570,103 @@ suggest_path_update() {
     fi
 }
 
+# Check if minot is already installed (in PATH or in the selected install dir)
+is_minot_installed() {
+    # If a 'minot' executable is on PATH, verify it behaves like Minot
+    if command -v minot >/dev/null 2>&1; then
+        MINOT_PATH=$(command -v minot)
+        # Try to read a version string; if it prints something non-empty, accept it.
+        MINOT_VER=$("$MINOT_PATH" --version 2>/dev/null || true)
+        if [ -n "$MINOT_VER" ]; then
+            return 0
+        else
+            # Found an executable named 'minot' but it didn't identify itself
+            warn "Found 'minot' at ${MINOT_PATH} but it did not return a version; ignoring this entry."
+        fi
+    fi
+
+    # Also consider installed if binaries exist in the chosen install directory
+    if [ -x "${INSTALL_DIR}/minot" ] || [ -x "${INSTALL_DIR}/minot-coord" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Prompt and (optionally) uninstall existing installation
+prompt_uninstall_existing() {
+    if ! is_minot_installed; then
+        return 0
+    fi
+
+    INSTALLED_VER=""
+    if command -v minot >/dev/null 2>&1; then
+        INSTALLED_VER=$(minot --version 2>/dev/null || true)
+    fi
+
+    if [ -n "$INSTALLED_VER" ]; then
+        info "Detected existing Minot: ${CYAN}${INSTALLED_VER}${NC}"
+    else
+        info "Detected existing Minot installation"
+    fi
+
+    if [ $YES_TO_ALL -eq 1 ]; then
+        info "Auto-uninstall enabled (-y): attempting to uninstall existing Minot..."
+        if command -v minot >/dev/null 2>&1; then
+            if minot uninstall >/dev/null 2>&1; then
+                success "Previous Minot uninstalled"
+                return 0
+            fi
+            error "Failed to run 'minot uninstall'. Please uninstall the existing Minot manually and re-run this script."
+        else
+            # No 'minot' command available; try removing binaries from INSTALL_DIR
+            if [ -f "${INSTALL_DIR}/minot" ] || [ -f "${INSTALL_DIR}/minot-coord" ]; then
+                rm -f "${INSTALL_DIR}/minot" "${INSTALL_DIR}/minot-coord" || error "Failed to remove existing binaries from ${INSTALL_DIR}. Please remove them manually."
+                success "Removed existing binaries from ${INSTALL_DIR}"
+                return 0
+            fi
+            error "Cannot run 'minot uninstall' and no binaries found in ${INSTALL_DIR}; please uninstall manually."
+        fi
+    fi
+
+    # Interactive prompt
+    printf "\n"
+    prompt "A previous Minot installation was detected. Would you like me to uninstall it now? [Y/n]"
+    read -r resp
+    case "$resp" in
+        [nN][oO]|[nN])
+            error "Please uninstall the existing Minot before proceeding, or re-run with --yes to auto-uninstall."
+            ;;
+        *)
+            info "Attempting to uninstall existing Minot..."
+            if command -v minot >/dev/null 2>&1; then
+                if minot uninstall >/dev/null 2>&1; then
+                    success "Previous Minot uninstalled"
+                    return 0
+                fi
+                error "Failed to run 'minot uninstall'. Please uninstall manually and re-run this script."
+            else
+                if [ -f "${INSTALL_DIR}/minot" ] || [ -f "${INSTALL_DIR}/minot-coord" ]; then
+                    rm -f "${INSTALL_DIR}/minot" "${INSTALL_DIR}/minot-coord" || error "Failed to remove existing binaries from ${INSTALL_DIR}. Please remove them manually."
+                    success "Removed existing binaries from ${INSTALL_DIR}"
+                    return 0
+                fi
+                error "No uninstaller available and no binaries found in ${INSTALL_DIR}; please uninstall manually."
+            fi
+            ;;
+    esac
+}
+
 # Main installation logic
 main() {
     parse_args "$@"
     
-    printf "\n${BOLD}${BLUE}╔════════════════════════════════════════╗${NC}\n"
-    printf "${BOLD}${BLUE}║${NC}  ${BOLD}Minot Installation Script${NC}         ${BOLD}${BLUE}║${NC}\n"
-    printf "${BOLD}${BLUE}╚════════════════════════════════════════╝${NC}\n\n"
+    printf "\n"
+    info "Minot Installation Script"
+    printf "\n"
+
+    # If an existing installation is present, offer to uninstall (or auto-uninstall with -y)
+    prompt_uninstall_existing
     
     # Detect system
     OS_NAME=$(detect_os)
@@ -506,15 +683,18 @@ main() {
     info "Detected system: ${CYAN}$OS_NAME${NC} (${CYAN}$ARCH_NAME${NC})"
     info "Target triple: ${CYAN}$TARGET${NC}"
     
-    # Get version if not specified
-    if [ -z "$VERSION" ]; then
-        get_latest_version
-    else
-        info "Installing version: ${CYAN}$VERSION${NC}"
-    fi
-    
     # Try to download prebuilt binary unless forced to build
     if [ $FORCE_BUILD -eq 0 ]; then
+    
+        if [ -z "$VERSION" ]; then
+            if ! get_latest_version; then
+                # If fetching version fails, fall back to building from source
+                FORCE_BUILD=1
+            fi
+        else
+            info "Installing version: ${CYAN}$VERSION${NC}"
+        fi
+        
         # Determine archive name based on ROS distro
         if [ -n "$ROS_DISTRO" ]; then
             ARCHIVE_NAME="minot-${ROS_DISTRO}-${TARGET}"
@@ -527,7 +707,10 @@ main() {
         if check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION"; then
             success "Found prebuilt binary!"
             printf "\n"
-            download_and_install "$TARGET" "$ARCHIVE_NAME" "$VERSION"
+            if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$VERSION"; then
+                warn "Installing prebuilt binary failed — will fall back to building from source"
+                FORCE_BUILD=1
+            fi
         else
             warn "No prebuilt binary found for your system"
             
@@ -557,12 +740,18 @@ main() {
     # Build from source if necessary
     if [ $FORCE_BUILD -eq 1 ]; then
         printf "\n"
+        
+        if [ -n "$VERSION" ]; then
+            info "Building from source, targeting version: ${CYAN}$VERSION${NC}"
+        else
+            info "Building from source (latest)"
+        fi
+        
         build_from_source
     fi
     
-    printf "\n${BOLD}${GREEN}╔════════════════════════════════════════╗${NC}\n"
-    printf "${BOLD}${GREEN}║${NC}  ${BOLD}Installation Complete!${NC}             ${BOLD}${GREEN}║${NC}\n"
-    printf "${BOLD}${GREEN}╚════════════════════════════════════════╝${NC}\n\n"
+    printf "\n"
+    success "Installation Complete!"
     
     # Check if binaries are accessible
     suggest_path_update
@@ -570,6 +759,12 @@ main() {
     printf "\n${BOLD}Next steps:${NC}\n"
     printf "  ${GREEN}1.${NC} Verify installation: ${CYAN}minot --help${NC}\n"
     printf "  ${GREEN}2.${NC} Read the docs: ${BLUE}https://uos.github.io/minot/${NC}\n\n"
+    
+    printf "${BOLD}To uninstall:${NC}\n"
+    printf "  Run the built-in uninstaller (this is the recommended way):\n"
+    printf "    ${CYAN}minot uninstall${NC}\n\n"
+    printf "  ${BOLD}Note:${NC} This will remove the 'minot' and 'minot-coord' binaries.\n"
+    
 }
 
 # Run main function
