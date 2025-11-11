@@ -2,26 +2,12 @@
 
 For most users, the easiest way to install Minot is using the installation script with a single command:
 
-~~~bash title="Install latest version (one-line command)"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
+~~~bash title="Install with embedded Coordinator"
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s --embed coord
 ~~~
 
-You can also pass arguments to customize the installation:
-
-~~~bash title="Install with ROS2 Jazzy support"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --ros-distro jazzy
-~~~
-
-~~~bash title="Install specific version"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --version v0.1.0-rc.5
-~~~
-
-~~~bash title="Build from source with embedded ROS2 native support"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --build --embed ros2
-~~~
-
-~~~bash title="Build with multiple embedded components"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --build --embed coord,ros1,ros2
+~~~bash title="Install with ROS2 publisher"
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --embed coord --ros-distro jazzy
 ~~~
 
 Or download and run the script manually for more control:
@@ -42,14 +28,18 @@ The installation script will:
 
 **Embedded Components:**
 
+Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed when building from source:
+
+- `jazzy` - ROS2 publisher (C API, needs sourced ROS2)
+- `humble` - ROS2 publisher (C API, needs sourced ROS2)
+
 Use the `--embed` option to specify which components to embed when building from source:
 
 - `coord` - Embedded coordinator (default)
-- `ros1` - ROS1 publisher (native, no system dependencies)
-- `ros2` - ROS2 publisher (native, no system dependencies)
-- `ros2-c` - ROS2 publisher (C API, needs sourced ROS2)
 - `ratpub` - Ratpub publisher
-- `ros` - Both ROS1 and ROS2-C (needs both sourced)
+- `ros` - Both ROS1 and ROS2-C (needs ROS2 sourced)
+- `ros1` - ROS1 publisher (native, no system dependencies)
+- `ros2` - ROS2 publisher with RustDDS (native, no system dependencies)
 - `ros-native` - Both ROS1 and ROS2 native (no system dependencies)
 
 **Common usage examples:**
@@ -58,23 +48,17 @@ Use the `--embed` option to specify which components to embed when building from
 # Install with ROS2 Jazzy support
 ./install.sh --ros-distro jazzy
 
-# Install with ROS2 Humble support
-./install.sh --ros-distro humble
-
 # Install specific version
 ./install.sh --version v0.1.0-rc.5
 
-# Build from source with embedded components
-./install.sh --build --embed ros2
-
 # Build with multiple components
-./install.sh --build --embed coord,ros1,ros2
+./install.sh --build --embed ros1 --ros-distro jazzy
 
 # Install to custom directory
 ./install.sh --dir /usr/local/bin
 
 # Non-interactive mode (useful for CI/CD)
-./install.sh --yes --build --embed ros-native
+./install.sh --yes --build --embed ratpub
 ~~~
 
 ## Prebuilt Binaries

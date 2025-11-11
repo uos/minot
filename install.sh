@@ -15,6 +15,7 @@ EMBED_COMPONENTS=""
 ROS_DISTRO=""
 FORCE_BUILD=0
 YES_TO_ALL=0
+NO_DEFAULT_EMBED=0
 
 # Color output (always enabled for better readability)
 RED=$(printf '\033[0;31m')
@@ -60,18 +61,18 @@ ${BOLD}OPTIONS:${NC}
     -d, --dir DIR             Installation directory (default: ~/.local/bin)
     -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, ratpub, ros, ros-native)
     -f, --features FEATURES   Advanced: Raw cargo features (comma-separated)
-    -r, --ros-distro DISTRO   ROS distribution (humble, jazzy) for ROS-specific builds
+    -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (jazzy, humble). Requires ROS2 sourced.
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
+    -n, --no-default-embed    Do not enable the default 'coord' embed when building
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
-    ros1          ROS1 publisher (native, no system deps)
-    ros2          ROS2 publisher (native, no system deps)
-    ros2-c        ROS2 publisher (C API, needs sourced ROS2)
     ratpub        Ratpub publisher
-    ros           Both ROS1 and ROS2-C (needs both sourced)
-    ros-native    Both ROS1 and ROS2 native (no system deps)
+    ros           Both ROS1 and ROS2-C (needs ROS2 sourced)
+    ros1          ROS1 publisher (native, no system dependencies)
+    ros2          ROS2 publisher with RustDDS (native, no system dependencies)
+    ros-native    Both ROS1 and ROS2 native (no system dependencies)
 
 ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Install latest version from prebuilt binary${NC}
@@ -120,9 +121,6 @@ embed_to_features() {
             ros2)
                 RESULT="${RESULT},embed-ros2-native"
                 ;;
-            ros2-c)
-                RESULT="${RESULT},embed-ros2-c"
-                ;;
             ratpub)
                 RESULT="${RESULT},embed-ratpub"
                 ;;
@@ -163,6 +161,10 @@ parse_args() {
             -e|--embed)
                 EMBED_COMPONENTS="$2"
                 shift 2
+                ;;
+            -n|--no-default-embed)
+                NO_DEFAULT_EMBED=1
+                shift
                 ;;
             -f|--features)
                 FEATURES="$2"
@@ -434,8 +436,31 @@ build_from_source() {
     # Determine features to build with
     BUILD_FEATURES="$FEATURES"
     if [ -z "$BUILD_FEATURES" ]; then
-        # Default to embed-coord if no features specified
-        BUILD_FEATURES="embed-coord"
+        # Default to embed-coord if no features specified, unless user opted out
+        if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
+            BUILD_FEATURES="embed-coord"
+        else
+            BUILD_FEATURES=""
+        fi
+    fi
+
+    # If a ROS distro was requested, ensure the ROS2 C API embed feature is enabled
+    # (embed-ros2-c). This is controlled by --ros-distro (jazzy/humble). We only add
+    # the feature if it isn't already present (via --embed or --features).
+    if [ -n "$ROS_DISTRO" ]; then
+        ROS2_C_FEATURE="embed-ros2-c"
+        case ",$BUILD_FEATURES," in
+            *,${ROS2_C_FEATURE},*|*,embed-ros,*)
+                # already present or a combined 'embed-ros' feature exists; do nothing
+                ;;
+            *)
+                if [ -n "$BUILD_FEATURES" ]; then
+                    BUILD_FEATURES="${BUILD_FEATURES},${ROS2_C_FEATURE}"
+                else
+                    BUILD_FEATURES="${ROS2_C_FEATURE}"
+                fi
+                ;;
+        esac
     fi
 
     info "Building with features: ${CYAN}$BUILD_FEATURES${NC}"
@@ -489,8 +514,11 @@ build_from_source() {
     # Create install directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
 
-    # Prepare cargo install command
-    CARGO_CMD="cargo install --git https://github.com/${REPO}.git minot --locked --features $BUILD_FEATURES"
+    # Prepare cargo install command. Only pass --features if non-empty.
+    CARGO_CMD="cargo install --git https://github.com/${REPO}.git minot --locked"
+    if [ -n "$BUILD_FEATURES" ]; then
+        CARGO_CMD="$CARGO_CMD --features $BUILD_FEATURES"
+    fi
 
     # Add version/tag if specified
     if [ -n "$VERSION" ]; then
