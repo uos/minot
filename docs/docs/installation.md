@@ -49,7 +49,7 @@ Use the `--embed` option to specify which components to embed when building from
 ./install.sh --ros-distro jazzy
 
 # Install specific version
-./install.sh --version v0.1.0-rc.5
+./install.sh --version v0.1.0-rc.6
 
 # Build with multiple components
 ./install.sh --build --embed ros1 --ros-distro jazzy
