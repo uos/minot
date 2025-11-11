@@ -11,76 +11,137 @@ GITHUB_API="https://api.github.com/repos/${REPO}"
 GITHUB_RELEASE="https://github.com/${REPO}/releases/download"
 VERSION=""
 FEATURES=""
+EMBED_COMPONENTS=""
 ROS_DISTRO=""
 FORCE_BUILD=0
+YES_TO_ALL=0
 
-# Color output
-if [ -t 1 ]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    NC='\033[0m' # No Color
-else
-    RED=''
-    GREEN=''
-    YELLOW=''
-    BLUE=''
-    NC=''
-fi
+# Color output (always enabled for better readability)
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
 
 info() {
-    printf "${BLUE}==>${NC} %s\n" "$1"
+    printf "${BLUE}${BOLD}==>${NC} ${BOLD}%s${NC}\n" "$1"
 }
 
 success() {
-    printf "${GREEN}==>${NC} %s\n" "$1"
+    printf "${GREEN}${BOLD}✓${NC} ${GREEN}%s${NC}\n" "$1"
 }
 
 warn() {
-    printf "${YELLOW}Warning:${NC} %s\n" "$1"
+    printf "${YELLOW}${BOLD}⚠${NC} ${YELLOW}%s${NC}\n" "$1"
 }
 
 error() {
-    printf "${RED}Error:${NC} %s\n" "$1" >&2
+    printf "${RED}${BOLD}✗${NC} ${RED}%s${NC}\n" "$1" >&2
     exit 1
+}
+
+prompt() {
+    printf "${CYAN}?${NC} %s " "$1"
 }
 
 # Print usage information
 usage() {
     cat <<EOF
-Minot Installation Script
+${BOLD}Minot Installation Script${NC}
 
-USAGE:
+${BOLD}USAGE:${NC}
     install.sh [OPTIONS]
 
-OPTIONS:
-    -h, --help              Show this help message
-    -v, --version VERSION   Install specific version (default: latest)
-    -d, --dir DIR           Installation directory (default: ~/.local/bin)
-    -f, --features FEATURES Cargo features for building from source (comma-separated)
-    -r, --ros-distro DISTRO ROS distribution (humble, jazzy) for ROS-specific builds
-    -b, --build             Force build from source (skip binary download)
+${BOLD}OPTIONS:${NC}
+    -h, --help                Show this help message
+    -v, --version VERSION     Install specific version (default: latest)
+    -d, --dir DIR             Installation directory (default: ~/.local/bin)
+    -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, ratpub, ros, ros-native)
+    -f, --features FEATURES   Advanced: Raw cargo features (comma-separated)
+    -r, --ros-distro DISTRO   ROS distribution (humble, jazzy) for ROS-specific builds
+    -b, --build               Force build from source (skip binary download)
+    -y, --yes                 Assume yes to all prompts
 
-EXAMPLES:
-    # Install latest version from prebuilt binary
+${BOLD}EMBED COMPONENTS:${NC}
+    coord         Embedded coordinator (default)
+    ros1          ROS1 publisher (native, no system deps)
+    ros2          ROS2 publisher (native, no system deps)
+    ros2-c        ROS2 publisher (C API, needs sourced ROS2)
+    ratpub        Ratpub publisher
+    ros           Both ROS1 and ROS2-C (needs both sourced)
+    ros-native    Both ROS1 and ROS2 native (no system deps)
+
+${BOLD}EXAMPLES:${NC}
+    ${CYAN}# Install latest version from prebuilt binary${NC}
     ./install.sh
 
-    # Install specific version
-    ./install.sh --version v0.1.0-rc.5
+    ${CYAN}# Single-line installation${NC}
+    curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
 
-    # Install with ROS2 Jazzy support
+    ${CYAN}# Install with ROS2 Jazzy support${NC}
     ./install.sh --ros-distro jazzy
 
-    # Force build from source with features
-    ./install.sh --build --features embed-ros2-native,embed-ros1-native
+    ${CYAN}# Build with embedded ROS2 native support${NC}
+    ./install.sh --build --embed ros2
 
-    # Install to custom directory
+    ${CYAN}# Build with multiple embedded components${NC}
+    ./install.sh --build --embed coord,ros1,ros2
+
+    ${CYAN}# Install to custom directory${NC}
     ./install.sh --dir /usr/local/bin
 
-For more information, visit: https://uos.github.io/minot/installation.html
+    ${CYAN}# Non-interactive mode${NC}
+    ./install.sh --yes --build --embed ros-native
+
+For more information, visit: ${BLUE}https://uos.github.io/minot/installation.html${NC}
 
 EOF
+}
+
+# Convert embed components to cargo features
+embed_to_features() {
+    EMBED_LIST="$1"
+    RESULT=""
+    
+    # Split by comma and process each component
+    OLD_IFS="$IFS"
+    IFS=","
+    for component in $EMBED_LIST; do
+        component=$(echo "$component" | tr -d ' ')
+        case "$component" in
+            coord)
+                RESULT="${RESULT},embed-coord"
+                ;;
+            ros1)
+                RESULT="${RESULT},embed-ros1-native"
+                ;;
+            ros2)
+                RESULT="${RESULT},embed-ros2-native"
+                ;;
+            ros2-c)
+                RESULT="${RESULT},embed-ros2-c"
+                ;;
+            ratpub)
+                RESULT="${RESULT},embed-ratpub"
+                ;;
+            ros)
+                RESULT="${RESULT},embed-ros"
+                ;;
+            ros-native)
+                RESULT="${RESULT},embed-ros-native"
+                ;;
+            *)
+                warn "Unknown embed component: $component (will be ignored)"
+                ;;
+        esac
+    done
+    IFS="$OLD_IFS"
+    
+    # Remove leading comma
+    RESULT=$(echo "$RESULT" | sed 's/^,//')
+    echo "$RESULT"
 }
 
 # Parse command line arguments
@@ -99,6 +160,10 @@ parse_args() {
                 INSTALL_DIR="$2"
                 shift 2
                 ;;
+            -e|--embed)
+                EMBED_COMPONENTS="$2"
+                shift 2
+                ;;
             -f|--features)
                 FEATURES="$2"
                 shift 2
@@ -109,6 +174,10 @@ parse_args() {
                 ;;
             -b|--build)
                 FORCE_BUILD=1
+                shift
+                ;;
+            -y|--yes)
+                YES_TO_ALL=1
                 shift
                 ;;
             *)
@@ -207,7 +276,7 @@ get_latest_version() {
         error "Failed to fetch latest version from GitHub"
     fi
     
-    info "Latest version: $VERSION"
+    success "Latest version: ${CYAN}$VERSION${NC}"
 }
 
 # Check if binary exists for target
@@ -287,21 +356,32 @@ download_and_install() {
 check_rust() {
     if ! command -v cargo >/dev/null 2>&1; then
         warn "Rust is not installed on your system."
-        printf "\nTo build Minot from source, you need to install Rust.\n"
+        printf "\n${BOLD}To build Minot from source, you need to install Rust.${NC}\n"
         printf "Visit: ${BLUE}https://rustup.rs/${NC}\n\n"
         printf "Quick install command:\n"
         printf "  ${GREEN}curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh${NC}\n\n"
         
-        printf "Would you like to continue without installing? [y/N] "
-        read -r response
-        case "$response" in
-            [yY][eE][sS]|[yY]) 
-                ;;
-            *)
-                exit 1
-                ;;
-        esac
-        return 1
+        if [ $YES_TO_ALL -eq 0 ]; then
+            prompt "Would you like to install Rust now? [Y/n]"
+            read -r response
+            case "$response" in
+                [nN][oO]|[nN])
+                    exit 1
+                    ;;
+                *)
+                    info "Installing Rust..."
+                    if command -v curl >/dev/null 2>&1; then
+                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || error "Failed to install Rust"
+                        . "$HOME/.cargo/env"
+                        success "Rust installed successfully!"
+                    else
+                        error "curl is required to install Rust. Please install curl or Rust manually."
+                    fi
+                    ;;
+            esac
+        else
+            error "Rust is required to build from source. Install it from https://rustup.rs/"
+        fi
     fi
     return 0
 }
@@ -314,24 +394,15 @@ build_from_source() {
         error "Rust is required to build from source"
     fi
     
-    # Check if git is available
-    if ! command -v git >/dev/null 2>&1; then
-        error "Git is required to build from source. Please install git."
+    # Convert embed components to features if specified
+    if [ -n "$EMBED_COMPONENTS" ]; then
+        EMBED_FEATURES=$(embed_to_features "$EMBED_COMPONENTS")
+        if [ -n "$FEATURES" ]; then
+            FEATURES="${FEATURES},${EMBED_FEATURES}"
+        else
+            FEATURES="$EMBED_FEATURES"
+        fi
     fi
-    
-    TMP_DIR=$(mktemp -d)
-    trap "rm -rf '$TMP_DIR'" EXIT
-    
-    cd "$TMP_DIR"
-    
-    info "Cloning repository..."
-    if [ -n "$VERSION" ]; then
-        git clone --depth 1 --branch "$VERSION" "https://github.com/${REPO}.git" minot || error "Failed to clone repository"
-    else
-        git clone --depth 1 "https://github.com/${REPO}.git" minot || error "Failed to clone repository"
-    fi
-    
-    cd minot
     
     # Determine features to build with
     BUILD_FEATURES="$FEATURES"
@@ -340,31 +411,34 @@ build_from_source() {
         BUILD_FEATURES="embed-coord"
     fi
     
-    info "Building with features: $BUILD_FEATURES"
-    
-    # Build minot
-    cargo build --release --package minot --features "$BUILD_FEATURES" || error "Build failed"
+    info "Building with features: ${CYAN}$BUILD_FEATURES${NC}"
     
     # Create install directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
     
-    info "Installing binaries to $INSTALL_DIR..."
+    # Prepare cargo install command
+    CARGO_CMD="cargo install --git https://github.com/${REPO}.git minot --locked --features $BUILD_FEATURES"
     
-    # Install minot binary
-    if [ -f "target/release/minot" ]; then
-        cp target/release/minot "$INSTALL_DIR/minot"
-        chmod +x "$INSTALL_DIR/minot"
-        success "Installed: minot"
+    # Add version/tag if specified
+    if [ -n "$VERSION" ]; then
+        CARGO_CMD="$CARGO_CMD --tag $VERSION"
     fi
     
-    # Install minot-coord if it exists
-    if [ -f "target/release/minot-coord" ]; then
-        cp target/release/minot-coord "$INSTALL_DIR/minot-coord"
-        chmod +x "$INSTALL_DIR/minot-coord"
-        success "Installed: minot-coord"
+    # Set custom installation root if not using default cargo bin
+    if [ "$INSTALL_DIR" != "${HOME}/.cargo/bin" ]; then
+        # Calculate the root (parent of bin directory)
+        INSTALL_ROOT=$(dirname "$INSTALL_DIR")
+        CARGO_CMD="$CARGO_CMD --root $INSTALL_ROOT"
     fi
     
-    cd - >/dev/null
+    printf "\n${BOLD}Build command:${NC} ${CYAN}%s${NC}\n\n" "$CARGO_CMD"
+    
+    # Run cargo install
+    eval "$CARGO_CMD" || error "Build failed"
+    
+    printf "\n"
+    success "Installed: minot"
+    success "Installed: minot-coord"
 }
 
 # Check if installation directory is in PATH
@@ -413,8 +487,9 @@ suggest_path_update() {
 main() {
     parse_args "$@"
     
-    info "Minot Installation Script"
-    printf "\n"
+    printf "\n${BOLD}${BLUE}╔════════════════════════════════════════╗${NC}\n"
+    printf "${BOLD}${BLUE}║${NC}  ${BOLD}Minot Installation Script${NC}         ${BOLD}${BLUE}║${NC}\n"
+    printf "${BOLD}${BLUE}╚════════════════════════════════════════╝${NC}\n\n"
     
     # Detect system
     OS_NAME=$(detect_os)
@@ -428,12 +503,14 @@ main() {
     
     TARGET=$(get_target_triple "$OS_NAME" "$ARCH_NAME" "$PREFER_GNU")
     
-    info "Detected system: $OS_NAME ($ARCH_NAME)"
-    info "Target triple: $TARGET"
+    info "Detected system: ${CYAN}$OS_NAME${NC} (${CYAN}$ARCH_NAME${NC})"
+    info "Target triple: ${CYAN}$TARGET${NC}"
     
     # Get version if not specified
     if [ -z "$VERSION" ]; then
         get_latest_version
+    else
+        info "Installing version: ${CYAN}$VERSION${NC}"
     fi
     
     # Try to download prebuilt binary unless forced to build
@@ -441,7 +518,7 @@ main() {
         # Determine archive name based on ROS distro
         if [ -n "$ROS_DISTRO" ]; then
             ARCHIVE_NAME="minot-${ROS_DISTRO}-${TARGET}"
-            info "Looking for ROS ${ROS_DISTRO} prebuilt binary..."
+            info "Looking for ROS ${CYAN}${ROS_DISTRO}${NC} prebuilt binary..."
         else
             ARCHIVE_NAME="minot-${TARGET}"
             info "Looking for prebuilt binary..."
@@ -449,44 +526,50 @@ main() {
         
         if check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION"; then
             success "Found prebuilt binary!"
+            printf "\n"
             download_and_install "$TARGET" "$ARCHIVE_NAME" "$VERSION"
         else
             warn "No prebuilt binary found for your system"
             
             # If ROS distro was specified but no binary found, inform user
             if [ -n "$ROS_DISTRO" ]; then
-                info "ROS ${ROS_DISTRO} build not available for ${TARGET}"
+                info "ROS ${CYAN}${ROS_DISTRO}${NC} build not available for ${CYAN}${TARGET}${NC}"
             fi
             
-            printf "\nWould you like to build from source? [Y/n] "
-            read -r response
-            case "$response" in
-                [nN][oO]|[nN])
-                    error "Installation cancelled"
-                    ;;
-                *)
-                    FORCE_BUILD=1
-                    ;;
-            esac
+            if [ $YES_TO_ALL -eq 0 ]; then
+                printf "\n"
+                prompt "Would you like to build from source? [Y/n]"
+                read -r response
+                case "$response" in
+                    [nN][oO]|[nN])
+                        error "Installation cancelled"
+                        ;;
+                    *)
+                        FORCE_BUILD=1
+                        ;;
+                esac
+            else
+                FORCE_BUILD=1
+            fi
         fi
     fi
     
     # Build from source if necessary
     if [ $FORCE_BUILD -eq 1 ]; then
+        printf "\n"
         build_from_source
     fi
     
-    printf "\n"
-    success "Installation complete!"
+    printf "\n${BOLD}${GREEN}╔════════════════════════════════════════╗${NC}\n"
+    printf "${BOLD}${GREEN}║${NC}  ${BOLD}Installation Complete!${NC}             ${BOLD}${GREEN}║${NC}\n"
+    printf "${BOLD}${GREEN}╚════════════════════════════════════════╝${NC}\n\n"
     
     # Check if binaries are accessible
     suggest_path_update
     
-    printf "\nVerify installation by running:\n"
-    printf "  ${GREEN}minot --help${NC}\n\n"
-    
-    printf "For more information, visit:\n"
-    printf "  ${BLUE}https://uos.github.io/minot/${NC}\n\n"
+    printf "\n${BOLD}Next steps:${NC}\n"
+    printf "  ${GREEN}1.${NC} Verify installation: ${CYAN}minot --help${NC}\n"
+    printf "  ${GREEN}2.${NC} Read the docs: ${BLUE}https://uos.github.io/minot/${NC}\n\n"
 }
 
 # Run main function
