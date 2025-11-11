@@ -130,6 +130,11 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
                 app.wind_toggle_select();
             }
         }
+        KeyCode::Char('z') => {
+            if app.wind_mode() {
+                app.wind_toggle_zen();
+            }
+        }
         KeyCode::Char('*') => {
             if app.wind_mode() {
                 app.wind_cursor(None);
@@ -149,10 +154,18 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
             }
         }
         KeyCode::PageUp => {
-            app.change_diff_rat(crate::app::VerticalDirection::Up);
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_diff_rat(crate::app::VerticalDirection::Up);
+            } else {
+                app.select_prev_label();
+            }
         }
         KeyCode::PageDown => {
-            app.change_diff_rat(crate::app::VerticalDirection::Down);
+            if key_event.modifiers == KeyModifiers::CONTROL {
+                app.change_diff_rat(crate::app::VerticalDirection::Down);
+            } else {
+                app.select_next_label();
+            }
         }
         KeyCode::Enter => {
             if app.wind_mode() && app.wind_cursor.read().unwrap().showing_popup {

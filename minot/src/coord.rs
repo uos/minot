@@ -1,14 +1,22 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use anyhow::anyhow;
+use clap::Parser;
 use log::{debug, error, info, warn};
 use sea::net::Packet;
 use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
 use rlc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};
 use sea::{Coordinator, WindData};
+
+#[derive(Parser, Debug)]
+#[command(version, about, author, long_about = None)]
+/// Minot Coordinator — Network Manager for Ratpub Nodes
+pub struct Args {
+    /// Path to .rl file for initialization
+    pub file: Option<PathBuf>,
+}
 
 pub fn topic_from_eval_or_default(
     eval: &rlc::Evaluated,
@@ -662,12 +670,10 @@ pub async fn main() -> anyhow::Result<()> {
     let env = env_logger::Env::new().filter_or("RUST_LOG", "info");
     env_logger::Builder::from_env(env).init();
 
-    // file can be rules or wind set by _wind var
-    let filepath = std::env::args().nth(1);
+    let filepath = Args::parse().file;
 
     let eval = if let Some(fp) = filepath {
-        let rules_file = PathBuf::from_str(&fp)?;
-        let rules_file = std::fs::canonicalize(&rules_file)?;
+        let rules_file = std::fs::canonicalize(&fp)?;
         rlc::compile_file(&rules_file, None, None)?
     } else {
         rlc::Evaluated {

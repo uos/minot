@@ -1,0 +1,103 @@
+{
+  "name": "minot",
+  "displayName": "Minot",
+  "description": "Bagfile Query Integration",
+  "version": "0.1.0-rc.6",
+  "engines": {
+  "vscode": "^1.105.0",
+  "minot": "0.1.0-rc.6"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "mt",
+        "aliases": ["Minot", "mt"],
+        "extensions": [".mt", ".minot"],
+        "configuration": "./mt.configuration.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "minot.compileAndExecute",
+        "title": "Minot: Run Selected Lines"
+      },
+      {
+        "command": "minot.toggleLock",
+        "title": "Minot: Toggle Lock/Unlock"
+      },
+      {
+        "command": "minot.sendUnlock",
+        "title": "Minot: Unlock (internal)"
+      },
+      {
+        "command": "minot.sendLockNext",
+        "title": "Minot: Lock (internal)"
+      },
+      {
+        "command": "minot.sendLockNextPrevious",
+        "title": "Minot: Step Once"
+      },
+      {
+        "command": "minot.clearRules",
+        "title": "Minot: Clear Rules"
+      },
+      {
+        "command": "minot.restartServer",
+        "title": "Minot: Restart Server"
+      }
+    ],
+    "keybindings": [
+      {
+        "key": "ctrl+-",
+        "command": "minot.toggleLock",
+        "when": "editorTextFocus"
+      },
+      {
+        "key": "ctrl+,",
+        "command": "minot.sendLockNextPrevious",
+        "when": "editorTextFocus"
+      },
+      {
+        "key": "ctrl+.",
+        "command": "minot.sendUnlock",
+        "when": "editorTextFocus"
+      },
+      {
+        "key": "ctrl+shift+enter",
+        "command": "minot.compileAndExecute",
+        "when": "editorTextFocus"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mt",
+        "scopeName": "source.mt",
+        "path": "./syntaxes/mt.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.105.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@typescript-eslint/eslint-plugin": "^8.45.0",
+    "@typescript-eslint/parser": "^8.45.0",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
