@@ -1,4 +1,6 @@
 rl/* linguist-vendored
 rat/examples/* linguist-vendored
 rat/rat.h linguist-vendored
-
+install.sh linguist-vendored
+docs/* linguist-vendored
+msg/* linguist-vendored
