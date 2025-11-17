@@ -1,22 +1,9 @@
 # Introduction
 
-**Minot** [mai·not] provides primitives for developing and validating stateful robot software.
+**Minot** [mai·not] provides primitives for developing and verifying robot software with in a single executable binary.
 
-When developing, we want to solve a small problem that plays nicely with the larger system. Modularity is one of the main goals of ROS. And while developing and integrating these modules, Minot is here to help.
+Its main features are built around Bagfiles from ROS2 that use MCAP for storage.
 
-!!! question "The Pain Leading to Minot"
-
-    === "Message Timing"
-
-        Does your system behave different each time you play a Bagfile until you find out it actually works when playing it a little bit slower?
-
-    === "Ignore Networking"
-
-        Have you ever asked yourself why you should care about QoS settings, out-of-order message pipelines or the dependency of ROS2 itself when developing a Proof of Concept?
-
-    === "Reproducability"
-
-        Did you ever develop a ROS Node with state that unexpectedly changes for some reason and now you try to reproduce it?
 
 All the provided features are meant to be used at development time to give you full control over the incoming data. It gives you transparency for complex systems where thousands of small sensor data packets are processed each second. With Minot, you regain control and explainability over what's happening when developing and integrating your Robot.
 
@@ -42,7 +29,7 @@ We synchronise the Bagfile with our node using a unique approach: an empty varia
 
 **How?**
 
-Minot is a collection of binaries and libraries. They can be used in your existing ROS1 or ROS2 nodes or completely separate from any system. This allows cross-ROS communication using its own networking layer without adding dependencies. With Minot you can also write, test and debug ROS perception nodes without needing ROS on your system (currently Rust-only). This is especially useful for testing, where determinism is essential. When you are done, just comment out a few lines or change a compile flag and you are ready to run your node in ROS.
+Minot is a collection of binaries and libraries. They can be used in your existing ROS1 or ROS2 nodes or completely separate from any system. This allows cross-ROS communication using its own networking layer without adding dependencies. With Minot, you can also write, test and debug ROS perception nodes without needing ROS on your system (currently Rust-only). This is especially useful for testing, where determinism is essential. When you are done, just comment out a few lines or change a compile flag and you are ready to run your node in ROS.
 
 There are 3 features. They can be used standalone but when combined, they enable superpowers.
 
@@ -54,86 +41,53 @@ It introduces a small, embedded language and functions for maximal control over 
 
 
 ### Quickstart
-=== "Ubuntu 24.04 + Jazzy"
 
-    ~~~ bash title="Setup"
-    mkdir minot-bagfile-demo && cd minot-bagfile-demo
-    source /opt/ros/jazzy/setup.bash
-    sudo apt install rustup curl unzip
+~~~ bash title="Setup"
+sudo apt install curl unzip
 
-    # Get Minot with ROS2 publisher
-    cargo install \
-      --git https://github.com/uos/minot minot \
-      --locked \
-      --features embed-ros2-c
+mkdir minot-bagfile-demo && cd minot-bagfile-demo
+source /opt/ros/jazzy/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash
 
-    # Get a Bagfile saved with mcap storage
-    curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
-        && unzip dlg_cut.zip \
-        && rm dlg_cut.zip
+# Get Minot with ROS2 publisher
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh --ros-distro $ROS_DISTRO
 
-    # Get the query
-    curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
+# Get a Bagfile saved with mcap storage
+curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
+    && unzip dlg_cut.zip \
+    && rm dlg_cut.zip
 
-    # Get the rviz demo preset
-    curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+# Get the query
+curl -Lo demo.mt "https://uos.github.io/minot/assets/demo_publish.mt"
 
-    # Run rviz and wait for data
-    rviz2 -d demo.rviz
-    ~~~
+# Get the rviz demo preset
+curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
 
-=== "Ubuntu 22.04 + Humble"
-
-    Make sure you have [Rust installed](https://www.rust-lang.org/tools/install).
-    ~~~ bash title="Setup"
-    mkdir minot-bagfile-demo && cd minot-bagfile-demo
-    source /opt/ros/humble/setup.bash
-    sudo apt install curl unzip
-
-    # Get Minot with ROS2 publisher
-    cargo install \
-      --git https://github.com/uos/minot minot \
-      --locked \
-      --features embed-ros2-c-humble
-
-    # Get a Bagfile saved with mcap storage
-    curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
-        && unzip dlg_cut.zip \
-        && rm dlg_cut.zip
-
-    # Get the query
-    curl -Lo demo.rl "https://uos.github.io/minot/assets/demo_publish.rl"
-
-    # Get the rviz demo preset
-    curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
-
-    # Run rviz and wait for data
-    rviz2 -d demo.rviz
-    ~~~
-
+# Run rviz and wait for data
+rviz2 -d demo.rviz
+~~~
 
 Open a new terminal.
 ~~~ bash title="Run Minot TUI"
 source /opt/ros/$ROS_DISTRO/setup.bash
 
 # Run
-minot tui demo.rl
+minot tui demo.mt
 
 # Press w and then Space
 # You should see a 3D Pointcloud in rviz2 now.
 # Press j until you see "W3" in the bottom right.
-# Press Space again to evaluate line 3 of demo.rl and repeat how often you like.
+# Press Space again to evaluate line 3 of demo.mt and repeat how often you like.
 # Quit Minot with q
 
 # Clean up everything we created
-cd .. && rm -rf minot-bagfile-demo && cargo uninstall minot
+cd .. && rm -rf minot-bagfile-demo && minot uninstall
 ~~~
 
 ## Variable Sharing
 
 One of the main tasks of the ROS Pub/Sub system (excluding non-sensor pipelines with actions and service) is sharing a new value of something. At development time, when accuracy is at the highest priority, this async model might be in your way.
 
-With *librat*, you can share variables synchronously over the network. It is library written in Rust but targeted at C. It's built for the absolute minimal user footprint. You initialise it once and then give it any variables to cling to without changing anything else in your existing code. Just look at the [header file](https://github.com/uos/minot/blob/main/rat/rat.h). You then explain the routes to the Minot TUI with intuitive syntax.
+With *librat*, you can share variables synchronously over the network. The library is written in Rust but targeted at C. It's built for the absolute minimal user footprint. You initialise it once and then give it any variables to cling to without changing anything else in your existing code. Just look at the [header file](https://github.com/uos/minot/blob/main/rat/rat.h). You then explain the routes to the Minot TUI with intuitive syntax.
 
 Variable sharing is a powerful building block and it can easily be used outside of the ROS context. Click [here](varshare.md) to learn more.
 
@@ -149,9 +103,9 @@ Build and run the libraries and run the Coordinator.
 
 ~~~bash
 git clone https://github.com/uos/minot && cd minot
-cargo build --release
+cargo build
 
-./target/release/minot-coord rl/varshare_demo.rl
+./target/debug/minot-coord rl/varshare_demo.mt
 ~~~
 
 Start a second terminal to run rat1 in Rust.
@@ -185,9 +139,7 @@ For these cases, the native publisher and subscriber Rust library *ratpub* can h
 git clone https://github.com/stelzo/ratpub-demo && cd ratpub-demo
 
 # Install the Coordinator
-cargo install \
-  --git https://github.com/uos/minot minot \
-  --locked
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
 
 # Run it
 minot-coord
@@ -204,7 +156,20 @@ Start a third terminal another one.
 cargo run --bin node2
 ~~~
 
-Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r ratpub-demo && cargo uninstall minot`.
+Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r ratpub-demo && minot uninstall`.
 
 Find out how this nodes works and how to write them [here](./pubsub.md).
 
+!!! question "The Pain Leading to Minot"
+
+    === "Message Timing"
+
+        Does your system behave different each time you play a Bagfile until you find out it actually works when playing it a little bit slower?
+
+    === "Ignore Networking"
+
+        Have you ever asked yourself why you should care about QoS settings, out-of-order message pipelines or the dependency of ROS2 itself when developing a Proof of Concept?
+
+    === "Reproducability"
+
+        Have you ever developed a ROS Node with state that unexpectedly changes for some reason and now you try to reproduce it?

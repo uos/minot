@@ -36,7 +36,7 @@ reset! <Path>
 ## `pf!`
 
 Play frames (messages) from the currently loaded Bagfile.
-~~~awk title="Example (demo.rl)"
+~~~awk title="Example"
 _bag.{
   lidar.{
     _topic = "/velodyne_points"

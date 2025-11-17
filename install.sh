@@ -47,6 +47,22 @@ prompt() {
     printf "${CYAN}?${NC} %s " "$1"
 }
 
+# Prefer the current stdin if it's a terminal,
+# otherwise try /dev/tty. Returns non-zero when no interactive input
+# source is available.
+safe_read() {
+    # usage: safe_read varname
+    VAR_NAME="$1"
+    if [ -t 0 ]; then
+        read -r "$VAR_NAME" || return 1
+    elif [ -r /dev/tty ]; then
+        read -r "$VAR_NAME" < /dev/tty 2>/dev/null || return 1
+    else
+        return 1
+    fi
+    return 0
+}
+
 # Print usage information
 usage() {
     cat <<EOF
@@ -219,7 +235,9 @@ detect_arch() {
             echo "armv7"
             ;;
         *)
-            error "Unsupported architecture: $ARCH"
+            warn "Unknown architecture: $ARCH; cannot determine a prebuilt target triple"
+            # Return empty to indicate we couldn't detect a known architecture.
+            echo ""
             ;;
     esac
 }
@@ -233,19 +251,25 @@ get_target_triple() {
     case "$OS_NAME" in
         linux)
             case "$ARCH_NAME" in
-                x86_66)
-                    # ROS builds use gnu, otherwise prefer musl for better portability
-                    if [ "$PREFER_GNU" = "1" ]; then
-                        echo "x86_64-unknown-linux-gnu"
-                    else
-                        echo "x86_64-unknown-linux-musl"
-                    fi
-                    ;;
+                    x86_64)
+                        # ROS builds use gnu, otherwise prefer musl for better portability
+                        if [ "$PREFER_GNU" = "1" ]; then
+                            echo "x86_64-unknown-linux-gnu"
+                        else
+                            echo "x86_64-unknown-linux-musl"
+                        fi
+                        ;;
                 aarch64)
                     echo "aarch64-unknown-linux-gnu"
                     ;;
                 armv7)
                     echo "armv7-unknown-linux-gnueabihf"
+                    ;;
+                *)
+                    # Unknown architecture: cannot map to a prebuilt target triple.
+                    # Return empty to indicate inability to determine a valid triple.
+                    echo ""
+                    return 1
                     ;;
             esac
             ;;
@@ -444,14 +468,16 @@ build_from_source() {
         fi
     fi
 
-    # If a ROS distro was requested, ensure the ROS2 C API embed feature is enabled
-    # (embed-ros2-c). This is controlled by --ros-distro (jazzy/humble). We only add
-    # the feature if it isn't already present (via --embed or --features).
     if [ -n "$ROS_DISTRO" ]; then
-        ROS2_C_FEATURE="embed-ros2-c"
+        ROS_DISTRO_LC=$(echo "$ROS_DISTRO" | tr '[:upper:]' '[:lower:]')
+        if [ "$ROS_DISTRO_LC" = "jazzy" ]; then
+            ROS2_C_FEATURE="embed-ros2-c"
+        else
+            ROS2_C_FEATURE="embed-ros2-c-${ROS_DISTRO_LC}"
+        fi
         case ",$BUILD_FEATURES," in
-            *,${ROS2_C_FEATURE},*|*,embed-ros,*)
-                # already present or a combined 'embed-ros' feature exists; do nothing
+            *,${ROS2_C_FEATURE},*|*,embed-ros,*|*,embed-ros2-c,*)
+                # already present, a combined 'embed-ros' feature exists, or generic embed-ros2-c present; do nothing
                 ;;
             *)
                 if [ -n "$BUILD_FEATURES" ]; then
@@ -706,10 +732,15 @@ main() {
         PREFER_GNU=1
     fi
     
-    TARGET=$(get_target_triple "$OS_NAME" "$ARCH_NAME" "$PREFER_GNU")
-    
+    TARGET=$(get_target_triple "$OS_NAME" "$ARCH_NAME" "$PREFER_GNU" ) || true
+
     info "Detected system: ${CYAN}$OS_NAME${NC} (${CYAN}$ARCH_NAME${NC})"
-    info "Target triple: ${CYAN}$TARGET${NC}"
+    if [ -n "$TARGET" ]; then
+        info "Target triple: ${CYAN}$TARGET${NC}"
+    else
+        warn "Could not determine a prebuilt target triple; will build from source"
+        FORCE_BUILD=1
+    fi
     
     # Try to download prebuilt binary unless forced to build
     if [ $FORCE_BUILD -eq 0 ]; then
@@ -750,7 +781,9 @@ main() {
             if [ $YES_TO_ALL -eq 0 ]; then
                 printf "\n"
                 prompt "Would you like to build from source? [Y/n]"
-                read -r response
+                if ! safe_read response; then
+                    error "Could not read input from terminal. Installation cancelled."
+                fi
                 case "$response" in
                     [nN][oO]|[nN])
                         error "Installation cancelled"

@@ -1,13 +1,13 @@
-## Quick Install
+## Install Script (Recommended)
 
 For most users, the easiest way to install Minot is using the installation script with a single command:
 
 ~~~bash title="Install with embedded Coordinator"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s --embed coord
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
 ~~~
 
 ~~~bash title="Install with ROS2 publisher"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --embed coord --ros-distro jazzy
+curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --ros-distro jazzy
 ~~~
 
 Or download and run the script manually for more control:
@@ -48,20 +48,14 @@ Use the `--embed` option to specify which components to embed when building from
 # Install with ROS2 Jazzy support
 ./install.sh --ros-distro jazzy
 
-# Install specific version
-./install.sh --version v0.1.0-rc.6
-
 # Build with multiple components
 ./install.sh --build --embed ros1 --ros-distro jazzy
-
-# Install to custom directory
-./install.sh --dir /usr/local/bin
 
 # Non-interactive mode (useful for CI/CD)
 ./install.sh --yes --build --embed ratpub
 ~~~
 
-## Prebuilt Binaries
+## Prebuilt Binaries (Manual)
 
 Binaries for common system configurations are available [here](https://github.com/uos/minot/releases).
 
@@ -212,6 +206,6 @@ Learn more on how to use it in your Code by visiting the [feature page](./pubsub
 
 ## Uninstall
 
-With modern software the word *"installing"* is overloaded. Cargo just compiles the code and moves the finished binaries to `~/.cargo/bin`. There are no other side effects or files from Minot.
+With modern software the word *"installing"* is overloaded. Cargo just compiles the code and moves the finished binaries to a directory in your path. There are no other side effects or files from Minot.
 
-If you want to remove them with cargo, you can `cargo uninstall minot` or `cargo uninstall wind` and they are gone.
+If you want to remove them, you can `minot uninstall` to uninstall minot or minot-coord. Or `cargo uninstall wind` for the manual installed binaries.

@@ -63,7 +63,7 @@ You can also send everything to the Minot TUI to compare them with the `==` oper
 Variable Sharing only needs the Coordinator, which can run standalone without the TUI. The binary takes a Ratslang file with Rules. It waits for every Rat in that Rule to be connected to the network before un(b)locking all Rats to continue their normal flow after intialisation.
 
 ~~~bash title="Standalone Coordinator"
-minot-coord ./rules.rl
+minot-coord ./rules.mt
 ~~~
 
 #### Minot TUI with embedded Coordinator
@@ -72,8 +72,8 @@ When using the TUI with integrated Coordinator (the default when building Minot)
 
 This is basically a specialized include statement but it needs to be explicitely stated because there is a difference of where you define Rules.
 
-~~~awk title="debug.rl: Defining Rules when running with TUI"
-_rules = ./my_rules.rl
+~~~awk title="Defining Rules when running with TUI"
+_rules = ./my_rules.mt
 ~~~
 
 You still can define Rules in the same file you write your Bagfile Query code. But the effect will be vastly different because Rules are also dynamic. You can delete all of them at runtime and add them again by evaluating lines within Minot TUI. You can read more about it [here](./tui.md).

@@ -34,7 +34,7 @@ Keybindings for the Minot TUI. They cannot be changed after compile time for the
 | :------------------------- | :-------- |
 | Clear (in compare mode)                     | <kbd>Space</kbd>  |
 
-Adding new ones happens automatically when firing the `.rl` file if it contains some.
+Adding new ones happens automatically when firing the `.mt` file if it contains some.
 
 
 ## Matrix Compare Window
