@@ -4333,12 +4333,12 @@ mod tests {
     fn include() {
         const SRC: &str = r"
         # like assigning a file to the current namespace
-        <- ./../rl/test.rl
+        <- ./../rl/test.mt
 
         # including in namespace blocks will prepend the namespaces to the included AST
         # (excluding rules, they are always global)
         c.{
-            <- ./../rl/test.rl
+            <- ./../rl/test.mt
         }
         ";
 
