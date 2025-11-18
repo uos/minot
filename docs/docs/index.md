@@ -73,7 +73,7 @@ source /opt/ros/$ROS_DISTRO/setup.bash
 # Run
 minot tui demo.mt
 
-# Press w and then Space
+# Press Space
 # You should see a 3D Pointcloud in rviz2 now.
 # Press j until you see "W3" in the bottom right.
 # Press Space again to evaluate line 3 of demo.mt and repeat how often you like.

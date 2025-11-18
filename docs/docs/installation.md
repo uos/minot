@@ -2,15 +2,12 @@
 
 For most users, the easiest way to install Minot is using the installation script with a single command:
 
-~~~bash title="Install with embedded Coordinator"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
-~~~
-
 ~~~bash title="Install with ROS2 publisher"
 curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --ros-distro jazzy
 ~~~
 
-Or download and run the script manually for more control:
+Or download and run the script manually for more control.
+Use `--help` to see all available configurations of Minot.
 
 ~~~bash
 wget https://raw.githubusercontent.com/uos/minot/main/install.sh

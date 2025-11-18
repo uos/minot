@@ -6,4 +6,5 @@ dist/
 .intentionally-empty-file.o
 target/
 **/node_modules
-vscode/minot-vscode/out
+vscode/out
+**/*.vsix

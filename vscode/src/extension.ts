@@ -108,12 +108,12 @@ async function ensureMinotCompatible(workspaceRoot?: string): Promise<string> {
   
   const choice = await vscode.window.showErrorMessage(
     'Minot binary not found. Would you like to install it now?',
-    'Run Install Script',
+    'Run Install (no ROS)',
     'Open Installation Guide',
     'Cancel'
   );
   
-  if (choice === 'Run Install Script') {
+  if (choice === 'Run Install (no ROS)') {
     // Create a new terminal and run the install script
     const terminal = vscode.window.createTerminal('Minot Installer');
     terminal.show();
