@@ -117,7 +117,16 @@ async function ensureMinotCompatible(workspaceRoot?: string): Promise<string> {
     // Create a new terminal and run the install script
     const terminal = vscode.window.createTerminal('Minot Installer');
     terminal.show();
-    terminal.sendText('curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh');
+    // Append the required Minot version from package.json (if available)
+    const requiredVer = requiredMinotVersionRaw || '';
+    let installCmd = 'curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh';
+    if (requiredVer) {
+      // When piping to sh, pass script args with `sh -s -- <args>`.
+      // Ensure single quotes in the version string are escaped.
+      const escaped = requiredVer.replace(/'/g, "'\\''");
+      installCmd = `curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --version '${escaped}'`;
+    }
+    terminal.sendText(installCmd);
     logToChannel('Started Minot installation in terminal. Please follow the prompts.');
     vscode.window.showInformationMessage(
       'Minot installation started in terminal. After installation completes, restart the extension or reload the window.'

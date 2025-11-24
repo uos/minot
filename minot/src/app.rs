@@ -10,6 +10,9 @@ use std::{
 
 use anyhow::{Error, anyhow};
 use log::{error, info, warn};
+use mtc::{
+    Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, Rules, VariableHistory, WindFunction,
+};
 use once_cell::sync::Lazy;
 use ratatui::{
     layout::Constraint,
@@ -17,9 +20,6 @@ use ratatui::{
     widgets::{Cell, Paragraph, Row, ScrollbarState, Table, TableState},
 };
 use regex::Regex;
-use rlc::{
-    Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, Rules, VariableHistory, WindFunction,
-};
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 use sea::net::{PacketKind, WindAt};
 
@@ -730,7 +730,7 @@ pub struct WindCursor {
     pub(crate) compile_state: WindCompile,
     wind_file_path: PathBuf,
     bagfile: Arc<RwLock<bagread::Bagfile>>,
-    pub(crate) variable_cache: HashMap<rlc::Var, rlc::Rhs>,
+    pub(crate) variable_cache: HashMap<mtc::Var, mtc::Rhs>,
     dynamic_vars: HashMap<String, Vec<PlayKindUnitedPass3>>,
 }
 
@@ -1742,7 +1742,7 @@ impl App {
                 let fun = async move {
                     for windfn in eval.wind.iter() {
                         match windfn {
-                            rlc::WindFunction::Reset(path) => {
+                            mtc::WindFunction::Reset(path) => {
                                 let bag_blocking = {
                                     let wc = wind_cursor_worker.read().unwrap();
                                     Arc::clone(&wc.bagfile)
@@ -1773,7 +1773,7 @@ impl App {
                                     }
                                 }
                             }
-                            rlc::WindFunction::SendFrames(kind) => {
+                            mtc::WindFunction::SendFrames(kind) => {
                                 match kind {
                                     PlayKindUnitedPass3::SensorCount {
                                         sensors: _,
@@ -1889,20 +1889,20 @@ impl App {
                                 }
 
                                 let trigger = match &kind {
-                                    rlc::PlayKindUnitedPass3::SensorCount {
+                                    mtc::PlayKindUnitedPass3::SensorCount {
                                         sensors: _,
                                         count: _,
                                         trigger,
                                         play_mode,
                                     }
-                                    | rlc::PlayKindUnitedPass3::UntilSensorCount {
+                                    | mtc::PlayKindUnitedPass3::UntilSensorCount {
                                         sending: _,
                                         until_sensors: _,
                                         until_count: _,
                                         trigger,
                                         play_mode,
                                     } => trigger.as_ref().map(|trigger| match trigger {
-                                        rlc::PlayTrigger::DurationRelFactor(factor) => {
+                                        mtc::PlayTrigger::DurationRelFactor(factor) => {
                                             let original_duration_ns =
                                                 end_time.unwrap() - start_time.unwrap();
 
@@ -1922,7 +1922,7 @@ impl App {
                                                 .parse::<u64>()
                                                 .unwrap_or(u64::MAX);
                                             let scaled_duration = Duration::from_nanos(scaled_ns);
-                                            let dur_ms = rlc::PlayTrigger::DurationMs(
+                                            let dur_ms = mtc::PlayTrigger::DurationMs(
                                                 scaled_duration.as_millis() as u64,
                                             );
                                             (dur_ms, play_mode)
@@ -1933,7 +1933,7 @@ impl App {
 
                                 match &trigger {
                                     Some((
-                                        rlc::PlayTrigger::DurationMs(target_duration_ms),
+                                        mtc::PlayTrigger::DurationMs(target_duration_ms),
                                         PlayMode::Fix,
                                     )) => {
                                         let total_nanos_decimal =
@@ -1987,7 +1987,7 @@ impl App {
                                             }
                                         }
                                     }
-                                    Some((rlc::PlayTrigger::Variable(var), PlayMode::Fix)) => {
+                                    Some((mtc::PlayTrigger::Variable(var), PlayMode::Fix)) => {
                                         let wd = wind_data
                                             .into_iter()
                                             .map(|(_, wind)| WindAt {
@@ -2007,7 +2007,7 @@ impl App {
                                         }
                                     }
 
-                                    Some((rlc::PlayTrigger::Variable(_), PlayMode::Dynamic)) => {
+                                    Some((mtc::PlayTrigger::Variable(_), PlayMode::Dynamic)) => {
                                         panic!("Dynamic variables should be resolved here");
                                     }
                                     Some((PlayTrigger::DurationRelFactor(_), _)) => {
@@ -2368,7 +2368,7 @@ impl App {
                         .unwrap()
                         .wind_file_path
                         .clone();
-                    let eval = rlc::compile_file_with_state(
+                    let eval = mtc::compile_file_with_state(
                         &rats_file,
                         start_line,
                         end_line,

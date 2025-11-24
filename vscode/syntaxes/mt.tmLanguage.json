@@ -46,7 +46,7 @@
       "patterns": [
         {
           "name": "keyword.control",
-          "match": "\\b(if)\\b"
+          "match": "\\b(if|loop)\\b"
         },
         {
           "name": "keyword.other",

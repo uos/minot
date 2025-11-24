@@ -15,7 +15,7 @@ use rkyv::{
     ser::allocator::ArenaHandle,
     util::AlignedVec,
 };
-use rlc::{ActionPlan, VariableHuman};
+use mtc::{ActionPlan, VariableHuman};
 
 #[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize, Hash, Eq, PartialOrd, Ord)]
 pub enum ShipKind {
@@ -54,7 +54,7 @@ pub struct Variable {
 }
 
 pub fn get_strategies(
-    haystack: &rlc::Rules,
+    haystack: &mtc::Rules,
     rat_ship: &str,
     variable: String,
     indirect_parent_rat: Option<&str>,
@@ -228,7 +228,7 @@ pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_send(
         &self,
         ship: String,
-        action: rlc::ActionPlan,
+        action: mtc::ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()>;
 }

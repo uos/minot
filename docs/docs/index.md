@@ -105,7 +105,7 @@ Build and run the libraries and run the Coordinator.
 git clone https://github.com/uos/minot && cd minot
 cargo build
 
-./target/debug/minot-coord rl/varshare_demo.mt
+./target/debug/minot-coord mt/varshare_demo.mt
 ~~~
 
 Start a second terminal to run rat1 in Rust.

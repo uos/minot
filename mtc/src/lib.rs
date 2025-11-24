@@ -630,6 +630,9 @@ enum Token<'a> {
     #[token("if")]
     KwIf,
 
+    #[token("loop")]
+    KwLoop,
+
     #[token("LOG")]
     KwLog,
 
@@ -718,6 +721,7 @@ impl fmt::Display for Token<'_> {
             Self::OpAssignToRight => write!(f, "->"),
             Self::OpRange => write!(f, ".."),
             Self::KwIf => write!(f, "if"),
+            Self::KwLoop => write!(f, "loop"),
             Self::DoNotCareOptim => write!(f, "~"),
             Self::FnPlayFrames => write!(f, "play_frames()"),
             Self::True => write!(f, "true"),
@@ -1001,6 +1005,10 @@ pub enum StatementKindPass1<'a> {
         ns: Vec<&'a str>,
         stmts: Vec<Box<StatementKindPass1<'a>>>,
     },
+    Loop {
+        count: usize,
+        stmts: Vec<Box<StatementKindPass1<'a>>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1017,6 +1025,10 @@ pub enum StatementKindOwnedPass1 {
     },
     Reset(String),
     SendFrames(PlayKindUnited),
+    Loop {
+        count: usize,
+        stmts: Vec<Box<StatementKindOwnedPass1>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1078,6 +1090,15 @@ fn do_pass1(
             }
             StatementKindOwnedPass1::SendFrames(kind) => {
                 out.push(StatementKindOwned::SendFrames(kind));
+            }
+            StatementKindOwnedPass1::Loop { count, stmts } => {
+                let v = stmts.into_iter().map(|f| *f).collect::<Vec<_>>();
+                let passed = do_pass1(v, current_parent)?;
+
+                // Repeat the statements `count` times
+                for _ in 0..count {
+                    out.extend(passed.clone());
+                }
             }
             StatementKindOwnedPass1::Include { namespace, path } => {
                 let to_parse = PathBuf::from_str(&path)?;
@@ -1178,6 +1199,13 @@ impl<'a> From<StatementKindPass1<'a>> for StatementKindOwnedPass1 {
             StatementKindPass1::Include { namespace, path } => {
                 StatementKindOwnedPass1::Include { namespace, path }
             }
+            StatementKindPass1::Loop { count, stmts } => StatementKindOwnedPass1::Loop {
+                count,
+                stmts: stmts
+                    .into_iter()
+                    .map(|bstmt| Box::new(StatementKindOwnedPass1::from(*bstmt)))
+                    .collect::<Vec<_>>(),
+            },
         }
     }
 }
@@ -2048,12 +2076,35 @@ where
         })
     });
 
+    let loop_stmt = recursive(|loop_stmt_rec| {
+        just(Token::KwLoop)
+            .ignore_then(select! {
+                Token::IntegerNumber(n) => n as usize,
+            })
+            .then(
+                choice((statement.clone(), include.clone(), loop_stmt_rec))
+                    .repeated()
+                    .collect::<Vec<_>>()
+                    .delimited_by(
+                        just(Token::BlockStart).then_ignore(just(Token::NewLine).repeated()),
+                        just(Token::BlockEnd).then_ignore(just(Token::NewLine).repeated()),
+                    ),
+            )
+            .map(
+                |(count, stmts): (usize, Vec<StatementKindPass1>)| StatementKindPass1::Loop {
+                    count,
+                    stmts: stmts.into_iter().map(Box::new).collect::<Vec<_>>(),
+                },
+            )
+    });
+
     let one_of_wind_fns = choice((
         statement,
         wind_play_frames_fn,
         wind_reset_fn,
         rule,
         namespace_block,
+        loop_stmt,
         include,
     ));
     let newlines = just(Token::NewLine).repeated();
@@ -4333,12 +4384,12 @@ mod tests {
     fn include() {
         const SRC: &str = r"
         # like assigning a file to the current namespace
-        <- ./../rl/test.mt
+        <- ./../mt/test.mt
 
         # including in namespace blocks will prepend the namespaces to the included AST
         # (excluding rules, they are always global)
         c.{
-            <- ./../rl/test.mt
+            <- ./../mt/test.mt
         }
         ";
 
@@ -4659,5 +4710,55 @@ mod tests {
         assert!(eval.is_ok());
         let eval = eval.unwrap();
         assert!(!eval.wind.is_empty());
+    }
+
+    #[test]
+    fn test_loop_basic() {
+        const SRC: &str = r"
+        loop 3 {
+            x = 1
+            y = 2
+        }
+        ";
+
+        let eval = compile_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+
+        // The loop should expand to 3 copies of x=1 and y=2
+        // So we should have x=1 defined 3 times (last one wins)
+        let x = eval.vars.resolve("x").unwrap().unwrap();
+        assert_eq!(x, Rhs::Val(Val::NumVal(NumVal::Integer(1))));
+        let y = eval.vars.resolve("y").unwrap().unwrap();
+        assert_eq!(y, Rhs::Val(Val::NumVal(NumVal::Integer(2))));
+    }
+
+    #[test]
+    fn test_loop_nested() {
+        const SRC: &str = r"
+        loop 2 {
+            a = 10
+            loop 2 {
+                b = 20
+            }
+        }
+        ";
+
+        let eval = compile_code(SRC);
+        assert!(eval.is_ok());
+        let eval = eval.unwrap();
+
+        let a = eval.vars.resolve("a").unwrap().unwrap();
+        assert_eq!(a, Rhs::Val(Val::NumVal(NumVal::Integer(10))));
+        let b = eval.vars.resolve("b").unwrap().unwrap();
+        assert_eq!(b, Rhs::Val(Val::NumVal(NumVal::Integer(20))));
+    }
+
+    #[test]
+    fn test_loop_token() {
+        // Test that "loop" is recognized as a keyword token, not a variable
+        let mut lex = Token::lexer("loop 2");
+        assert_eq!(lex.next(), Some(Ok(Token::KwLoop)));
+        assert_eq!(lex.next(), Some(Ok(Token::IntegerNumber(2))));
     }
 }

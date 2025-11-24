@@ -8,14 +8,14 @@ use camino::Utf8PathBuf;
 use mcap::Summary;
 use mcap::records::{nanos_to_system_time, system_time_to_nanos};
 use mcap::sans_io::{IndexedReadEvent, IndexedReader, IndexedReaderOptions, SummaryReadEvent};
+use mtc::{
+    AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
+    SensorIdentification, SensorType,
+};
 use qos::{
     RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
 };
 use rkyv::Archive;
-use rlc::{
-    AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
-    SensorIdentification, SensorType,
-};
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_client::ros2::policy::{Durability, History, Reliability};
 use ros2_client::ros2::{self, Duration};
@@ -750,7 +750,7 @@ impl Bagfile {
 
 #[cfg(test)]
 mod tests {
-    use rlc::PlayMode;
+    use mtc::PlayMode;
 
     use super::*;
 
@@ -806,7 +806,7 @@ mod tests {
                 short: None,
             }],
             trigger: None,
-            count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((30, 90))),
+            count: PlayCount::TimeRangeMs(mtc::AbsTimeRange::Closed((30, 90))),
             play_mode: PlayMode::Fix,
         });
 
@@ -821,7 +821,7 @@ mod tests {
                 short: None,
             }],
             trigger: None,
-            count: PlayCount::TimeRangeMs(rlc::AbsTimeRange::Closed((0, 100))),
+            count: PlayCount::TimeRangeMs(mtc::AbsTimeRange::Closed((0, 100))),
             play_mode: PlayMode::Fix,
         });
 

@@ -542,7 +542,7 @@ impl Client {
 
         // only make non minot tui nodes wait for the coordinate since they ask for variables
         if match &self.kind {
-            ShipKind::Rat(name) => name != rlc::COMPARE_NODE_NAME,
+            ShipKind::Rat(name) => name != mtc::COMPARE_NODE_NAME,
             _ => true,
         } {
             // TODO disconnect not implemented yet, must send to disconnect_tx

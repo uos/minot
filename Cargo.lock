@@ -222,9 +222,9 @@ dependencies = [
  "log",
  "mcap",
  "memmap2",
+ "mtc",
  "nalgebra",
  "rkyv 0.8.10",
- "rlc",
  "ros2-client 0.8.1",
  "ros2-interfaces-jazzy",
  "ros2-interfaces-jazzy-rkyv",
@@ -1952,11 +1952,11 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
+ "mtc",
  "nalgebra",
  "once_cell",
  "ratatui",
  "regex",
- "rlc",
  "ros_pointcloud2",
  "rosbag2-rs",
  "rust_decimal",
@@ -2033,6 +2033,19 @@ dependencies = [
  "net2",
  "winapi 0.2.8",
  "ws2_32-sys",
+]
+
+[[package]]
+name = "mtc"
+version = "0.1.0-rc.6"
+dependencies = [
+ "anyhow",
+ "ariadne",
+ "chumsky",
+ "env_logger",
+ "log",
+ "logos",
+ "rkyv 0.8.10",
 ]
 
 [[package]]
@@ -3059,19 +3072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rlc"
-version = "0.1.0-rc.6"
-dependencies = [
- "anyhow",
- "ariadne",
- "chumsky",
- "env_logger",
- "log",
- "logos",
- "rkyv 0.8.10",
-]
-
-[[package]]
 name = "ros2-client"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3461,11 +3461,11 @@ dependencies = [
  "etherparse",
  "ipnet",
  "log",
+ "mtc",
  "nalgebra",
  "pnet",
  "rand 0.8.5",
  "rkyv 0.8.10",
- "rlc",
  "ros_pointcloud2",
  "socket2",
  "tokio",
@@ -4513,11 +4513,11 @@ dependencies = [
  "cdr-encoding",
  "env_logger",
  "log",
+ "mtc",
  "nalgebra",
  "r2r",
  "ratpub",
  "rkyv 0.8.10",
- "rlc",
  "ros2-client 0.8.1",
  "ros2-interfaces-jazzy",
  "ros2-interfaces-jazzy-rkyv",

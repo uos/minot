@@ -1,5 +1,5 @@
 [package]
-name = "rlc"
+name = "mtc"
 version.workspace = true
 keywords.workspace = true
 license.workspace = true

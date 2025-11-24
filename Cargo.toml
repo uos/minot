@@ -1,5 +1,6 @@
 [workspace]
-members = ["bagread", "minot", "rat", "ratpub", "rlc", "sea", "wind"]
+
+members = ["bagread", "minot", "rat", "ratpub", "mtc", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
@@ -15,8 +16,9 @@ authors = ["Christopher Sieh <csieh@uos.de>"]
 sea = { path = "sea" }
 ratpub = { path = "ratpub" }
 bagread = { path = "bagread" }
-rlc = { path = "rlc" }
+
 wind = { path = "wind" }
+mtc = { path = "mtc" }
 
 anyhow = "1"
 r2r = "0.9.5"

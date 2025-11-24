@@ -106,108 +106,32 @@ ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Build with multiple embedded components${NC}
     ./install.sh --build --embed coord,ros1,ros2
 
-    ${CYAN}# Install to custom directory${NC}
-    ./install.sh --dir /usr/local/bin
-
-    ${CYAN}# Non-interactive mode${NC}
-    ./install.sh --yes --build --embed ros-native
-
 For more information, visit: ${BLUE}https://uos.github.io/minot/installation.html${NC}
 
 EOF
 }
 
-# Convert embed components to cargo features
-embed_to_features() {
-    EMBED_LIST="$1"
-    RESULT=""
-    
-    # Split by comma and process each component
-    OLD_IFS="$IFS"
-    IFS=","
-    for component in $EMBED_LIST; do
-        component=$(echo "$component" | tr -d ' ')
-        case "$component" in
-            coord)
-                RESULT="${RESULT},embed-coord"
-                ;;
-            ros1)
-                RESULT="${RESULT},embed-ros1-native"
-                ;;
-            ros2)
-                RESULT="${RESULT},embed-ros2-native"
-                ;;
-            ratpub)
-                RESULT="${RESULT},embed-ratpub"
-                ;;
-            ros)
-                RESULT="${RESULT},embed-ros"
-                ;;
-            ros-native)
-                RESULT="${RESULT},embed-ros-native"
-                ;;
-            *)
-                warn "Unknown embed component: $component (will be ignored)"
-                ;;
-        esac
-    done
-    IFS="$OLD_IFS"
-    
-    # Remove leading comma
-    RESULT=$(echo "$RESULT" | sed 's/^,//')
-    echo "$RESULT"
-}
+get_latest_version() {
+        info "Fetching latest release version..."
+        if command -v curl >/dev/null 2>&1; then
+            VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+        elif command -v wget >/dev/null 2>&1; then
+            VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+        else
+            warn "Neither curl nor wget found. Will fall back to building from source."
+            return 1
+        fi
 
-# Parse command line arguments
-parse_args() {
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -h|--help)
-                usage
-                exit 0
-                ;;
-            -v|--version)
-                VERSION="$2"
-                shift 2
-                ;;
-            -d|--dir)
-                INSTALL_DIR="$2"
-                shift 2
-                ;;
-            -e|--embed)
-                EMBED_COMPONENTS="$2"
-                shift 2
-                ;;
-            -n|--no-default-embed)
-                NO_DEFAULT_EMBED=1
-                shift
-                ;;
-            -f|--features)
-                FEATURES="$2"
-                shift 2
-                ;;
-            -r|--ros-distro)
-                ROS_DISTRO="$2"
-                shift 2
-                ;;
-            -b|--build)
-                FORCE_BUILD=1
-                shift
-                ;;
-            -y|--yes)
-                YES_TO_ALL=1
-                shift
-                ;;
-            *)
-                error "Unknown option: $1\nRun 'install.sh --help' for usage information."
-                ;;
-        esac
-    done
-}
+        if [ -z "$VERSION" ]; then
+            warn "Failed to fetch latest version from GitHub. Will fall back to building from source."
+            return 1
+        fi
 
-# Detect OS
+        success "Latest version: ${CYAN}$VERSION${NC}"
+        return 0
+    }
+
 detect_os() {
-    OS=$(uname -s)
     case "$OS" in
         Linux*)
             echo "linux"
@@ -286,28 +210,223 @@ get_target_triple() {
     esac
 }
 
-# Get latest release version from GitHub
-get_latest_version() {
-    info "Fetching latest release version..."
-    
-    if command -v curl >/dev/null 2>&1; then
-        # Use a cautious curl invocation; if it fails, fall back to build-from-source
-        VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-    elif command -v wget >/dev/null 2>&1; then
-        VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-    else
-        warn "Neither curl nor wget found. Will fall back to building from source."
-        return 1
+
+detect_ros_from_env_and_prompt() {
+    # If user already set --ros-distro, respect it
+    if [ -n "$ROS_DISTRO" ]; then
+        return 0
     fi
-    
-    if [ -z "$VERSION" ]; then
-        warn "Failed to fetch latest version from GitHub. Will fall back to building from source."
+
+    # Prefer environment variable ROS_DISTRO if present
+    local detected=""
+    if [ -n "${ROS_DISTRO}" ]; then
+        detected="${ROS_DISTRO}"
+    fi
+
+    # Also try commonly set ROS env var
+    if [ -z "$detected" ] && [ -n "${ROS_DISTRO}" ]; then
+        detected="${ROS_DISTRO}"
+    fi
+
+    # Try PATH detection as fallback: look for /opt/ros/<distro>/bin in PATH
+    if [ -z "$detected" ] && echo ":${PATH}:" | grep -q '/opt/ros/'; then
+        # extract distro name from first /opt/ros/<distro>/bin occurrence
+        detected=$(echo ":${PATH}:" | sed -n 's/.*:\/opt\/ros\/\([^:]*\)\/bin:.*/\1/p' | sed -n '1p' || true)
+    fi
+
+    if [ -z "$detected" ]; then
+        return 0
+    fi
+
+    # Normalize to lowercase
+    detected=$(echo "$detected" | tr '[:upper:]' '[:lower:]')
+
+    # Supported list (if not in this list, fall back to 'jazzy')
+    case "$detected" in
+        jazzy|humble|galactic|foxy|iron|rolling)
+            ;; # supported
+        *)
+            warn "Detected ROS distro '$detected' is not in supported list; falling back to 'jazzy'."
+            detected="jazzy"
+            ;;
+    esac
+
+    # Ask the user whether to use this distro (unless -y / YES_TO_ALL)
+    if [ $YES_TO_ALL -eq 1 ]; then
+        ROS_DISTRO="$detected"
+        info "Auto-enabled ROS distro: ${CYAN}$ROS_DISTRO${NC} (from environment)"
+        return 0
+    fi
+
+    printf "\n"
+    prompt "Detected ROS distro in your environment: '${detected}'. Install with this distro? [Y/n]"
+    if safe_read resp; then
+        case "$resp" in
+            [nN][oO]|[nN])
+                info "Not enabling ROS embed by default."
+                ;;
+            *)
+                ROS_DISTRO="$detected"
+                info "Enabled ROS distro: ${CYAN}$ROS_DISTRO${NC}"
+                ;;
+        esac
+    else
+        warn "Could not read response; not enabling ROS embed by default."
+    fi
+}
+
+parse_semver() {
+    # parse_semver "v0.1.0-rc.6" --> prints: major minor patch prerelease raw
+    local s="$1"
+    # strip leading v
+    s=${s#v}
+    # extract semver-like portion
+    if echo "$s" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+        local sem=$(echo "$s" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+(-[^+]+)?')
+        local major=$(echo "$sem" | cut -d. -f1)
+        local minor=$(echo "$sem" | cut -d. -f2)
+        local patch_with=$(echo "$sem" | cut -d. -f3)
+        local patch=$(echo "$patch_with" | sed -E 's/[^0-9].*$//')
+        local prerelease=""
+        if echo "$sem" | grep -q '-'; then
+            prerelease=$(echo "$sem" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-//')
+        fi
+        echo "$major $minor $patch $prerelease $sem"
+        return 0
+    fi
+    return 1
+}
+
+compare_semver_parts() {
+    # compare two triplets: returns 0 if a==b, 1 if a>b, 2 if a<b
+    local a_major=$1 a_minor=$2 a_patch=$3
+    local b_major=$4 b_minor=$5 b_patch=$6
+    if [ "$a_major" -gt "$b_major" ]; then return 1; fi
+    if [ "$a_major" -lt "$b_major" ]; then return 2; fi
+    if [ "$a_minor" -gt "$b_minor" ]; then return 1; fi
+    if [ "$a_minor" -lt "$b_minor" ]; then return 2; fi
+    if [ "$a_patch" -gt "$b_patch" ]; then return 1; fi
+    if [ "$a_patch" -lt "$b_patch" ]; then return 2; fi
+    return 0
+}
+
+compat_upper_bound() {
+    # Given major minor patch, print upper bound triplet (major,minor,patch)
+    local major=$1 minor=$2 patch=$3
+    if [ "$major" -eq 0 ]; then
+        echo "$major $((minor + 1)) 0"
+    else
+        echo "$((major + 1)) 0 0"
+    fi
+}
+
+is_in_range() {
+    # is_in_range candidate >= required && candidate < upper
+    local c1=$1 c2=$2 c3=$3
+    local r1=$4 r2=$5 r3=$6
+    local u1=$7 u2=$8 u3=$9
+
+    # if candidate < required -> false
+    compare_semver_parts "$c1" "$c2" "$c3" "$r1" "$r2" "$r3"
+    local cmp_to_req=$?
+    if [ $cmp_to_req -eq 2 ]; then
         return 1
     fi
 
-    success "Latest version: ${CYAN}$VERSION${NC}"
+    # if candidate >= upper -> false
+    compare_semver_parts "$c1" "$c2" "$c3" "$u1" "$u2" "$u3"
+    local cmp_to_upper=$?
+    if [ $cmp_to_upper -ne 2 ]; then
+        # cmp_to_upper == 0 means equal -> >= upper, cmp_to_upper ==1 means > upper
+        return 1
+    fi
+
     return 0
 }
+ 
+
+resolve_requested_version() {
+    # If $VERSION is a prefix like '0.1', resolve it to the newest release
+    # tag from GitHub that matches that major/minor. If VERSION is empty or
+    # already a full tag/semver, leave it as-is.
+    if [ -z "$VERSION" ]; then
+        return 0
+    fi
+
+    # If user provided X.Y (prefix)
+    if echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+$'; then
+        local orig="$VERSION"
+        local want_major=$(echo "$VERSION" | cut -d. -f1)
+        local want_minor=$(echo "$VERSION" | cut -d. -f2)
+        local per_page=100
+        local page=1
+        local found_prerelease=""
+
+        while :; do
+            local releases_json=""
+            if command -v curl >/dev/null 2>&1; then
+                releases_json=$(curl -sSf "${GITHUB_API}/releases?per_page=${per_page}&page=${page}" 2>/dev/null || true)
+            elif command -v wget >/dev/null 2>&1; then
+                releases_json=$(wget -qO- "${GITHUB_API}/releases?per_page=${per_page}&page=${page}" 2>/dev/null || true)
+            else
+                warn "Neither curl nor wget found; cannot resolve version prefix '$VERSION'."
+                return 1
+            fi
+
+            # If no JSON returned or empty page, stop
+            if [ -z "$releases_json" ]; then
+                break
+            fi
+
+            local any_tag=0
+            for tag in $(printf "%s" "$releases_json" | grep '"tag_name"' | sed -E 's/.*"([^\"]+)".*/\1/' ); do
+                any_tag=1
+                t=${tag#v}
+                parsed=$(parse_semver "$t" 2>/dev/null || true)
+                if [ -z "$parsed" ]; then
+                    continue
+                fi
+                IFS=' ' read c_major c_minor c_patch c_prerelease c_sem <<EOF
+$parsed
+EOF
+                if [ "$c_major" -eq "$want_major" ] && [ "$c_minor" -eq "$want_minor" ]; then
+                    if [ -z "$c_prerelease" ]; then
+                        VERSION="$tag"
+                        success "Resolved requested prefix '${CYAN}$orig${NC}' to ${CYAN}$VERSION${NC}"
+                        return 0
+                    else
+                        # remember the first prerelease candidate in case no stable exists
+                        if [ -z "$found_prerelease" ]; then
+                            found_prerelease="$tag"
+                        fi
+                    fi
+                fi
+            done
+
+            # If no tags on this page, stop paging
+            if [ $any_tag -eq 0 ]; then
+                break
+            fi
+
+            page=$((page + 1))
+        done
+
+        # If we didn't find a stable release but found a prerelease candidate, use it
+        if [ -n "$found_prerelease" ]; then
+            VERSION="$found_prerelease"
+            success "Resolved requested prefix '${CYAN}$orig${NC}' to prerelease ${CYAN}$VERSION${NC}"
+            return 0
+        fi
+
+        warn "No release found matching prefix '$orig'"
+        return 1
+    fi
+
+    # Otherwise assume VERSION is a concrete tag or semver and accept it.
+    return 0
+}
+
+*** End Patch
 
 # Check if binary exists for target
 check_binary_exists() {
@@ -721,6 +840,8 @@ main() {
 
     # If an existing installation is present, offer to uninstall (or auto-uninstall with -y)
     prompt_uninstall_existing
+    # Detect ROS environment and prompt to enable embed if found
+    detect_ros_from_env_and_prompt
     
     # Detect system
     OS_NAME=$(detect_os)
@@ -751,6 +872,10 @@ main() {
                 FORCE_BUILD=1
             fi
         else
+            # If user supplied a custom VERSION, try to resolve prefixes like '0.1'
+            if ! resolve_requested_version; then
+                error "Failed to resolve requested version: $VERSION"
+            fi
             info "Installing version: ${CYAN}$VERSION${NC}"
         fi
         

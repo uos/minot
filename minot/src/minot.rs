@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand, command};
-use log::{error, info};
+mod runner;
+use log::{error, info}; // Kept 'error' as it's used extensively. Added 'warn'.
+use mtc::COMPARE_NODE_NAME;
 use ratatui::{Terminal, backend::CrosstermBackend};
-use rlc::COMPARE_NODE_NAME;
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
@@ -40,7 +41,7 @@ pub enum ServeCommand {}
 #[command(version, about, author, long_about = None)]
 /// Minot — Primitives for developing and validating stateful robot software.
 pub(crate) struct Args {
-    /// Path to .rl file for initialization
+    /// Path to .mt file for initialization
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -51,6 +52,17 @@ pub struct TuiArgs {
     pub file: PathBuf,
 }
 
+#[derive(Parser, Debug, Clone)]
+pub struct HeadlessArgs {
+    /// Path to the .mt file to execute
+    #[arg(short, long)]
+    pub file: PathBuf,
+
+    /// Path to the minot binary. Defaults to "minot" (expected in PATH).
+    #[arg(long, default_value = "minot")]
+    pub minot_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 #[command()]
 pub(crate) enum Commands {
@@ -58,20 +70,22 @@ pub(crate) enum Commands {
     Tui(TuiArgs),
     /// Start the stdin-stdout server for bagfile querying, commonly used in integrations
     Serve,
+    /// Run a .mt file in headless (offline) mode, outputting JSON logs
+    Headless(HeadlessArgs),
     // Uninstall minot and minot-coord from the system
     Uninstall,
 }
 
 async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Compiling {:#?}", &path.canonicalize()?);
-    let eval = rlc::compile_file(&path, None, None)?; // evaluate entire file at first
+    let eval = mtc::compile_file(&path, None, None)?; // evaluate entire file at first
     // remove compile feedback
     print!("\x1b[1A"); // move cursor up 1 line
     print!("\x1b[2K"); // erase line
 
     let log_level = if let Some(rhs) = eval.vars.resolve("_log_level")? {
         match rhs {
-            rlc::Rhs::Val(rlc::Val::StringVal(v)) => match v.as_str() {
+            mtc::Rhs::Val(mtc::Val::StringVal(v)) => match v.as_str() {
                 "info" => Ok(log::LevelFilter::Info),
                 "debug" => Ok(log::LevelFilter::Debug),
                 "warn" => Ok(log::LevelFilter::Warn),
@@ -87,11 +101,11 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // tui_logger::set_env_filter_from_string(&log_level);
     tui_logger::set_default_level(log_level);
 
-    #[cfg(feature = "embed-coordinator")]
+    #[cfg(feature = "embed-coord")]
     {
         let locked_start = if let Some(rhs) = eval.vars.resolve("_start_locked")? {
             match rhs {
-                rlc::Rhs::Val(rlc::Val::BoolVal(locked)) => Ok(locked),
+                mtc::Rhs::Val(mtc::Val::BoolVal(locked)) => Ok(locked),
                 _ => Err(anyhow!("Expected bool for _start_locked.")),
             }
         } else {
@@ -100,7 +114,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         let coord_file = if let Some(rhs) = eval.vars.resolve("_rules")? {
             match rhs {
-                rlc::Rhs::Val(rlc::Val::StringVal(file)) | rlc::Rhs::Path(file) => Ok(Some(file)),
+                mtc::Rhs::Val(mtc::Val::StringVal(file)) | mtc::Rhs::Path(file) => Ok(Some(file)),
                 _ => Err(anyhow!("Expected _wind_file to be path or string.")),
             }
         } else {
@@ -127,15 +141,15 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             (cfg_filepath, Some(cfpath)) => {
                 let cfg_parent = cfg_filepath
                     .parent()
-                    .ok_or(anyhow!("Passed .rl file does not have a parent."))?
+                    .ok_or(anyhow!("Passed .mt file does not have a parent."))?
                     .canonicalize()
                     .expect("Should have failed in prev compilation.");
                 let joined = cfg_parent.join(cfpath);
                 println!("Compiling separate wind {:#?}", &joined);
 
-                rlc::compile_file(&joined, None, None)?
+                mtc::compile_file(&joined, None, None)?
             }
-            (_, _) => rlc::Evaluated::new(),
+            (_, _) => mtc::Evaluated::new(),
         };
 
         #[allow(unused_mut)]
@@ -446,7 +460,7 @@ enum ServerMessage {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type")]
 enum ClientMessage {
     Init {
@@ -458,7 +472,7 @@ enum ClientMessage {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "action")] // Use an "action" field for the command name
 enum TuiCommand {
     Quit,
@@ -473,7 +487,7 @@ enum TuiCommand {
     ClearRules,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Debug, Serialize)]
 struct ServerResponse {
     status: String, // "ok", "error"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -610,7 +624,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         let dir = file_path.parent().ok_or(anyhow!(
                             "Could not get parent directory of source code file."
                         ))?;
-                        let eval = match rlc::compile_code_with_state(
+                        let eval = match mtc::compile_code_with_state(
                             &selected_lines,
                             dir,
                             None,
@@ -624,12 +638,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         };
 
-                        #[cfg(feature = "embed-coordinator")]
+                        #[cfg(feature = "embed-coord")]
                         {
                             let locked_start =
                                 if let Some(rhs) = eval.vars.resolve("_start_locked")? {
                                     match rhs {
-                                        rlc::Rhs::Val(rlc::Val::BoolVal(locked)) => Ok(locked),
+                                        mtc::Rhs::Val(mtc::Val::BoolVal(locked)) => Ok(locked),
                                         _ => Err(anyhow!("Expected bool for _start_locked.")),
                                     }
                                 } else {
@@ -638,8 +652,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             let coord_file = if let Some(rhs) = eval.vars.resolve("_rules")? {
                                 match rhs {
-                                    rlc::Rhs::Val(rlc::Val::StringVal(file))
-                                    | rlc::Rhs::Path(file) => Ok(Some(file)),
+                                    mtc::Rhs::Val(mtc::Val::StringVal(file))
+                                    | mtc::Rhs::Path(file) => Ok(Some(file)),
                                     _ => Err(anyhow!("Expected _wind_file to be path or string.")),
                                 }
                             } else {
@@ -670,15 +684,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 (cfg_filepath, Some(cfpath)) => {
                                     let cfg_parent = cfg_filepath
                                         .parent()
-                                        .ok_or(anyhow!("Passed .rl file does not have a parent."))?
+                                        .ok_or(anyhow!("Passed .mt file does not have a parent."))?
                                         .canonicalize()
                                         .expect("Should have failed in prev compilation.");
                                     let joined = cfg_parent.join(cfpath);
                                     println!("Compiling separate wind {:#?}", &joined);
 
-                                    rlc::compile_file(&joined, None, None)?
+                                    mtc::compile_file(&joined, None, None)?
                                 }
-                                (_, _) => rlc::Evaluated::new(),
+                                (_, _) => mtc::Evaluated::new(),
                             };
 
                             #[allow(unused_mut)]
@@ -1006,7 +1020,7 @@ async fn handle_command(command: TuiCommand, app: &mut App) -> ServerResponse {
                     return ServerResponse::error(e.to_string());
                 }
             };
-            let eval = rlc::compile_code_with_state(
+            let eval = mtc::compile_code_with_state(
                 &selected_lines,
                 dir,
                 Some(var_state),
@@ -1107,6 +1121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Commands::Tui(tui_args) => tui(tui_args.file).await,
         Commands::Serve => serve().await,
+        Commands::Headless(headless_args) => {
+            runner::run(headless_args.file, headless_args.minot_path).await
+        }
         Commands::Uninstall => uninstall(),
     }
 }

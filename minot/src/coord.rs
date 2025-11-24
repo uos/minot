@@ -7,26 +7,26 @@ use log::{debug, error, info, warn};
 use sea::net::Packet;
 use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
-use rlc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};
+use mtc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};
 use sea::{Coordinator, WindData};
 
 #[derive(Parser, Debug)]
 #[command(version, about, author, long_about = None)]
 /// Minot Coordinator — Network Manager for Ratpub Nodes
 pub struct Args {
-    /// Path to .rl file for initialization
+    /// Path to .mt file for initialization
     pub file: Option<PathBuf>,
 }
 
 pub fn topic_from_eval_or_default(
-    eval: &rlc::Evaluated,
+    eval: &mtc::Evaluated,
     path: &str,
     default: &str,
 ) -> anyhow::Result<String> {
     let topic = eval.vars.resolve(path)?;
     if let Some(topic) = topic {
         match topic {
-            rlc::Rhs::Path(topic) | rlc::Rhs::Val(rlc::Val::StringVal(topic)) => Ok(topic),
+            mtc::Rhs::Path(topic) | mtc::Rhs::Val(mtc::Val::StringVal(topic)) => Ok(topic),
             _ => {
                 Err(anyhow!("Expected String or Path for sending lidar topic"))
             }
@@ -40,7 +40,7 @@ pub fn topic_from_eval_or_default(
 enum MinotTask {
     AppendRule {
         variable: String,
-        commands: Vec<rlc::VariableHuman>,
+        commands: Vec<mtc::VariableHuman>,
     },
     LockNext {
         unlock_first: bool,
@@ -594,10 +594,10 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                         ship,
                         match kind {
                             sea::net::RatPubRegisterKind::Publish => {
-                                rlc::RatPubRegisterKind::Publish
+                                mtc::RatPubRegisterKind::Publish
                             }
                             sea::net::RatPubRegisterKind::Subscribe => {
-                                rlc::RatPubRegisterKind::Subscribe
+                                mtc::RatPubRegisterKind::Subscribe
                             }
                         },
                     );
@@ -608,7 +608,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
     });
 }
 
-pub fn get_clients(eval: &rlc::Evaluated) -> anyhow::Result<HashSet<String>> {
+pub fn get_clients(eval: &mtc::Evaluated) -> anyhow::Result<HashSet<String>> {
     let mut clients = HashSet::new();
 
     // ships from rules
@@ -633,21 +633,21 @@ pub fn get_clients(eval: &rlc::Evaluated) -> anyhow::Result<HashSet<String>> {
     let winds = eval.vars.resolve("_wind")?;
     let winds = if let Some(winds) = winds {
         match winds {
-            rlc::Rhs::Array(items)
-                if items.iter().all(|item| matches!(**item, rlc::Rhs::Val(rlc::Val::StringVal(_))))
+            mtc::Rhs::Array(items)
+                if items.iter().all(|item| matches!(**item, mtc::Rhs::Val(mtc::Val::StringVal(_))))
                  => 
             {
                 items
                     .into_iter()
                     .map(|item| match *item {
-                        rlc::Rhs::Val(rlc::Val::StringVal(wind)) => wind,
+                        mtc::Rhs::Val(mtc::Val::StringVal(wind)) => wind,
                         _ => {
                             unreachable!("Catched in higher match.")
                         }
                     })
                     .collect::<Vec<_>>()
             }
-            rlc::Rhs::Val(rlc::Val::StringVal(single_wind)) => {
+            mtc::Rhs::Val(mtc::Val::StringVal(single_wind)) => {
                 vec![single_wind]
             }
             _ => {
@@ -674,9 +674,9 @@ pub async fn main() -> anyhow::Result<()> {
 
     let eval = if let Some(fp) = filepath {
         let rules_file = std::fs::canonicalize(&fp)?;
-        rlc::compile_file(&rules_file, None, None)?
+        mtc::compile_file(&rules_file, None, None)?
     } else {
-        rlc::Evaluated {
+        mtc::Evaluated {
             rules: Rules::new(),
             wind: Vec::new(),
             vars: VariableHistory::new(Vec::new()),
@@ -686,7 +686,7 @@ pub async fn main() -> anyhow::Result<()> {
     let locked_start = eval.vars.resolve("_start_locked")?;
     let locked_start = if let Some(rhs) = locked_start {
         match rhs {
-            rlc::Rhs::Val(rlc::Val::BoolVal(locked)) => Ok(locked),
+            mtc::Rhs::Val(mtc::Val::BoolVal(locked)) => Ok(locked),
             _ => Err(anyhow!("Expected bool for _start_locked.")),
         }
     } else {

@@ -6,3 +6,4 @@ rule! (var1
 rule! (var3
 	testRat1 <- testRat2
 )
+
