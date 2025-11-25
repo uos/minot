@@ -8,6 +8,68 @@ let serverProcess: cp.ChildProcess | null = null;
 let outputChannel: vscode.OutputChannel;
 let isLocked = false; // Track current lock state
 let lockToggleButton: vscode.StatusBarItem | null = null;
+let sbRun: vscode.StatusBarItem | null = null;
+let sbStep: vscode.StatusBarItem | null = null;
+
+// Default keybindings (used as fallback when API doesn't return bindings)
+const defaultKeybindings: Record<string, string> = {
+  'minot.compileAndExecute': 'Ctrl+Shift+Enter',
+  'minot.toggleLock': 'Ctrl+Shift+-',
+  'minot.sendUnlock': 'Ctrl+Shift+.',
+  'minot.sendLockNext': 'Ctrl+Shift+-',
+  'minot.sendLockNextPrevious': 'Ctrl+Shift+,',
+};
+
+/**
+ * Get the keybinding for a command. Returns the user's custom binding if set,
+ * otherwise returns the default binding.
+ */
+async function getKeybindingForCommand(commandId: string): Promise<string> {
+  try {
+    // Use VS Code's internal command to get keybindings for a command
+    const keybindings = await vscode.commands.executeCommand<Array<{ key: string; when?: string }>>(
+      'vscode.getKeyBinding',
+      commandId
+    );
+    if (keybindings && keybindings.length > 0) {
+      return keybindings[0].key;
+    }
+  } catch {
+    // API not available or failed, fall back to default
+  }
+  return defaultKeybindings[commandId] || '';
+}
+
+/**
+ * Update all status bar tooltips with current keybindings
+ */
+async function updateAllTooltips() {
+  await Promise.all([
+    updateLockButtonUI(),
+    updateRunButtonTooltip(),
+    updateStepButtonTooltip(),
+  ]);
+}
+
+async function updateRunButtonTooltip() {
+  if (!sbRun) {
+    return;
+  }
+  const keybinding = await getKeybindingForCommand('minot.compileAndExecute');
+  sbRun.tooltip = keybinding
+    ? `Compile and Execute selection (${keybinding})`
+    : 'Compile and Execute selection';
+}
+
+async function updateStepButtonTooltip() {
+  if (!sbStep) {
+    return;
+  }
+  const keybinding = await getKeybindingForCommand('minot.sendLockNextPrevious');
+  sbStep.tooltip = keybinding
+    ? `Step once in a Minot loop (${keybinding})`
+    : 'Step once in a Minot loop';
+}
 
 // Minimum required compatibility: currently we require the 0.1.x family
 // and we treat any prerelease (rc, alpha, beta, etc.) as incompatible.
@@ -296,25 +358,25 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Create a single toggle button for lock/unlock
   lockToggleButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  updateLockButtonUI();
   lockToggleButton.show();
   context.subscriptions.push(lockToggleButton);
 
   // Run button (no keybinding in text, only in tooltip)
-  const sbRun = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+  sbRun = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
   sbRun.text = 'Run Selection';
-  sbRun.tooltip = 'Compile and Execute selection (Ctrl+Shift+Enter)';
   sbRun.command = 'minot.compileAndExecute';
   sbRun.show();
   context.subscriptions.push(sbRun);
 
   // Step button
-  const sbStep = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 98);
+  sbStep = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 98);
   sbStep.text = 'Step';
-  sbStep.tooltip = 'Step once in a Minot loop (Ctrl+Shift+,)';
   sbStep.command = 'minot.sendLockNextPrevious';
   sbStep.show();
   context.subscriptions.push(sbStep);
+
+  // Initialize all tooltips with current keybindings
+  updateAllTooltips();
 
   context.subscriptions.push({
     dispose: () => {
@@ -328,18 +390,24 @@ function updateLockState(locked: boolean) {
   updateLockButtonUI();
 }
 
-function updateLockButtonUI() {
+async function updateLockButtonUI() {
   if (!lockToggleButton) {
     return;
   }
   
   if (isLocked) {
+    const keybinding = await getKeybindingForCommand('minot.sendUnlock');
     lockToggleButton.text = '🔒 Locked';
-    lockToggleButton.tooltip = 'Unlock Minot loops (Ctrl+Shift+.)';
+    lockToggleButton.tooltip = keybinding
+      ? `Unlock Minot loops (${keybinding})`
+      : 'Unlock Minot loops';
     lockToggleButton.command = 'minot.sendUnlock';
   } else {
+    const keybinding = await getKeybindingForCommand('minot.sendLockNext');
     lockToggleButton.text = '🔓 Unlocked';
-    lockToggleButton.tooltip = 'Lock Minot loops (Ctrl+Shift+-)';
+    lockToggleButton.tooltip = keybinding
+      ? `Lock Minot loops (${keybinding})`
+      : 'Lock Minot loops';
     lockToggleButton.command = 'minot.sendLockNext';
   }
 }
