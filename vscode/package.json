@@ -64,12 +64,12 @@
         "when": "editorTextFocus"
       },
       {
-        "key": "ctrl+,",
+        "key": "ctrl+shift+,",
         "command": "minot.sendLockNextPrevious",
         "when": "editorTextFocus"
       },
       {
-        "key": "ctrl+.",
+        "key": "ctrl+shift+.",
         "command": "minot.sendUnlock",
         "when": "editorTextFocus"
       },

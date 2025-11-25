@@ -40,8 +40,8 @@ Keyboard Shortcuts:
 |---------|-------------------|
 | Run selection | `Ctrl+Shift+Enter` |
 | Toggle Lock | `Ctrl+Shift+-` |
-| Step | `Ctrl+,` |
-| Unlock | `Ctrl+.` |
+| Step | `Ctrl+Shift+,` |
+| Unlock | `Ctrl+Shift+.` |
 
 ### Customizing Keybindings
 

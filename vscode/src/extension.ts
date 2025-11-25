@@ -311,7 +311,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Step button
   const sbStep = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 98);
   sbStep.text = 'Step';
-  sbStep.tooltip = 'Step once in a Minot loop (Ctrl+,)';
+  sbStep.tooltip = 'Step once in a Minot loop (Ctrl+Shift+,)';
   sbStep.command = 'minot.sendLockNextPrevious';
   sbStep.show();
   context.subscriptions.push(sbStep);
@@ -335,7 +335,7 @@ function updateLockButtonUI() {
   
   if (isLocked) {
     lockToggleButton.text = '🔒 Locked';
-    lockToggleButton.tooltip = 'Unlock Minot loops (Ctrl+.)';
+    lockToggleButton.tooltip = 'Unlock Minot loops (Ctrl+Shift+.)';
     lockToggleButton.command = 'minot.sendUnlock';
   } else {
     lockToggleButton.text = '🔓 Unlocked';
