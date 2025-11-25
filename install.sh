@@ -132,15 +132,22 @@ get_latest_version() {
     }
 
 detect_os() {
-    case "$OS" in
+    # Use uname -s for reliable OS detection (works when script is piped)
+    local uname_s
+    uname_s=$(uname -s 2>/dev/null || true)
+
+    case "$uname_s" in
         Linux*)
             echo "linux"
             ;;
         Darwin*)
             echo "macos"
             ;;
+        CYGWIN*|MINGW*|MSYS*)
+            echo "windows"
+            ;;
         *)
-            error "Unsupported operating system: $OS"
+            error "Unsupported operating system: ${uname_s:-unknown}"
             ;;
     esac
 }
@@ -426,8 +433,6 @@ EOF
     return 0
 }
 
-*** End Patch
-
 # Check if binary exists for target
 check_binary_exists() {
     TARGET=$1
@@ -535,7 +540,9 @@ check_rust() {
         
         if [ $YES_TO_ALL -eq 0 ]; then
             prompt "Would you like to install Rust now? [Y/n]"
-            read -r response
+            if ! safe_read response; then
+                error "Could not read input from terminal. Re-run interactively or use --yes to accept defaults."
+            fi
             case "$response" in
                 [nN][oO]|[nN])
                     exit 1
@@ -640,7 +647,9 @@ build_from_source() {
                 else
                     printf "\n"
                     prompt "ROS does not appear to be sourced. Source ${ROS_SETUP} now for the build? [Y/n]"
-                    read -r resp
+                    if ! safe_read resp; then
+                        error "Could not read input from terminal. Re-run interactively or set --yes to auto-enable ROS embed."
+                    fi
                     case "$resp" in
                         [nN][oO]|[nN])
                             error "Please source ROS in your shell (or open a terminal with ROS sourced) and re-run this script."
@@ -805,7 +814,9 @@ prompt_uninstall_existing() {
     # Interactive prompt
     printf "\n"
     prompt "A previous Minot installation was detected. Would you like me to uninstall it now? [Y/n]"
-    read -r resp
+    if ! safe_read resp; then
+        error "Could not read input from terminal. Re-run interactively or use --yes to auto-uninstall."
+    fi
     case "$resp" in
         [nN][oO]|[nN])
             error "Please uninstall the existing Minot before proceeding, or re-run with --yes to auto-uninstall."
@@ -831,6 +842,78 @@ prompt_uninstall_existing() {
 }
 
 # Main installation logic
+parse_args() {
+    # Parse command line arguments. POSIX-compatible.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            -v|--version)
+                if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
+                    VERSION="$2"
+                    shift
+                else
+                    error "Missing value for --version"
+                fi
+                ;;
+            -d|--dir)
+                if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
+                    INSTALL_DIR="$2"
+                    shift
+                else
+                    error "Missing value for --dir"
+                fi
+                ;;
+            -e|--embed)
+                if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
+                    EMBED_COMPONENTS="$2"
+                    shift
+                else
+                    error "Missing value for --embed"
+                fi
+                ;;
+            -f|--features)
+                if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
+                    FEATURES="$2"
+                    shift
+                else
+                    error "Missing value for --features"
+                fi
+                ;;
+            -r|--ros-distro)
+                if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
+                    ROS_DISTRO="$2"
+                    shift
+                else
+                    error "Missing value for --ros-distro"
+                fi
+                ;;
+            -b|--build)
+                FORCE_BUILD=1
+                ;;
+            -y|--yes)
+                YES_TO_ALL=1
+                ;;
+            -n|--no-default-embed)
+                NO_DEFAULT_EMBED=1
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                warn "Unknown option: $1"
+                ;;
+            *)
+                # positional arguments are ignored for now
+                ;;
+        esac
+        shift
+    done
+}
+
 main() {
     parse_args "$@"
     

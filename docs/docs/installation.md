@@ -1,12 +1,20 @@
 ## Install Script (Recommended)
 
-For most users, the easiest way to install Minot is using the installation script with a single command:
+For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binary and `minot-coord` with sensible defaults for getting started.
 
-~~~bash title="Install with ROS2 publisher"
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh -s -- --ros-distro jazzy
+~~~bash
+curl -sSLf https://install.steado.tech/minot | sh
 ~~~
 
-Or download and run the script manually for more control.
+For ROS support, make sure to have your ROS environment sourced before running the script.
+
+### VSCode Extension
+
+Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Select some lines and run them with `Run Selection`. Hover over the buttons to see their keybindings.
+
+### Detailed Installation
+
+You can also download and run the install script manually for more control.
 Use `--help` to see all available configurations of Minot.
 
 ~~~bash
@@ -18,6 +26,7 @@ chmod +x install.sh
 The installation script will:
 
 - Automatically detect your operating system and architecture
+- Resolve to the newest compatible and stable version
 - Download prebuilt binaries from GitHub releases if available
 - Fall back to building from source with `cargo install` if needed
 - Install binaries to `~/.local/bin` (customizable with `--dir`)
