@@ -339,7 +339,7 @@ function updateLockButtonUI() {
     lockToggleButton.command = 'minot.sendUnlock';
   } else {
     lockToggleButton.text = '🔓 Unlocked';
-    lockToggleButton.tooltip = 'Lock Minot loops (Ctrl+-)';
+    lockToggleButton.tooltip = 'Lock Minot loops (Ctrl+Shift+-)';
     lockToggleButton.command = 'minot.sendLockNext';
   }
 }

@@ -36,10 +36,22 @@ Commands provided by the extension (command IDs):
 
 Keyboard Shortcuts:
 
-- Run selection: suggested `Ctrl+Shift+Enter`
-- Step: suggested `Ctrl+,`
-- Unlock: suggested `Ctrl+.`
-- Lock: suggested `Ctrl+,`
+| Command | Default Keybinding |
+|---------|-------------------|
+| Run selection | `Ctrl+Shift+Enter` |
+| Toggle Lock | `Ctrl+Shift+-` |
+| Step | `Ctrl+,` |
+| Unlock | `Ctrl+.` |
+
+### Customizing Keybindings
+
+All keybindings can be customized through VS Code's Keyboard Shortcuts editor:
+
+1. Open **File > Preferences > Keyboard Shortcuts** (or press `Ctrl+K Ctrl+S`)
+2. Search for "Minot" to see all extension commands
+3. Click on any keybinding to change it, or right-click to remove it
+
+You can also add keybindings directly to your `keybindings.json` file.
 
 ## Extension Settings
 

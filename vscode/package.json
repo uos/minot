@@ -59,7 +59,7 @@
     ],
     "keybindings": [
       {
-        "key": "ctrl+-",
+        "key": "ctrl+shift+-",
         "command": "minot.toggleLock",
         "when": "editorTextFocus"
       },
