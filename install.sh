@@ -433,6 +433,41 @@ EOF
     return 0
 }
 
+# Convert embed component names (comma-separated) to cargo feature names
+embed_to_features() {
+    # input: comma-separated components, e.g. "coord,ros2,ratpub"
+    local input="$1"
+    local IFS=','
+    local out=""
+    for comp in $input; do
+        # trim whitespace
+        comp=$(printf "%s" "$comp" | sed -E 's/^\s+|\s+$//g')
+        case "$comp" in
+            coord) feat="embed-coord" ;;
+            ratpub) feat="embed-ratpub" ;;
+            ros) feat="embed-ros" ;;
+            ros1) feat="embed-ros1" ;;
+            ros2) feat="embed-ros2" ;;
+            "ros2-c"|"ros2_c") feat="embed-ros2-c" ;;
+            ros-native) feat="embed-ros-native" ;;
+            "") continue ;;
+            *)
+                warn "Unknown embed component: $comp; skipping"
+                continue
+                ;;
+        esac
+
+        if [ -n "$out" ]; then
+            out="$out,$feat"
+        else
+            out="$feat"
+        fi
+    done
+
+    printf "%s" "$out"
+}
+
+
 # Check if binary exists for target
 check_binary_exists() {
     TARGET=$1
@@ -616,6 +651,29 @@ build_from_source() {
     fi
 
     info "Building with features: ${CYAN}$BUILD_FEATURES${NC}"
+
+    # Check if building with ros2-c features requires libclang-dev on Ubuntu
+    case ",$BUILD_FEATURES," in
+        *,embed-ros2-c,*|*,embed-ros2-c-*,*|*,embed-ros,*)
+            # Check if we're on Ubuntu/Debian
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release
+                case "$ID" in
+                    ubuntu|debian)
+                        # Check if libclang-dev is installed
+                        if ! dpkg -l libclang-dev >/dev/null 2>&1; then
+                            printf "\n${RED}${BOLD}Missing dependency:${NC} ${BOLD}libclang-dev${NC}\n"
+                            printf "\n${YELLOW}Building with ROS2-C support requires libclang-dev.${NC}\n"
+                            printf "Please install it by running:\n\n"
+                            printf "  ${GREEN}sudo apt install libclang-dev${NC}\n\n"
+                            printf "Then re-run this installation script.\n\n"
+                            exit 1
+                        fi
+                        ;;
+                esac
+            fi
+            ;;
+    esac
 
     # If a ROS distro was requested, only require that ROS is sourced into the environment.
     # We can't reliably detect every install location, so check PATH for a sourced ROS

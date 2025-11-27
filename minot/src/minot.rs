@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, command};
 mod runner;
-use log::{error, info}; // Kept 'error' as it's used extensively. Added 'warn'.
+use log::{error, info, warn};
 use mtc::COMPARE_NODE_NAME;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
@@ -41,21 +41,19 @@ pub enum ServeCommand {}
 #[command(version, about, author, long_about = None)]
 /// Minot — Primitives for developing and validating stateful robot software.
 pub(crate) struct Args {
-    /// Path to .mt file for initialization
     #[command(subcommand)]
     pub command: Commands,
 }
 
 #[derive(Debug, Clone, Parser)]
 pub struct TuiArgs {
-    /// Path to a '.rl' configuration file. See the docs for a demo.
+    /// Path to a '.mt' file. See the docs for a demo.
     pub file: PathBuf,
 }
 
 #[derive(Parser, Debug, Clone)]
 pub struct HeadlessArgs {
     /// Path to the .mt file to execute
-    #[arg(short, long)]
     pub file: PathBuf,
 
     /// Path to the minot binary. Defaults to "minot" (expected in PATH).
@@ -72,16 +70,21 @@ pub(crate) enum Commands {
     Serve,
     /// Run a .mt file in headless (offline) mode, outputting JSON logs
     Headless(HeadlessArgs),
+    /// Show compiled features or check if a specific feature is available
+    Features {
+        /// Optional feature name to check (e.g., "coord", "ratpub", "ros2") or comma-separated list (e.g., "coord,ros2")
+        feature: Option<String>,
+    },
     // Uninstall minot and minot-coord from the system
     Uninstall,
 }
 
 async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Compiling {:#?}", &path.canonicalize()?);
-    let eval = mtc::compile_file(&path, None, None)?; // evaluate entire file at first
-    // remove compile feedback
-    print!("\x1b[1A"); // move cursor up 1 line
-    print!("\x1b[2K"); // erase line
+    let eval = mtc::compile_file(&path, None, None)?;
+    // remove compile feebback
+    print!("\x1b[1A");
+    print!("\x1b[2K");
 
     let log_level = if let Some(rhs) = eval.vars.resolve("_log_level")? {
         match rhs {
@@ -127,7 +130,13 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
 
             tokio::spawn(async move {
-                let res = wind::ratpub::run_dyn_wind(&wind_name).await;
+                let (tx, rx) = tokio::sync::oneshot::channel();
+
+                tokio::spawn(async move {
+                    // dump ready answer
+                    _ = rx.await;
+                });
+                let res = wind::ratpub::run_dyn_wind(&wind_name, tx).await;
                 match res {
                     Ok(_) => {} // will never return
                     Err(e) => {
@@ -246,8 +255,8 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
     // remove searching feedback
-    print!("\x1b[1A"); // move cursor up 1 line
-    print!("\x1b[2K"); // erase line
+    print!("\x1b[1A");
+    print!("\x1b[2K");
 
     let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
     let (dyn_wind_tx, dyn_wind_rx) = tokio::sync::mpsc::channel(10);
@@ -394,6 +403,99 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tui.exit()
+}
+
+fn get_compiled_features() -> Vec<String> {
+    let mut features = Vec::new();
+    
+    #[cfg(feature = "embed-coord")]
+    features.push("coord".to_string());
+    
+    #[cfg(feature = "embed-ratpub")]
+    features.push("ratpub".to_string());
+    
+    #[cfg(feature = "embed-ros1-turbine")]
+    features.push("ros1".to_string());
+    
+    #[cfg(feature = "embed-ros2-turbine")]
+    features.push("ros2".to_string());
+    
+    #[cfg(feature = "embed-ros2-c-turbine")]
+    features.push("ros2-c".to_string());
+    
+    features
+}
+
+fn has_feature(feature_name: &str) -> bool {
+    let normalized = feature_name.to_lowercase();
+    
+    match normalized.as_str() {
+        "coord" => {
+            #[cfg(feature = "embed-coord")]
+            return true;
+            #[cfg(not(feature = "embed-coord"))]
+            return false;
+        }
+        "ratpub" => {
+            #[cfg(feature = "embed-ratpub-turbine")]
+            return true;
+            #[cfg(not(feature = "embed-ratpub-turbine"))]
+            return false;
+        }
+        "ros1" => {
+            #[cfg(feature = "embed-ros1-turbine")]
+            return true;
+            #[cfg(not(feature = "embed-ros1-turbine"))]
+            return false;
+        }
+        "ros2" => {
+            #[cfg(feature = "embed-ros2-turbine")]
+            return true;
+            #[cfg(not(feature = "embed-ros2-turbine"))]
+            return false;
+        }
+        "ros2-c" | "ros2_c" => {
+            #[cfg(feature = "embed-ros2-c-turbine")]
+            return true;
+            #[cfg(not(feature = "embed-ros2-c-turbine"))]
+            return false;
+        }
+        _ => false,
+    }
+}
+
+fn features_command(feature: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    match feature {
+        Some(feature_names) => {
+            let features: Vec<&str> = feature_names.split(',').map(|s| s.trim()).collect();
+            
+            let mut all_present = true;
+            for feature_name in features {
+                if !has_feature(feature_name) {
+                    all_present = false;
+                    break;
+                }
+            }
+            
+            if all_present {
+                std::process::exit(0);
+            } else {
+                std::process::exit(1);
+            }
+        }
+        None => {
+            let features = get_compiled_features();
+            if features.is_empty() {
+                println!("No embedded features compiled.");
+            } else {
+                println!("Compiled features:");
+                for feature in features {
+                    println!("  - {}", feature);
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
@@ -638,6 +740,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         };
 
+                        // let (tx, rx) = tokio::sync::oneshot::channel();
+
+                        // tokio::spawn(async move {
+                        //     // dump ready answer
+                        //     _ = rx.await;
+                        // });
                         #[cfg(feature = "embed-coord")]
                         {
                             let locked_start =
@@ -659,26 +767,6 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 Ok(None)
                             }?;
-
-                            #[cfg(feature = "embed-ratpub-turbine")]
-                            {
-                                let wind_name = wind::get_env_or_default(
-                                    "ratpub_wind_name",
-                                    &EMBED_RATPUB_TURBINE_NAME,
-                                )?;
-
-                                tokio::spawn(async move {
-                                    let res = wind::ratpub::run_dyn_wind(&wind_name).await;
-                                    match res {
-                                        Ok(_) => {} // will never return
-                                        Err(e) => {
-                                            error!(
-                                                "Error in embedded ratpub turbine. Reload the App. {e}"
-                                            )
-                                        }
-                                    }
-                                });
-                            }
 
                             let eval = match (&file_path, coord_file) {
                                 (cfg_filepath, Some(cfpath)) => {
@@ -738,15 +826,42 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             coord::run_coordinator(locked_start, clients, eval.rules);
                         }
 
+                        #[cfg(feature = "embed-ratpub-turbine")]
+                        let ratpub_ready_rx = {
+                            let wind_name = wind::get_env_or_default(
+                                "ratpub_wind_name",
+                                &EMBED_RATPUB_TURBINE_NAME,
+                            )?;
+
+                            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                            tokio::spawn(async move {
+                                let res = wind::ratpub::run_dyn_wind(&wind_name, ready_tx).await;
+                                match res {
+                                    Ok(_) => {} // will never return
+                                    Err(e) => {
+                                        error!(
+                                            "Error in embedded ratpub turbine. Reload the App. {e}"
+                                        )
+                                    }
+                                }
+                            });
+                            Some(ready_rx)
+                        };
+                        #[cfg(not(feature = "embed-ratpub-turbine"))]
+                        let ratpub_ready_rx: Option<
+                            tokio::sync::oneshot::Receiver<()>,
+                        > = None;
+
                         #[cfg(feature = "embed-ros2-turbine")]
-                        {
+                        let ros2_ready_rx = {
                             let wind_name = wind::get_env_or_default(
                                 "wind_ros2_name",
                                 &EMBED_ROS2_TURBINE_NAME,
                             )?;
 
+                            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = wind::ros2::run_dyn_wind(&wind_name).await;
+                                let res = wind::ros2::run_dyn_wind(&wind_name, ready_tx).await;
                                 match res {
                                     Ok(_) => {} // will never return
                                     Err(e) => {
@@ -756,17 +871,23 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             });
-                        }
+                            Some(ready_rx)
+                        };
+                        #[cfg(not(feature = "embed-ros2-turbine"))]
+                        let ros2_ready_rx: Option<
+                            tokio::sync::oneshot::Receiver<()>,
+                        > = None;
 
                         #[cfg(feature = "embed-ros2-c-turbine")]
-                        {
+                        let ros2_c_ready_rx = {
                             let wind_name = wind::get_env_or_default(
                                 "wind_ros2_c_name",
                                 &EMBED_ROS2_C_TURBINE_NAME,
                             )?;
 
+                            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = wind::ros2_r2r::run_dyn_wind(&wind_name).await;
+                                let res = wind::ros2_r2r::run_dyn_wind(&wind_name, ready_tx).await;
                                 match res {
                                     Ok(_) => {} // will never return
                                     Err(e) => {
@@ -776,10 +897,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             });
-                        }
+                            Some(ready_rx)
+                        };
+                        #[cfg(not(feature = "embed-ros2-c-turbine"))]
+                        let ros2_c_ready_rx: Option<
+                            tokio::sync::oneshot::Receiver<()>,
+                        > = None;
 
                         #[cfg(feature = "embed-ros1-turbine")]
-                        {
+                        let ros1_ready_rx = {
                             let wind_name = wind::get_env_or_default(
                                 "wind_ros1_name",
                                 &EMBED_ROS1_TURBINE_NAME,
@@ -790,8 +916,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 "http://localhost:11311",
                             )?;
 
+                            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = wind::ros1::run_dyn_wind(&master_uri, &wind_name).await;
+                                let res =
+                                    wind::ros1::run_dyn_wind(&master_uri, &wind_name, ready_tx)
+                                        .await;
                                 match res {
                                     Ok(None) => {
                                         log::warn!("ROS1 Master not found. Destroying node.");
@@ -804,7 +933,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             });
-                        }
+                            Some(ready_rx)
+                        };
+                        #[cfg(not(feature = "embed-ros1-turbine"))]
+                        let ros1_ready_rx: Option<
+                            tokio::sync::oneshot::Receiver<()>,
+                        > = None;
 
                         let rules = eval.rules;
                         info!("Looking for coordinator...");
@@ -947,6 +1081,46 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         });
 
                         let app = App::new(tx, ndata_rx, dyn_wind_rx, Some(file_path)).await;
+
+                        // Wait for all winds to be connected before responding
+                        let mut ready_futures = vec![];
+                        if let Some(rx) = ratpub_ready_rx {
+                            ready_futures.push(tokio::spawn(async move {
+                                match rx.await {
+                                    Ok(_) => info!("ratpub wind ready"),
+                                    Err(_) => warn!("ratpub wind ready signal dropped"),
+                                }
+                            }));
+                        }
+                        if let Some(rx) = ros2_ready_rx {
+                            ready_futures.push(tokio::spawn(async move {
+                                match rx.await {
+                                    Ok(_) => info!("ros2 wind ready"),
+                                    Err(_) => warn!("ros2 wind ready signal dropped"),
+                                }
+                            }));
+                        }
+                        if let Some(rx) = ros2_c_ready_rx {
+                            ready_futures.push(tokio::spawn(async move {
+                                match rx.await {
+                                    Ok(_) => info!("ros2-c wind ready"),
+                                    Err(_) => warn!("ros2-c wind ready signal dropped"),
+                                }
+                            }));
+                        }
+                        if let Some(rx) = ros1_ready_rx {
+                            ready_futures.push(tokio::spawn(async move {
+                                match rx.await {
+                                    Ok(_) => info!("ros1 wind ready"),
+                                    Err(_) => warn!("ros1 wind ready signal dropped"),
+                                }
+                            }));
+                        }
+
+                        // Wait for all winds to signal ready
+                        for future in ready_futures {
+                            let _ = future.await;
+                        }
 
                         info!("Connection established. Minot initialized.");
 
@@ -1124,6 +1298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Headless(headless_args) => {
             runner::run(headless_args.file, headless_args.minot_path).await
         }
+        Commands::Features { feature } => features_command(feature),
         Commands::Uninstall => uninstall(),
     }
 }

@@ -122,7 +122,11 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindD
     Ok(rx)
 }
 
-pub async fn run_dyn_wind(master_uri: &str, wind_name: &str) -> anyhow::Result<Option<()>> {
+pub async fn run_dyn_wind(
+    master_uri: &str,
+    wind_name: &str,
+    ready: tokio::sync::oneshot::Sender<()>,
+) -> anyhow::Result<Option<()>> {
     let nh = NodeHandle::new(&master_uri, &wind_name).await;
 
     let nh = match nh {
@@ -143,6 +147,10 @@ pub async fn run_dyn_wind(master_uri: &str, wind_name: &str) -> anyhow::Result<O
     let mut imu_publishers = HashMap::new();
 
     let mut wind_receiver = wind(&wind_name).await?;
+    
+    if let Err(_) = ready.send(()) {
+        log::warn!("ros1 wind could not signal to be ready to handle requests");
+    }
 
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
@@ -304,7 +312,12 @@ async fn main() -> anyhow::Result<()> {
     let wind_name = get_env_or_default("wind_name", "turbine_ros1")?;
     let master_uri = get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
 
-    run_dyn_wind(&master_uri, &wind_name).await?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        // dump ready answer
+        _ = rx.await;
+    });
+    run_dyn_wind(&master_uri, &wind_name, tx).await?;
 
     Ok(())
 }

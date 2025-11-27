@@ -32,7 +32,7 @@ pub struct Rules {
     id_counter: u32,
 }
 
-pub const COMPARE_NODE_NAME: &str = "#minot-tui";
+pub const COMPARE_NODE_NAME: &str = "#minot";
 
 impl Default for Rules {
     fn default() -> Self {

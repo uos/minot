@@ -115,7 +115,10 @@ pub fn split_path(path: &str) -> (String, String) {
     (final_directory_path, last_element)
 }
 
-pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
+pub async fn run_dyn_wind(
+    wind_name: &str,
+    ready: tokio::sync::oneshot::Sender<()>,
+) -> anyhow::Result<()> {
     let ctx = ros2_client::Context::new()?;
     let node_name = wind_name.to_owned() + "_node";
     let mut node = ctx.new_node(
@@ -125,6 +128,10 @@ pub async fn run_dyn_wind(wind_name: &str) -> anyhow::Result<()> {
     let mut publishers: HashMap<(String, String), ros2_client::PublisherRaw> = HashMap::new();
 
     let mut wind_receiver = wind(wind_name).await?;
+    
+    if let Err(_) = ready.send(()) {
+        log::warn!("ros2 wind could not signal to be ready to handle requests");
+    }
 
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
@@ -219,7 +226,12 @@ async fn main() -> anyhow::Result<()> {
 
     let wind_name = get_env_or_default("wind_name", "turbine_ros2")?;
 
-    run_dyn_wind(&wind_name).await?; // will never return
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        // dump ready answer
+        _ = rx.await;
+    });
+    run_dyn_wind(&wind_name, tx).await?; // will never return
 
     Ok(())
 }
