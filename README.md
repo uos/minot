@@ -21,7 +21,7 @@ For ROS support, make sure to have your ROS environment sourced before running t
 
 After your first steps with Minot, you may want to use its more advanced features. Check the detailed [install page](https://uos.github.io/minot/installation.html) for that.
 
-## VS Code Extension
+### VS Code Extension
 
 Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Maybe start by selecting some lines and run them with `Run Selection`. Minot will be run automatically in the background.
 
