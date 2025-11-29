@@ -203,7 +203,13 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let wind_name = wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
 
         tokio::spawn(async move {
-            let res = wind::ros2::run_dyn_wind(&wind_name).await;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            tokio::spawn(async move {
+                // dump ready answer
+                _ = rx.await;
+            });
+            let res = wind::ros2::run_dyn_wind(&wind_name, tx).await;
             match res {
                 Ok(_) => {} // will never return
                 Err(e) => {
@@ -218,7 +224,13 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let wind_name = wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
 
         tokio::spawn(async move {
-            let res = wind::ros2_r2r::run_dyn_wind(&wind_name).await;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            tokio::spawn(async move {
+                // dump ready answer
+                _ = rx.await;
+            });
+            let res = wind::ros2_r2r::run_dyn_wind(&wind_name, tx).await;
             match res {
                 Ok(_) => {} // will never return
                 Err(e) => {
@@ -237,7 +249,13 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let master_uri = wind::get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
 
         tokio::spawn(async move {
-            let res = wind::ros1::run_dyn_wind(&master_uri, &wind_name).await;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            tokio::spawn(async move {
+                // dump ready answer
+                _ = rx.await;
+            });
+            let res = wind::ros1::run_dyn_wind(&master_uri, &wind_name, tx).await;
             match res {
                 Ok(None) => {
                     log::warn!("ROS1 Master not found. Destroying node.");
