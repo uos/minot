@@ -428,29 +428,30 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn get_compiled_features() -> Vec<String> {
+    #[allow(unused_mut)]
     let mut features = Vec::new();
-    
+
     #[cfg(feature = "embed-coord")]
     features.push("coord".to_string());
-    
+
     #[cfg(feature = "embed-ratpub")]
     features.push("ratpub".to_string());
-    
+
     #[cfg(feature = "embed-ros1-turbine")]
     features.push("ros1".to_string());
-    
+
     #[cfg(feature = "embed-ros2-turbine")]
     features.push("ros2".to_string());
-    
+
     #[cfg(feature = "embed-ros2-c-turbine")]
     features.push("ros2-c".to_string());
-    
+
     features
 }
 
 fn has_feature(feature_name: &str) -> bool {
     let normalized = feature_name.to_lowercase();
-    
+
     match normalized.as_str() {
         "coord" => {
             #[cfg(feature = "embed-coord")]
@@ -490,7 +491,7 @@ fn features_command(feature: Option<String>) -> Result<(), Box<dyn std::error::E
     match feature {
         Some(feature_names) => {
             let features: Vec<&str> = feature_names.split(',').map(|s| s.trim()).collect();
-            
+
             let mut all_present = true;
             for feature_name in features {
                 if !has_feature(feature_name) {
@@ -498,7 +499,7 @@ fn features_command(feature: Option<String>) -> Result<(), Box<dyn std::error::E
                     break;
                 }
             }
-            
+
             if all_present {
                 std::process::exit(0);
             } else {
@@ -1318,7 +1319,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Tui(tui_args) => tui(tui_args.file).await,
         Commands::Serve => serve().await,
         Commands::Headless(headless_args) => {
-            runner::run(headless_args.file, headless_args.minot_path, headless_args.sync).await
+            runner::run(
+                headless_args.file,
+                headless_args.minot_path,
+                headless_args.sync,
+            )
+            .await
         }
         Commands::Features { feature } => features_command(feature),
         Commands::Uninstall => uninstall(),

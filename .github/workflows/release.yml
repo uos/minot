@@ -63,10 +63,14 @@ jobs:
 
           # 4. Sidecars & Libs
           $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
           $CARGO_CMD --package rat --lib 
           
           # Move shared artifacts to root of dist
           cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/wind-rat dist/
+          cp target/$RUST_TARGET/release/wind-ros2-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp rat/rat.h dist/
 
@@ -112,9 +116,15 @@ jobs:
 
           # 4. Sidecars & Libs
           $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package rat --lib 
           
           cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/wind-rat dist/
+          cp target/$RUST_TARGET/release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
           cp rat/rat.h dist/
@@ -214,9 +224,15 @@ jobs:
 
           # Sidecars
           $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/wind-rat dist/
+          cp target/$RUST_TARGET/release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
           cp rat/rat.h dist/
@@ -264,9 +280,15 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/wind-rat dist/
+          cp target/$RUST_TARGET/release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.dylib dist/
           cp rat/rat.h dist/
@@ -309,9 +331,15 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/wind-rat dist/
+          cp target/$RUST_TARGET/release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.dylib dist/
           cp rat/rat.h dist/
@@ -364,35 +392,15 @@ jobs:
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --release"
 
-          # 1. Standard Variants (min, co, rat)
-          $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
-
-          # 2. ROS2 Variant (ros2)
           # Feature: embed-ros2-c
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
-          # 3. Sidecars (wind-ros2, minot-coord)
           $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c
           $CARGO_CMD --package minot --bin minot-coord
           
-          # 4. Libs
-          # (Usually libs are not ROS specific unless they link against ROS, assuming standard build here)
-          $CARGO_CMD --package rat --lib
-
           # Copy root artifacts
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          # No lib copy in previous Jazzy job, but requested "all libs". 
-          # Note: Shared libs built in ROS env might link to ROS libs.
-          # We'll skip libs here to match previous logic, or you can add them if needed.
 
       - name: "Archive binary"
         run: |
@@ -437,26 +445,12 @@ jobs:
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --release"
 
-          # 1. Standard
-          $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
-
-          # 2. ROS2
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
-          # 3. Sidecars
           $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c
-          $CARGO_CMD --package minot --bin minot-coord
           
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
-          cp target/$RUST_TARGET/release/minot-coord dist/
 
       - name: "Archive binary"
         run: |
@@ -501,18 +495,6 @@ jobs:
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --release"
 
-          # 1. Standard
-          $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
-
-          # 2. ROS2 (Humble)
-          # Feature: embed-ros2-c-humble
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
@@ -524,11 +506,9 @@ jobs:
           # 4. Sidecars (wind-ros2-c, wind-ros1-native, minot-coord)
           $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c,humble
           $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package minot --bin minot-coord
 
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/release/minot-coord dist/
 
       - name: "Archive binary"
         run: |
@@ -573,32 +553,17 @@ jobs:
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --release"
 
-          # 1. Standard
-          $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
-
-          # 2. ROS2
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
-          # 3. ROS2 + ROS1 Combined
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble,embed-ros1-native
           mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
 
-          # 4. Sidecars
           $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c,humble
           $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package minot --bin minot-coord
           
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/release/minot-coord dist/
 
       - name: "Archive binary"
         run: |
@@ -623,18 +588,73 @@ jobs:
         run: |
           cat > manifest.json <<'EOF'
           {
-            "description": "Directory mapping: min=Minimal, co=Coord, rat=Ratpub, ros2=ROS2-C, ros2_1=ROS2-C+ROS1-Native",
+            "description": "Feature manifest for Minot releases. Each archive contains minot variants in subdirectories and shared artifacts in root.",
+            "subdirs": {
+              "min": "Minimal (no embeds)",
+              "co": "Coord only (embed-coord)",
+              "rat": "Coord + Ratpub (embed-coord, embed-ratpub)",
+              "ros2": "Coord + ROS2-C (embed-coord, embed-ros2-c or embed-ros2-c-humble)",
+              "ros2_1": "Coord + ROS2-C + ROS1 (embed-coord, embed-ros2-c-humble, embed-ros1-native)"
+            },
             "targets": {
-              "minot-x86_64-unknown-linux-musl": ["min", "co", "rat"],
-              "minot-x86_64-unknown-linux-gnu": ["min", "co", "rat"],
-              "minot-aarch64-unknown-linux-gnu": ["min", "co", "rat"],
-              "minot-armv7-unknown-linux-gnueabihf": ["min", "co", "rat"],
-              "minot-aarch64-apple-darwin": ["min", "co", "rat"],
-              "minot-x86_64-apple-darwin": ["min", "co", "rat"],
-              "minot-jazzy-x86_64-unknown-linux-gnu": ["min", "co", "rat", "ros2"],
-              "minot-jazzy-aarch64-unknown-linux-gnu": ["min", "co", "rat", "ros2"],
-              "minot-humble-x86_64-unknown-linux-gnu": ["min", "co", "rat", "ros2", "ros2_1"],
-              "minot-humble-aarch64-unknown-linux-gnu": ["min", "co", "rat", "ros2", "ros2_1"]
+              "minot-x86_64-unknown-linux-musl": {
+                "subdirs": ["min", "co", "rat"],
+                "features": ["embed-coord", "embed-ratpub"],
+                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "librat.a", "rat.h"]
+              },
+              "minot-x86_64-unknown-linux-gnu": {
+                "subdirs": ["min", "co", "rat"],
+                "features": ["embed-coord", "embed-ratpub"],
+                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
+              },
+              "minot-aarch64-unknown-linux-gnu": {
+                "subdirs": ["min", "co", "rat"],
+                "features": ["embed-coord", "embed-ratpub"],
+                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
+              },
+              "minot-armv7-unknown-linux-gnueabihf": {
+                "subdirs": ["min", "co", "rat"],
+                "features": ["embed-coord", "embed-ratpub"],
+                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
+              },
+              "minot-aarch64-apple-darwin": {
+                "subdirs": ["min", "co", "rat"],
+                "features": ["embed-coord", "embed-ratpub"],
+                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
+              },
+              "minot-x86_64-apple-darwin": {
+                "subdirs": ["min", "co", "rat"],
+                "features": ["embed-coord", "embed-ratpub"],
+                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
+              },
+              "minot-jazzy-x86_64-unknown-linux-gnu": {
+                "subdirs": ["ros2"],
+                "features": ["embed-coord", "embed-ros2-c"],
+                "ros_distro": "jazzy",
+                "root_artifacts": ["wind-ros2-c"],
+                "requires_base_target": "minot-x86_64-unknown-linux-gnu"
+              },
+              "minot-jazzy-aarch64-unknown-linux-gnu": {
+                "subdirs": ["ros2"],
+                "features": ["embed-coord", "embed-ros2-c"],
+                "ros_distro": "jazzy",
+                "root_artifacts": ["wind-ros2-c"],
+                "requires_base_target": "minot-aarch64-unknown-linux-gnu"
+              },
+              "minot-humble-x86_64-unknown-linux-gnu": {
+                "subdirs": ["ros2", "ros2_1"],
+                "features": ["embed-coord", "embed-ros2-c-humble", "embed-ros1-native"],
+                "ros_distro": "humble",
+                "root_artifacts": ["wind-ros2-c", "wind-ros1-native"],
+                "requires_base_target": "minot-x86_64-unknown-linux-gnu"
+              },
+              "minot-humble-aarch64-unknown-linux-gnu": {
+                "subdirs": ["ros2", "ros2_1"],
+                "features": ["embed-coord", "embed-ros2-c-humble", "embed-ros1-native"],
+                "ros_distro": "humble",
+                "root_artifacts": ["wind-ros2-c", "wind-ros1-native"],
+                "requires_base_target": "minot-aarch64-unknown-linux-gnu"
+              }
             }
           }
           EOF

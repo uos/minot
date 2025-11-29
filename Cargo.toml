@@ -55,6 +55,8 @@ roslibrust = { version = "0.12.2", features = ["ros1", "macro"] }
 roslibrust = { git = "https://github.com/stelzo/roslibrust", branch = "rustls" }
 
 [profile.release]
-lto = true          # Link Time Optimization
+lto = "fat"         # Link Time Optimization
 codegen-units = 1   # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
-strip = "debuginfo" # Significantly reduce binary size
+strip = "symbols"   # Significantly reduce binary size
+opt-level = "s"     # Optimize for size but keep some performance
+debug = 0
