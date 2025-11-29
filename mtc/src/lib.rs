@@ -2082,7 +2082,16 @@ where
                 Token::IntegerNumber(n) => n as usize,
             })
             .then(
-                choice((statement.clone(), include.clone(), loop_stmt_rec))
+                choice((
+                    statement.clone(),
+                    wind_play_frames_fn.clone(),
+                    wind_reset_fn.clone(),
+                    rule.clone(),
+                    namespace_block.clone(),
+                    include.clone(),
+                    loop_stmt_rec,
+                ))
+                    .then_ignore(just(Token::NewLine).repeated())
                     .repeated()
                     .collect::<Vec<_>>()
                     .delimited_by(

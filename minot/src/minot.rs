@@ -59,6 +59,10 @@ pub struct HeadlessArgs {
     /// Path to the minot binary. Defaults to "minot" (expected in PATH).
     #[arg(long, default_value = "minot")]
     pub minot_path: PathBuf,
+
+    /// Wait for stdin input (any line) before executing the file. Useful when waiting for network connections.
+    #[arg(long)]
+    pub sync: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -1296,7 +1300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Tui(tui_args) => tui(tui_args.file).await,
         Commands::Serve => serve().await,
         Commands::Headless(headless_args) => {
-            runner::run(headless_args.file, headless_args.minot_path).await
+            runner::run(headless_args.file, headless_args.minot_path, headless_args.sync).await
         }
         Commands::Features { feature } => features_command(feature),
         Commands::Uninstall => uninstall(),

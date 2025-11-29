@@ -57,7 +57,7 @@ struct ServerResponse {
     data: Option<serde_json::Value>,
 }
 
-pub async fn run(file_path: PathBuf, minot_path: PathBuf) -> Result<(), BoxError> {
+pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<(), BoxError> {
     let file_content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read file {:?}: {}", file_path, e))?;
 
@@ -111,6 +111,17 @@ pub async fn run(file_path: PathBuf, minot_path: PathBuf) -> Result<(), BoxError
             info!("Init successful: {:?}", resp.message);
         }
         _ => unreachable!(),
+    }
+
+    // Wait for user input if sync flag is set
+    if sync {
+        eprintln!("Waiting for input on stdin before execution (--sync mode)...");
+        let mut user_input = String::new();
+        let stdin = tokio::io::stdin();
+        let mut stdin_reader = BufReader::new(stdin);
+        stdin_reader.read_line(&mut user_input).await
+            .map_err(|e| format!("Failed to read from stdin: {}", e))?;
+        eprintln!("Received input, proceeding with execution");
     }
 
     // After successful Init, send a CompileExecute command so the server compiles the file

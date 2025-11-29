@@ -237,6 +237,12 @@ pub enum SensorTypeMapped {
     Any(Vec<u8>),
 }
 
+#[derive(Clone, Debug)]
+pub struct BagReadResult {
+    pub messages: Vec<(u64, BagMsg)>,
+    pub end_of_bag: bool,
+}
+
 // pub fn detect_endianness_from_header<R>(mut reader: R) -> anyhow::Result<Endian>
 // where
 //     R: std::io::Read,
@@ -269,7 +275,7 @@ fn collect_until<T>(
     send_sensor: &Vec<AnySensor>,
     until_sensor: Option<(&Vec<AnySensor>, &PlayCount)>,
     until: Option<&PlayCount>,
-) -> anyhow::Result<Vec<(u64, BagMsg)>>
+) -> anyhow::Result<BagReadResult>
 // TODO should be an iterator to remove warning for a ros2 bag play implementation
 where
     T: Seek + Read,
@@ -285,6 +291,7 @@ where
     let mut rel_since_begin = 0;
     let mut until_sensor_counter = 0;
     let mut msgs = Vec::new();
+    let mut reached_end_naturally = true;
 
     // skipping if needed. if the request wants some data from earlier, redo the indexreader with the respective filters
     let lower = match until {
@@ -335,6 +342,7 @@ where
                         let end_abs = span_start + rel_dur;
                         if log_time > end_abs {
                             breaked_until = true;
+                            reached_end_naturally = false;
                             break;
                         }
                     }
@@ -344,6 +352,7 @@ where
                         let end_abs = span_start + rel_dur;
                         if log_time > end_abs {
                             breaked_until = true;
+                            reached_end_naturally = false;
                             break;
                         }
                     }
@@ -352,6 +361,7 @@ where
                         let end_abs = span_start + max;
                         if log_time > end_abs {
                             breaked_until = true;
+                            reached_end_naturally = false;
                             break;
                         }
                     }
@@ -359,6 +369,7 @@ where
                     Some(PlayCount::Amount(count)) => {
                         if rel_since_begin >= *count {
                             breaked_until = true;
+                            reached_end_naturally = false;
                             break;
                         }
                     }
@@ -381,6 +392,7 @@ where
                                 PlayCount::Amount(uc) => {
                                     if until_sensor_counter >= *uc {
                                         breaked_until = true;
+                                        reached_end_naturally = false;
                                         break;
                                     }
                                 }
@@ -480,6 +492,7 @@ where
                     if let Some(pc) = until {
                         if let PlayCount::Amount(count) = pc {
                             if rel_since_begin >= *count {
+                                reached_end_naturally = false;
                                 break;
                             }
                         }
@@ -498,7 +511,10 @@ where
         *last_iter_time = time_iter_before;
     };
 
-    Ok(msgs)
+    Ok(BagReadResult {
+        messages: msgs,
+        end_of_bag: reached_end_naturally,
+    })
 }
 
 #[derive(Clone, Debug, Default, Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -642,7 +658,7 @@ impl TryFrom<crate::Qos> for ros2::QosPolicies {
 }
 
 impl Bagfile {
-    pub fn next(&mut self, kind: &PlayKindUnitedPass3) -> anyhow::Result<Vec<(u64, BagMsg)>> {
+    pub fn next(&mut self, kind: &PlayKindUnitedPass3) -> anyhow::Result<BagReadResult> {
         match self.reader.as_mut() {
             Some(reader) => {
                 let metadata = self.metadata.as_ref().expect("metadata set with buffer");
@@ -774,7 +790,7 @@ mod tests {
 
         assert!(clouds.is_ok());
         let clouds = clouds.unwrap();
-        assert_eq!(clouds.len(), 1);
+        assert_eq!(clouds.messages.len(), 1);
     }
 
     #[test]
@@ -797,7 +813,7 @@ mod tests {
 
         assert!(clouds.is_ok());
         let clouds = clouds.unwrap();
-        assert_eq!(clouds.len(), 1);
+        assert_eq!(clouds.messages.len(), 1);
 
         let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
             sensors: vec![AnySensor {
@@ -812,7 +828,7 @@ mod tests {
 
         assert!(clouds.is_ok());
         let clouds = clouds.unwrap();
-        assert_eq!(clouds.len(), 1);
+        assert_eq!(clouds.messages.len(), 1);
 
         let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
             sensors: vec![AnySensor {
@@ -827,6 +843,6 @@ mod tests {
 
         assert!(clouds.is_ok());
         let clouds = clouds.unwrap();
-        assert_eq!(clouds.len(), 2);
+        assert_eq!(clouds.messages.len(), 2);
     }
 }

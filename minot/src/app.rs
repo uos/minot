@@ -1864,15 +1864,15 @@ impl App {
                                 };
                                 info!(
                                     "got {} msg{} in {:?}",
-                                    bagmsgs.len(),
-                                    if bagmsgs.len() > 1 { "s" } else { "" },
+                                    bagmsgs.messages.len(),
+                                    if bagmsgs.messages.len() > 1 { "s" } else { "" },
                                     start_bag_read.elapsed()
                                 );
 
-                                let mut wind_data = Vec::with_capacity(bagmsgs.len());
+                                let mut wind_data = Vec::with_capacity(bagmsgs.messages.len());
                                 let mut start_time = None;
                                 let mut end_time = None;
-                                for (t, msg) in bagmsgs {
+                                for (t, msg) in bagmsgs.messages {
                                     if start_time.is_none() {
                                         start_time.replace(t);
                                     }
@@ -1883,7 +1883,10 @@ impl App {
                                     wind_data.push((diff, msg));
                                 }
 
-                                if wind_data.is_empty() {
+                                if bagmsgs.end_of_bag {
+                                    info!("reached end of bagfile");
+                                    return;
+                                } else if wind_data.is_empty() {
                                     warn!("query returned empty data");
                                     return;
                                 }

@@ -2,7 +2,7 @@
 
 Minot VS Code brings the Minot development and debugging tools into the editor. It provides controls to run the Minot coordinator, compile and execute Minot query scripts, and interact with the variable-sharing/locking controls from the status bar.
 
-**Homepage**: https://uos.github.io/minot/
+**Repository**: https://uos.github.io/minot/
 
 ## Features
 

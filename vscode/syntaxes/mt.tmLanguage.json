@@ -76,11 +76,11 @@
     },
     "namespace-accessor": {
       "name": "entity.name.namespace",
-      "match": "\\b[a-zA-Z_:][a-zA-Z_:\\d]*(?=\\s*\\.)"
+      "match": "\\b[a-zA-Z_:][a-zA-Z_:\\d]*(?=\\s*[.{])"
     },
     "internal-variables": {
       "name": "variable.language",
-      "match": "\\b_[a-zA-Z_:\\d]+\\b"
+      "match": "\\b_[a-zA-Z_:\\d]+\\b(?!\\s*[.{])"
     },
     "variables": {
       "name": "variable.other",
