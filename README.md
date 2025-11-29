@@ -23,7 +23,9 @@ After your first steps with Minot, you may want to use its more advanced feature
 
 ## VS Code Extension
 
-Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Select some lines and run them with `Run Selection`. Hover over the buttons to see their keybindings.
+Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Maybe start by selecting some lines and run them with `Run Selection`. Minot will be run automatically in the background.
+
+More information about the extension can be found at the [Marketplace](https://marketplace.visualstudio.com/items?itemName=stelzo.minot).
 
 ### Tree-sitter Support
 

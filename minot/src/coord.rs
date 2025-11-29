@@ -76,6 +76,33 @@ struct WindTask {
 }
 
 pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rules) {
+    // Early port availability check for the fixed UDP listener port (CLIENT_LISTEN_PORT).
+    // If already in use, clear the previous line (compile/search feedback) and print a user-friendly
+    // English message, then exit. This ensures the TUI presents the error instead of an internal panic.
+    {
+        use std::net::UdpSocket;
+        let port = sea::net::CLIENT_LISTEN_PORT;
+        let addr = format!("0.0.0.0:{}", port);
+        match UdpSocket::bind(&addr) {
+            Ok(socket) => {
+                // drop immediately – we only probe availability
+                drop(socket);
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    println!(
+                        "Another Minot coordinator is running. Please terminate it before starting a new instance.");
+                    std::process::exit(1);
+                } else {
+                    println!(
+                        "Failed to bind coordinator UDP port {} ({}). Aborting startup.",
+                        port, e
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
     let clients_wait_for_ack = std::sync::Arc::new(std::sync::RwLock::new(!clients.is_empty()));
     let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
     let rules_changer = std::sync::Arc::clone(&rules);

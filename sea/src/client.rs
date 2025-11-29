@@ -94,7 +94,26 @@ impl Client {
             ip[3],
             port.unwrap_or(0)
         );
-        let udp_socket = UdpSocket::bind(&bind_address).await.unwrap();
+        let udp_socket = match UdpSocket::bind(&bind_address).await {
+            Ok(s) => s,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    if let Some(_) = port {
+                        error!(
+                            "Another Minot coordinator instance is likely running. Terminate the other instance before starting a new one.");
+                    } else {
+                        error!(
+                            "Dynamic UDP port already in use ({}). Terminate the other instance if it is still running.",
+                            bind_address
+                        );
+                    }
+                    std::process::exit(1);
+                } else {
+                    error!("Failed to bind UDP socket at {}: {}", bind_address, e);
+                    std::process::exit(1);
+                }
+            }
+        };
         udp_socket
             .set_broadcast(true)
             .expect("could not set broadcast");
