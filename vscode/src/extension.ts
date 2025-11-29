@@ -11,75 +11,29 @@ let lockToggleButton: vscode.StatusBarItem | null = null;
 let sbRun: vscode.StatusBarItem | null = null;
 let sbStep: vscode.StatusBarItem | null = null;
 
-// Default keybindings (used as fallback when API doesn't return bindings)
-const defaultKeybindings: Record<string, string> = {
-  'minot.compileAndExecute': 'Ctrl+Shift+Enter',
-  'minot.toggleLock': 'Ctrl+Shift+-',
-  'minot.sendUnlock': 'Ctrl+Shift+.',
-  'minot.sendLockNext': 'Ctrl+Shift+-',
-  'minot.sendLockNextPrevious': 'Ctrl+Shift+,',
-};
-
 /**
- * Get the keybinding for a command. Returns the user's custom binding if set,
- * otherwise returns the default binding.
+ * Update all status bar tooltips
  */
-async function getKeybindingForCommand(commandId: string): Promise<string> {
-  try {
-    // Use VS Code's internal command to get keybindings for a command
-    const keybindings = await vscode.commands.executeCommand<Array<{ key: string; when?: string }>>(
-      'vscode.getKeyBinding',
-      commandId
-    );
-    if (keybindings && keybindings.length > 0) {
-      return keybindings[0].key;
-    }
-  } catch {
-    // API not available or failed, fall back to default
-  }
-  return defaultKeybindings[commandId] || '';
+function updateAllTooltips() {
+  updateLockButtonUI();
+  updateRunButtonTooltip();
+  updateStepButtonTooltip();
 }
 
-/**
- * Update all status bar tooltips with current keybindings
- */
-async function updateAllTooltips() {
-  await Promise.all([
-    updateLockButtonUI(),
-    updateRunButtonTooltip(),
-    updateStepButtonTooltip(),
-  ]);
-}
-
-async function updateRunButtonTooltip() {
+function updateRunButtonTooltip() {
   if (!sbRun) {
     return;
   }
-  const keybinding = await getKeybindingForCommand('minot.compileAndExecute');
-  sbRun.tooltip = keybinding
-    ? `Compile and Execute selection (${keybinding})`
-    : 'Compile and Execute selection';
+  sbRun.tooltip = 'Compile and Execute selection';
 }
 
-async function updateStepButtonTooltip() {
+function updateStepButtonTooltip() {
   if (!sbStep) {
     return;
   }
-  const keybinding = await getKeybindingForCommand('minot.sendLockNextPrevious');
-  sbStep.tooltip = keybinding
-    ? `Step once in a Minot loop (${keybinding})`
-    : 'Step once in a Minot loop';
+  sbStep.tooltip = 'Step once in a Minot loop';
 }
 
-// Minimum required compatibility: currently we require the 0.1.x family
-// and we treat any prerelease (rc, alpha, beta, etc.) as incompatible.
-// Assumption: for now we demand major=0 and minor=1 (i.e. 0.1.*) and
-// no prerelease. This follows the user's note that 0.1.0 -> 0.2.0 can be breaking
-// and that every rc/alpha/beta is breaking.
-
-// The required Minot version string read from package.json (engines.minot)
-// NOTE: no fallback is allowed — engines.minot in the packaged extension is the
-// single source of truth. If it's missing or unparsable we abort activation.
 let requiredMinotVersionRaw = '';
 
 function loadRequiredMinotVersion(extensionPath: string) {
@@ -121,9 +75,8 @@ async function ensureMinotCompatible(workspaceRoot?: string): Promise<string> {
       const version = extractVersion(out);
       if (!version) {
         // Could not parse version string
-        vscode.window.showErrorMessage(
-          `Unknown Minot version: ${out.trim()}. Please install a compatible version (${installUrl}).`,
-        );
+        // Quiet: just log to channel, avoid popup
+        logToChannel(`Unknown Minot version: ${out.trim()}. Please install a compatible version (${installUrl}).`, 'ERROR');
         throw new Error('Could not parse minot version');
       }
 
@@ -131,18 +84,14 @@ async function ensureMinotCompatible(workspaceRoot?: string): Promise<string> {
       const required = parseSemverString(requiredMinotVersionRaw);
       if (!required) {
         // Required must be present and parseable according to the single-source rule
-        vscode.window.showErrorMessage(
-          `Extension configuration error: engines.minot is missing or invalid in package.json. Please check the extension package.`,
-        );
+        logToChannel(`Extension configuration error: engines.minot is missing or invalid in package.json. Please check the extension package.`, 'ERROR');
         throw new Error('Missing or invalid engines.minot in package.json');
       }
 
       // Check compatibility: installed versions must NOT be prereleases and must
       // satisfy >= required and < compatibility upper bound.
       if (!isCompatibleVersion(version, required)) {
-        vscode.window.showErrorMessage(
-          `Incompatible Minot version detected: ${version.raw}. Required: >=${requiredMinotVersionRaw} and <${compatUpperBoundString(required)}. Pre-release versions are only allowed when exactly matching the required prerelease. Please install a compatible version.`,
-        );
+        logToChannel(`Incompatible Minot version detected: ${version.raw}. Required: >=${requiredMinotVersionRaw} and <${compatUpperBoundString(required)}. Pre-release versions are only allowed when exactly matching the required prerelease. Please install a compatible version.`, 'ERROR');
         throw new Error('Incompatible minot version');
       }
 
@@ -168,14 +117,15 @@ async function ensureMinotCompatible(workspaceRoot?: string): Promise<string> {
   // If we reach here, no minot binary found or all attempts failed
   logToChannel('Minot executable not found on PATH or workspace.', 'ERROR');
   
+  // Show installation prompt (requested)
   const choice = await vscode.window.showErrorMessage(
-    'Minot binary not found. Would you like to install it now?',
-    'Run Install (no ROS)',
+    'Minot binary not found. Would you like to install it now? (ROS support is installed automatically if your shell is sourced with ROS)',
+    'Run Install',
     'Open Installation Guide',
     'Cancel'
   );
-  
-  if (choice === 'Run Install (no ROS)') {
+
+  if (choice === 'Run Install') {
     // Create a new terminal and run the install script
     const terminal = vscode.window.createTerminal('Minot Installer');
     terminal.show();
@@ -191,7 +141,7 @@ async function ensureMinotCompatible(workspaceRoot?: string): Promise<string> {
     terminal.sendText(installCmd);
     logToChannel('Started Minot installation in terminal. Please follow the prompts.');
     vscode.window.showInformationMessage(
-      'Minot installation started in terminal. After installation completes, restart the extension or reload the window.'
+      'Minot installation started in terminal. If your shell is sourced with ROS, ROS support will be installed automatically. After installation completes, restart the extension or reload the window.'
     );
   } else if (choice === 'Open Installation Guide') {
     vscode.env.openExternal(vscode.Uri.parse(installUrl));
@@ -306,13 +256,13 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      'minot.compileAndExecute',
+      'minot.run',
       compileAndExecute,
     ),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('minot.restartServer', () => {
+    vscode.commands.registerCommand('minot.restart', () => {
       stopServer();
       startServer();
     }),
@@ -320,21 +270,21 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Internal commands (called by the toggle button)
   context.subscriptions.push(
-    vscode.commands.registerCommand('minot.sendUnlock', async () => {
+    vscode.commands.registerCommand('minot.unlock', async () => {
       await ensureServerRunningAndSend({ action: 'SendUnlock' });
       updateLockState(false);
     }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('minot.sendLockNext', async () => {
+    vscode.commands.registerCommand('minot.lock', async () => {
       await ensureServerRunningAndSend({ action: 'SendLockNext', previous: false });
       updateLockState(true);
     }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('minot.sendLockNextPrevious', async () => {
+    vscode.commands.registerCommand('minot.step', async () => {
       await ensureServerRunningAndSend({ action: 'SendLockNext', previous: true });
     }),
   );
@@ -349,9 +299,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('minot.toggleLock', async () => {
       if (isLocked) {
-        await vscode.commands.executeCommand('minot.sendUnlock');
+        await vscode.commands.executeCommand('minot.unlock');
       } else {
-        await vscode.commands.executeCommand('minot.sendLockNext');
+        await vscode.commands.executeCommand('minot.lock');
       }
     }),
   );
@@ -364,14 +314,14 @@ export function activate(context: vscode.ExtensionContext) {
   // Run button (no keybinding in text, only in tooltip)
   sbRun = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
   sbRun.text = 'Run Selection';
-  sbRun.command = 'minot.compileAndExecute';
+  sbRun.command = 'minot.run';
   sbRun.show();
   context.subscriptions.push(sbRun);
 
   // Step button
   sbStep = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 98);
   sbStep.text = 'Step';
-  sbStep.command = 'minot.sendLockNextPrevious';
+  sbStep.command = 'minot.step';
   sbStep.show();
   context.subscriptions.push(sbStep);
 
@@ -390,25 +340,19 @@ function updateLockState(locked: boolean) {
   updateLockButtonUI();
 }
 
-async function updateLockButtonUI() {
+function updateLockButtonUI() {
   if (!lockToggleButton) {
     return;
   }
   
   if (isLocked) {
-    const keybinding = await getKeybindingForCommand('minot.sendUnlock');
-    lockToggleButton.text = '🔒 Locked';
-    lockToggleButton.tooltip = keybinding
-      ? `Unlock Minot loops (${keybinding})`
-      : 'Unlock Minot loops';
-    lockToggleButton.command = 'minot.sendUnlock';
+    lockToggleButton.text = '🔒 Unlock';
+    lockToggleButton.tooltip = 'Unlock Minot loop';
+    lockToggleButton.command = 'minot.unlock';
   } else {
-    const keybinding = await getKeybindingForCommand('minot.sendLockNext');
-    lockToggleButton.text = '🔓 Unlocked';
-    lockToggleButton.tooltip = keybinding
-      ? `Lock Minot loops (${keybinding})`
-      : 'Lock Minot loops';
-    lockToggleButton.command = 'minot.sendLockNext';
+    lockToggleButton.text = '🔓 Lock';
+    lockToggleButton.tooltip = 'Lock next Minot loop';
+    lockToggleButton.command = 'minot.lock';
   }
 }
 
@@ -470,8 +414,8 @@ async function startServer(): Promise<void> {
           `Minot executable not found (ENOENT). Offering installation options.`,
           'ERROR',
         );
-        const choice = await vscode.window.showErrorMessage(
-          'Minot binary not found. Would you like to install it now?',
+          const choice = await vscode.window.showErrorMessage(
+            'Minot binary not found. Would you like to install it now? (ROS support is installed automatically if your shell is sourced with ROS)',
           'Run Install Script',
           'Open Installation Guide',
           'Cancel'
@@ -483,16 +427,15 @@ async function startServer(): Promise<void> {
           terminal.sendText('curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh');
           logToChannel('Started Minot installation in terminal. Please follow the prompts.');
           vscode.window.showInformationMessage(
-            'Minot installation started in terminal. After installation completes, restart the extension or reload the window.'
+            'Minot installation started in terminal. If your shell is sourced with ROS, ROS support will be installed automatically. After installation completes, restart the extension or reload the window.'
           );
         } else if (choice === 'Open Installation Guide') {
           vscode.env.openExternal(vscode.Uri.parse(installUrl));
         }
       } else {
         logToChannel(`Error spawning Minot: ${err}`, 'ERROR');
-        vscode.window.showErrorMessage(
-          `Error starting Minot: ${err?.message || String(err)}`,
-        );
+        // Quiet: avoid popup; log only
+        logToChannel(`Error starting Minot: ${err?.message || String(err)}`);
       }
       cleanup();
       finishReject(err || new Error('Error spawning Minot'));
@@ -629,9 +572,8 @@ async function compileAndExecute() {
       sendCompileExecute();
     } catch (err: any) {
       logToChannel(`Failed to start server: ${err}`, 'ERROR');
-      vscode.window.showErrorMessage(
-        `Failed to start Minot: ${err?.message || String(err)}`,
-      );
+      // Quiet: avoid popup
+      logToChannel(`Failed to start Minot: ${err?.message || String(err)}`, 'ERROR');
     }
     return;
   }
@@ -688,8 +630,8 @@ async function startServerAndInit(
           `Minot executable not found (ENOENT). Offering installation options.`,
           'ERROR',
         );
-        const choice = await vscode.window.showErrorMessage(
-          'Minot binary not found. Would you like to install it now?',
+          const choice = await vscode.window.showErrorMessage(
+          'Minot binary not found. Would you like to install it now? (ROS support is installed automatically if your shell is sourced with ROS)',
           'Run Install Script',
           'Open Installation Guide',
           'Cancel'
@@ -701,16 +643,14 @@ async function startServerAndInit(
           terminal.sendText('curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh');
           logToChannel('Started Minot installation in terminal. Please follow the prompts.');
           vscode.window.showInformationMessage(
-            'Minot installation started in terminal. After installation completes, restart the extension or reload the window.'
+            'Minot installation started in terminal. If your shell is sourced with ROS, ROS support will be installed automatically. After installation completes, restart the extension or reload the window.'
           );
         } else if (choice === 'Open Installation Guide') {
           vscode.env.openExternal(vscode.Uri.parse(installUrl));
         }
       } else {
         logToChannel(`Error spawning Minot: ${err}`, 'ERROR');
-        vscode.window.showErrorMessage(
-          `Error starting Minot: ${err?.message || String(err)}`,
-        );
+        logToChannel(`Error starting Minot: ${err?.message || String(err)}`);
       }
       cleanup();
       stopServer();
@@ -808,7 +748,8 @@ async function ensureServerRunningAndSend(commandObj: any) {
       await startServerAndInit('\n', filePath);
     } catch (e: any) {
       logToChannel(`Failed to start server for command ${commandObj?.action}: ${e}`, 'ERROR');
-      vscode.window.showErrorMessage(`Failed to start Minot for command ${commandObj?.action}: ${e?.message || String(e)}`);
+      // Quiet: avoid popup
+      logToChannel(`Failed to start Minot for command ${commandObj?.action}: ${e?.message || String(e)}`, 'ERROR');
       return;
     }
   }
@@ -825,7 +766,7 @@ function handleServerMessage(message: any) {
   } else if (message.type === 'CommandResponse') {
     const status = message.status?.toUpperCase() || 'UNKNOWN';
     if (status === 'ERROR' && message.message) {
-      vscode.window.showErrorMessage(`Minot Error: ${message.message}`);
+      logToChannel(`Minot Error: ${message.message}`, 'ERROR');
     }
   } else {
     logToChannel(`[SERVER] ${JSON.stringify(message)}`);
@@ -848,8 +789,4 @@ function writeToProcess(message: string) {
 function logToChannel(message: string, level: string = 'INFO') {
   const timestamp = new Date().toLocaleTimeString();
   outputChannel.appendLine(`[${timestamp} ${level}] ${message}`);
-
-  if (level === 'ERROR' || level === 'error') {
-    vscode.window.showErrorMessage(message);
-  }
 }

@@ -24,24 +24,21 @@ If `minot` is missing the extension offers an installer and a link to the instal
 	- Use the status bar `Run Selection` to compile & execute the selection or current line.
 	- Use the lock toggle to `🔓` lock/unlock Minot loops. Use Step to advance the loop.
 
-Commands provided by the extension (command IDs):
+Commands available in the Command Palette:
 
-- `minot.compileAndExecute` — Compile and execute the current selection or line.
-- `minot.restartServer` — Restart the running Minot server process.
-- `minot.sendUnlock` — Send an Unlock command to the running Coordinator.
-- `minot.sendLockNext` — Send a Lock command.
-- `minot.sendLockNextPrevious` — Step once in your current loop.
-- `minot.clearRules` — Clear all rules in the Coordinator.
-- `minot.toggleLock` — Toggle between lock/unlock (status bar shortcut).
+- **Minot: Run Selection** — Compile and execute the current selection or line.
+- **Minot: Toggle Lock** — Toggle between lock/unlock states.
+- **Minot: Step** — Step once in your current loop.
+- **Minot: Clear Rules** — Clear all rules in the Coordinator.
+- **Minot: Restart Server** — Restart the running Minot server process.
 
-Keyboard Shortcuts:
+Default Keyboard Shortcuts:
 
-| Command | Default Keybinding |
-|---------|-------------------|
-| Run selection | `Ctrl+Shift+Enter` |
-| Toggle Lock | `Ctrl+Shift+-` |
-| Step | `Ctrl+Shift+,` |
-| Unlock | `Ctrl+Shift+.` |
+| Command | Keybinding |
+|---------|------------|
+| Run Selection | `Ctrl+Shift+Enter` |
+| Toggle Lock | `Ctrl+.` |
+| Step | `Ctrl+;` |
 
 ### Customizing Keybindings
 

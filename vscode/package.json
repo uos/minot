@@ -29,53 +29,50 @@
     ],
     "commands": [
       {
-        "command": "minot.compileAndExecute",
-        "title": "Minot: Run Selected Lines"
+        "command": "minot.run",
+        "title": "Minot: Run Selection"
       },
       {
         "command": "minot.toggleLock",
-        "title": "Minot: Toggle Lock/Unlock"
+        "title": "Minot: Toggle Lock"
       },
       {
-        "command": "minot.sendUnlock",
-        "title": "Minot: Unlock (internal)"
+        "command": "minot.unlock",
+        "title": "Minot: Unlock",
+        "enablement": "false"
       },
       {
-        "command": "minot.sendLockNext",
-        "title": "Minot: Lock (internal)"
+        "command": "minot.lock",
+        "title": "Minot: Lock",
+        "enablement": "false"
       },
       {
-        "command": "minot.sendLockNextPrevious",
-        "title": "Minot: Step Once"
+        "command": "minot.step",
+        "title": "Minot: Step"
       },
       {
         "command": "minot.clearRules",
         "title": "Minot: Clear Rules"
       },
       {
-        "command": "minot.restartServer",
+        "command": "minot.restart",
         "title": "Minot: Restart Server"
       }
     ],
     "keybindings": [
       {
-        "key": "ctrl+shift+-",
+        "key": "ctrl+.",
         "command": "minot.toggleLock",
         "when": "editorTextFocus"
       },
       {
-        "key": "ctrl+shift+,",
-        "command": "minot.sendLockNextPrevious",
-        "when": "editorTextFocus"
-      },
-      {
-        "key": "ctrl+shift+.",
-        "command": "minot.sendUnlock",
+        "key": "ctrl+;",
+        "command": "minot.step",
         "when": "editorTextFocus"
       },
       {
         "key": "ctrl+shift+enter",
-        "command": "minot.compileAndExecute",
+        "command": "minot.run",
         "when": "editorTextFocus"
       }
     ],
