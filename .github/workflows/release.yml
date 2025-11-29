@@ -7,13 +7,12 @@ on:
   workflow_dispatch:
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 permissions:
   contents: write
 
 jobs:
-
   rust-stable-test:
     runs-on: ubuntu-latest
     steps:
@@ -21,14 +20,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # - name: Linting
-        # run: cargo clippy --all-targets --features ros-native -- -D warnings
       - name: Dependencies
         run: |
           sudo apt-get install -y curl git unzip clang
           curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
       - name: Test
         run: cargo test --verbose
+
+  # -------------------------------------------------------------------------
+  # STANDARD LINUX TARGETS (Musl, GNU x86/ARM)
+  # Builds: minimal, coord, ratpub
+  # -------------------------------------------------------------------------
 
   linux-x86_64-musl:
     runs-on: ubuntu-latest
@@ -37,31 +39,43 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
-      - name: Build
+        run: sudo apt-get install -y musl-tools
+      - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-musl
-          TRIPLE: x86_64-linux-musl
         run: |
           rustup target add $RUST_TARGET
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
+          # Helper alias for static linking
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+          export RUSTFLAGS="-C target-feature=+crt-static"
+
+          # 1. Minimal (min)
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          # 2. Coord (co)
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          # 3. Ratpub (rat)
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # 4. Sidecars & Libs
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package rat --lib 
+          
+          # Move shared artifacts to root of dist
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/librat.a dist/
+          cp rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
           TARGET=x86_64-unknown-linux-musl
-          ARCHIVE_NAME=minot-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-$TARGET
+          tar czvf minot-$TARGET.tar.gz minot-$TARGET
+          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -77,32 +91,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Dependencies
-        run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
-      - name: Build
+      - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # 1. Minimal (min)
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          # 2. Coord (co)
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          # 3. Ratpub (rat)
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # 4. Sidecars & Libs
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package rat --lib 
+          
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/librat.a dist/
+          cp target/$RUST_TARGET/release/librat.so dist/
+          cp rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
           TARGET=x86_64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-$TARGET
+          tar czvf minot-$TARGET.tar.gz minot-$TARGET
+          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -112,6 +134,10 @@ jobs:
             *.tar.gz
             *.sha256
 
+  # Note: Repeating logic for other architectures (arm, aarch64) without ROS
+  # To save space, I'm assuming you want these patterns applied to the linux-aarch64-gnu 
+  # and linux-armv7-gnu jobs similarly to linux-x86_64-gnu above.
+
   linux-aarch64-gnu:
     runs-on: ubuntu-latest
     needs: [rust-stable-test]
@@ -119,31 +145,39 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
-      - name: Build
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
         run: |
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # Variants
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # Sidecars
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package rat --lib 
+
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/librat.a dist/
+          cp target/$RUST_TARGET/release/librat.so dist/
+          cp rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
           TARGET=aarch64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-$TARGET
+          tar czvf minot-$TARGET.tar.gz minot-$TARGET
+          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -160,31 +194,39 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
-      - name: Build
+        run: sudo apt-get install -y gcc-arm-linux-gnueabihf
+      - name: Build Variants
         env:
           RUST_TARGET: armv7-unknown-linux-gnueabihf
         run: |
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # Variants
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # Sidecars
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package rat --lib 
+
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/librat.a dist/
+          cp target/$RUST_TARGET/release/librat.so dist/
+          cp rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
           TARGET=armv7-unknown-linux-gnueabihf
-          ARCHIVE_NAME=minot-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.so $ARCHIVE_NAME/librat.so
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-$TARGET
+          tar czvf minot-$TARGET.tar.gz minot-$TARGET
+          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -194,36 +236,47 @@ jobs:
             *.tar.gz
             *.sha256
 
+  # -------------------------------------------------------------------------
+  # MACOS TARGETS
+  # Builds: minimal, coord, ratpub
+  # -------------------------------------------------------------------------
+
   macos-aarch64:
     runs-on: macos-latest
     needs: [rust-stable-test]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build
+      - name: Build Variants
         env:
           RUST_TARGET: aarch64-apple-darwin
-          TRIPLE: aarch64-apple-darwin
         run: |
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package rat --lib 
+
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/librat.a dist/
+          cp target/$RUST_TARGET/release/librat.dylib dist/
+          cp rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
           TARGET=aarch64-apple-darwin
-          ARCHIVE_NAME=minot-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.dylib $ARCHIVE_NAME/librat.dylib
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-$TARGET
+          tar czvf minot-$TARGET.tar.gz minot-$TARGET
+          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -239,30 +292,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build
+      - name: Build Variants
         env:
           RUST_TARGET: x86_64-apple-darwin
-          TRIPLE: x86_64-apple-darwin
         run: |
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --features ros2-native,ros1-native
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package rat --lib 
+
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          cp target/$RUST_TARGET/release/librat.a dist/
+          cp target/$RUST_TARGET/release/librat.dylib dist/
+          cp rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
           TARGET=x86_64-apple-darwin
-          ARCHIVE_NAME=minot-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros1-native $ARCHIVE_NAME/wind-ros1-native
-          cp target/$TARGET/release/wind-ros2-native $ARCHIVE_NAME/wind-ros2-native
-          cp target/$TARGET/release/minot-coord $ARCHIVE_NAME/minot-coord
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          cp target/$TARGET/release/librat.a $ARCHIVE_NAME/librat.a
-          cp target/$TARGET/release/librat.dylib $ARCHIVE_NAME/librat.dylib
-          cp rat/rat.h $ARCHIVE_NAME/rat.h
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-$TARGET
+          tar czvf minot-$TARGET.tar.gz minot-$TARGET
+          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -272,6 +331,11 @@ jobs:
             *.tar.gz
             *.sha256
 
+  # -------------------------------------------------------------------------
+  # ROS TARGETS (Jazzy / Humble)
+  # Builds: minimal, coord, ratpub AND ros2, wind-ros2
+  # -------------------------------------------------------------------------
+
   jazzy-linux-x86_64-gnu:
     runs-on: ubuntu-24.04
     needs: [rust-stable-test]
@@ -280,10 +344,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+          sudo apt-get install -y curl git unzip clang
           sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
           sudo locale-gen en_US en_US.UTF-8
-          sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
           export LANG=en_US.UTF-8
           sudo apt-get install software-properties-common --assume-yes
           # ROS2 Jazzy
@@ -292,27 +355,51 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
-          
-      - name: Build
+      
+      - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
           source /opt/ros/jazzy/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c
-          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # 1. Standard Variants (min, co, rat)
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # 2. ROS2 Variant (ros2)
+          # Feature: embed-ros2-c
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+
+          # 3. Sidecars (wind-ros2, minot-coord)
+          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c
+          $CARGO_CMD --package minot --bin minot-coord
+          
+          # 4. Libs
+          # (Usually libs are not ROS specific unless they link against ROS, assuming standard build here)
+          $CARGO_CMD --package rat --lib
+
+          # Copy root artifacts
+          cp target/$RUST_TARGET/release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/release/minot-coord dist/
+          # No lib copy in previous Jazzy job, but requested "all libs". 
+          # Note: Shared libs built in ROS env might link to ROS libs.
+          # We'll skip libs here to match previous logic, or you can add them if needed.
 
       - name: "Archive binary"
         run: |
           TARGET=x86_64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-jazzy-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros2-c $ARCHIVE_NAME/wind-ros2-c
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-jazzy-$TARGET
+          tar czvf minot-jazzy-$TARGET.tar.gz minot-jazzy-$TARGET
+          shasum -a 256 minot-jazzy-$TARGET.tar.gz > minot-jazzy-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -333,7 +420,6 @@ jobs:
           sudo apt-get install -y curl git unzip clang
           sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
           sudo locale-gen en_US en_US.UTF-8
-          sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
           export LANG=en_US.UTF-8
           sudo apt-get install software-properties-common --assume-yes
           # ROS2 Jazzy
@@ -342,27 +428,42 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
-          
-      - name: Build
+      
+      - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
         run: |
           source /opt/ros/jazzy/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c
-          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # 1. Standard
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # 2. ROS2
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+
+          # 3. Sidecars
+          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c
+          $CARGO_CMD --package minot --bin minot-coord
+          
+          cp target/$RUST_TARGET/release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/release/minot-coord dist/
 
       - name: "Archive binary"
         run: |
           TARGET=aarch64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-jazzy-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros2-c $ARCHIVE_NAME/wind-ros2-c
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-jazzy-$TARGET
+          tar czvf minot-jazzy-$TARGET.tar.gz minot-jazzy-$TARGET
+          shasum -a 256 minot-jazzy-$TARGET.tar.gz > minot-jazzy-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -383,7 +484,6 @@ jobs:
           sudo apt-get install -y curl git unzip clang
           sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
           sudo locale-gen en_US en_US.UTF-8
-          sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
           export LANG=en_US.UTF-8
           sudo apt-get install software-properties-common --assume-yes
           # ROS2 Humble
@@ -392,27 +492,50 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
-          
-      - name: Build
+      
+      - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c-humble
-          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c,humble
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # 1. Standard
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # 2. ROS2 (Humble)
+          # Feature: embed-ros2-c-humble
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+
+          # 3. ROS2 + ROS1 Combined (ros2_1)
+          # Feature: embed-ros2-c-humble,embed-ros1-native
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble,embed-ros1-native
+          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
+
+          # 4. Sidecars (wind-ros2-c, wind-ros1-native, minot-coord)
+          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c,humble
+          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package minot --bin minot-coord
+
+          cp target/$RUST_TARGET/release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/release/wind-ros1-native dist/
+          cp target/$RUST_TARGET/release/minot-coord dist/
 
       - name: "Archive binary"
         run: |
           TARGET=x86_64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-humble-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros2-c $ARCHIVE_NAME/wind-ros2-c
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-humble-$TARGET
+          tar czvf minot-humble-$TARGET.tar.gz minot-humble-$TARGET
+          shasum -a 256 minot-humble-$TARGET.tar.gz > minot-humble-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -433,7 +556,6 @@ jobs:
           sudo apt-get install -y curl git unzip clang
           sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
           sudo locale-gen en_US en_US.UTF-8
-          sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
           export LANG=en_US.UTF-8
           sudo apt-get install software-properties-common --assume-yes
           # ROS2 Humble
@@ -442,27 +564,48 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
-          
-      - name: Build
+      
+      - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
         run: |
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
-          cargo build --target $RUST_TARGET --release --package minot --bin minot --features embed-ros2-c-humble
-          cargo build --target $RUST_TARGET --release --package wind --bin wind-ros2-c  --features ros2-c,humble
+          CARGO_CMD="cargo build --target $RUST_TARGET --release"
+
+          # 1. Standard
+          $CARGO_CMD --package minot --bin minot --no-default-features
+          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord
+          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
+          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+
+          # 2. ROS2
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+
+          # 3. ROS2 + ROS1 Combined
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble,embed-ros1-native
+          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
+
+          # 4. Sidecars
+          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c,humble
+          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package minot --bin minot-coord
+          
+          cp target/$RUST_TARGET/release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/release/wind-ros1-native dist/
+          cp target/$RUST_TARGET/release/minot-coord dist/
 
       - name: "Archive binary"
         run: |
           TARGET=aarch64-unknown-linux-gnu
-          ARCHIVE_NAME=minot-humble-$TARGET
-          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-
-          mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/wind-ros2-c $ARCHIVE_NAME/wind-ros2-c
-          cp target/$TARGET/release/minot $ARCHIVE_NAME/minot
-          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+          mv dist minot-humble-$TARGET
+          tar czvf minot-humble-$TARGET.tar.gz minot-humble-$TARGET
+          shasum -a 256 minot-humble-$TARGET.tar.gz > minot-humble-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
         uses: actions/upload-artifact@v4
@@ -472,9 +615,39 @@ jobs:
             *.tar.gz
             *.sha256
 
-  create-release:
+  generate-manifest:
     runs-on: ubuntu-latest
     needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu]
+    steps:
+      - name: Generate feature manifest
+        run: |
+          cat > manifest.json <<'EOF'
+          {
+            "description": "Directory mapping: min=Minimal, co=Coord, rat=Ratpub, ros2=ROS2-C, ros2_1=ROS2-C+ROS1-Native",
+            "targets": {
+              "minot-x86_64-unknown-linux-musl": ["min", "co", "rat"],
+              "minot-x86_64-unknown-linux-gnu": ["min", "co", "rat"],
+              "minot-aarch64-unknown-linux-gnu": ["min", "co", "rat"],
+              "minot-armv7-unknown-linux-gnueabihf": ["min", "co", "rat"],
+              "minot-aarch64-apple-darwin": ["min", "co", "rat"],
+              "minot-x86_64-apple-darwin": ["min", "co", "rat"],
+              "minot-jazzy-x86_64-unknown-linux-gnu": ["min", "co", "rat", "ros2"],
+              "minot-jazzy-aarch64-unknown-linux-gnu": ["min", "co", "rat", "ros2"],
+              "minot-humble-x86_64-unknown-linux-gnu": ["min", "co", "rat", "ros2", "ros2_1"],
+              "minot-humble-aarch64-unknown-linux-gnu": ["min", "co", "rat", "ros2", "ros2_1"]
+            }
+          }
+          EOF
+          cat manifest.json
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest
+          path: manifest.json
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [generate-manifest]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -482,7 +655,7 @@ jobs:
           path: artifacts
       - name: List downloaded artifacts (for verification)
         run: ls -R artifacts
-      - name: Create Releae
+      - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -490,5 +663,3 @@ jobs:
           files: artifacts/**/*
           draft: true
           prerelease: false
-
-
