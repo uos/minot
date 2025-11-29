@@ -1,6 +1,6 @@
 ## Install Script (Recommended)
 
-For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binary and `minot-coord` with sensible defaults for getting started.
+For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
 curl -sSLf https://install.steado.tech/minot | sh
@@ -8,11 +8,15 @@ curl -sSLf https://install.steado.tech/minot | sh
 
 For ROS support, make sure to have your ROS environment sourced before running the script.
 
-### VSCode Extension
+### VS Code Extension
 
 Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Select some lines and run them with `Run Selection`. Hover over the buttons to see their keybindings.
 
-### Detailed Installation
+### Tree-sitter Support
+
+Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
+
+### Advanced Installation
 
 You can also download and run the install script manually for more control.
 Use `--help` to see all available configurations of Minot.
@@ -28,9 +32,9 @@ The installation script will:
 - Automatically detect your operating system and architecture
 - Resolve to the newest compatible and stable version
 - Download prebuilt binaries from GitHub releases if available
-- Fall back to building from source with `cargo install` if needed
-- Install binaries to `~/.local/bin` (customizable with `--dir`)
-- Offer to install Rust automatically if needed for building from source
+- Fall back to building from source using Rust if needed
+- Copy binaries and libraries into your local user directory (customizable with `--dir`)
+- Add the uninstall script (`minot-uninstall`) to the same directory for easy removal later
 
 **Embedded Components:**
 
@@ -79,9 +83,9 @@ Archives not specific to a ROS distribution contain builds that can be used inde
 
 While the prebuilt binaries cover many common use cases, you may need to build Minot from source to tailor it to your specific needs. Building from source requires the [Rust toolchain](https://www.rust-lang.org/tools/install) to be installed on your system.
 
-## Minot TUI
+## Minot bundled binary
 
-To build the Minot TUI, there are some feature flags for embedding common network participants for convenience. A detailed list of supported flags can be found in the [Minot features definition](https://github.com/uos/minot/blob/main/minot/Cargo.toml#L45).
+To build the Minot bundled binary, there are some feature flags for embedding common network participants for convenience. A detailed list of supported flags can be found in the [Minot features definition](https://github.com/uos/minot/blob/main/minot/Cargo.toml#L45).
 
 With default settings, Minot builds with an integrated coordinator. When running the following command with no changes, you will get a `minot` binary with integrated Coordinator and a `minot-coord` binary, that is *just* a Coordinator. The standalone Coordinator is enough for sharing variables [with the rat library](./varshare.md#library).
 
@@ -102,7 +106,7 @@ cargo install \
 
 ---
 
-The next version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a Bagfile:
+This next version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a Bagfile:
 
 ~~~bash title="Minimal with embedded Coordinator"
 cargo install \
@@ -121,7 +125,7 @@ cargo install \
 
 ## Standalone Coordinator
 
-Installing Minot TUI as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
+Running `cargo install` as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
 
 ## Standalone Wind Turbines (Bagfile Publishers)
 
@@ -186,7 +190,7 @@ And link with `-lrat`.
 For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-rat = { version = "0.1.0-rc.6", git = "https://github.com/uos/minot" }
+rat = { version = "0.1.0", git = "https://github.com/uos/minot" }
 ~~~
 
 ## Ratpub (Native Publish/Subscribe)
@@ -195,7 +199,7 @@ Ratpub is only available for Rust. It uses Tokio for async I/O.
 For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-ratpub = { version = "0.1.0-rc.6", git = "https://github.com/uos/minot" }
+ratpub = { version = "0.1.0", git = "https://github.com/uos/minot" }
 tokio = { version = "1", features = ["full"] }
 ~~~
 
@@ -212,6 +216,4 @@ Learn more on how to use it in your Code by visiting the [feature page](./pubsub
 
 ## Uninstall
 
-With modern software the word *"installing"* is overloaded. Cargo just compiles the code and moves the finished binaries to a directory in your path. There are no other side effects or files from Minot.
-
-If you want to remove them, you can `minot uninstall` to uninstall minot or minot-coord. Or `cargo uninstall wind` for the manual installed binaries.
+If you want to remove every file installed from the install script, you can run `minot-uninstall`. This executes a generated shell script that saved all added files and now removes them (including itself). You can also run `minot uninstall` to uninstall minot and minot-coord. Or `cargo uninstall wind` if you installed binaries with cargo.

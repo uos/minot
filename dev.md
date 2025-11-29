@@ -1,9 +1,5 @@
 # Development Notes
 
-## Could be bugs
-
-- Pelorus dbg timeout receiving ack only waiting or not receiving?
-
 ## Definitely bugs
 
 - [ratpub] Long polling subscribers are not cancelled when subscriber disconnects

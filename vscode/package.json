@@ -1,12 +1,13 @@
 {
   "name": "minot",
   "displayName": "Minot",
-  "description": "Bagfile Query Integration",
-  "version": "0.1.0",
+  "description": "Minot Language Support for Visual Studio Code with basic commands for bagfile publishing and syntax highlighting.",
+  "version": "0.2.0",
   "engines": {
-  "vscode": "^1.105.0",
-  "minot": "0.1.0-rc.6"
+    "vscode": "^1.105.0",
+    "minot": "0.1.0"
   },
+  "icon": "assets/minot-icon.png",
   "publisher": "stelzo",
   "repository": {
     "type": "git",
@@ -29,53 +30,55 @@
     ],
     "commands": [
       {
-        "command": "minot.compileAndExecute",
-        "title": "Minot: Run Selected Lines"
+        "command": "minot.run",
+        "title": "Minot: Run Selection"
       },
       {
         "command": "minot.toggleLock",
-        "title": "Minot: Toggle Lock/Unlock"
+        "title": "Minot: Toggle Lock"
       },
       {
-        "command": "minot.sendUnlock",
-        "title": "Minot: Unlock (internal)"
+        "command": "minot.unlock",
+        "title": "Minot: Unlock",
+        "enablement": "false"
       },
       {
-        "command": "minot.sendLockNext",
-        "title": "Minot: Lock (internal)"
+        "command": "minot.lock",
+        "title": "Minot: Lock",
+        "enablement": "false"
       },
       {
-        "command": "minot.sendLockNextPrevious",
-        "title": "Minot: Step Once"
+        "command": "minot.step",
+        "title": "Minot: Step"
       },
       {
         "command": "minot.clearRules",
         "title": "Minot: Clear Rules"
       },
       {
-        "command": "minot.restartServer",
+        "command": "minot.restart",
         "title": "Minot: Restart Server"
+      }
+      ,
+      {
+        "command": "minot.stop",
+        "title": "Minot: Stop Server"
       }
     ],
     "keybindings": [
       {
-        "key": "ctrl+-",
+        "key": "ctrl+.",
         "command": "minot.toggleLock",
         "when": "editorTextFocus"
       },
       {
-        "key": "ctrl+,",
-        "command": "minot.sendLockNextPrevious",
-        "when": "editorTextFocus"
-      },
-      {
-        "key": "ctrl+.",
-        "command": "minot.sendUnlock",
+        "key": "ctrl+;",
+        "command": "minot.step",
         "when": "editorTextFocus"
       },
       {
         "key": "ctrl+shift+enter",
-        "command": "minot.compileAndExecute",
+        "command": "minot.run",
         "when": "editorTextFocus"
       }
     ],

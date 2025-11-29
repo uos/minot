@@ -11,7 +11,7 @@ Visit the [Documentation](https://uos.github.io/minot) to find out more.
 
 ## Quick Install
 
-For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binary and `minot-coord` with sensible defaults for getting started.
+For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
 curl -sSLf https://install.steado.tech/minot | sh
@@ -21,10 +21,13 @@ For ROS support, make sure to have your ROS environment sourced before running t
 
 After your first steps with Minot, you may want to use its more advanced features. Check the detailed [install page](https://uos.github.io/minot/installation.html) for that.
 
-## VSCode Extension
+## VS Code Extension
 
 Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Select some lines and run them with `Run Selection`. Hover over the buttons to see their keybindings.
 
+### Tree-sitter Support
+
+Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
 
 ### License
 

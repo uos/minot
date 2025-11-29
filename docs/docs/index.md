@@ -1,6 +1,6 @@
 # Introduction
 
-**Minot** [mai·not] provides primitives for developing and verifying robot software with in a single executable binary.
+**Minot** [mai·not] provides a versatile toolset for developing and verifying robot perception software with in a single executable binary.
 
 Its main features are built around Bagfiles from ROS2 that use MCAP for storage.
 

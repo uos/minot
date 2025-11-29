@@ -4,10 +4,10 @@ members = ["bagread", "minot", "rat", "ratpub", "mtc", "sea", "wind"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-rc.6"
+version = "0.1.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
-repository = "https://gitlabti.informatik.uni-osnabrueck.de/chsieh/lighthouse/"
+repository = "https://github.com/uos/minot"
 edition = "2024"
 include = ["**/*.rs", "**/*.md", "**/Cargo.toml"]
 authors = ["Christopher Sieh <csieh@uos.de>"]

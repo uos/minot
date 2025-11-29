@@ -39,7 +39,7 @@ pub enum ServeCommand {}
 
 #[derive(Parser, Debug)]
 #[command(version, about, author, long_about = None)]
-/// Minot — Primitives for developing and validating stateful robot software.
+/// Minot — A versatile toolset for debugging and verifying stateful robot perception software.
 pub(crate) struct Args {
     #[command(subcommand)]
     pub command: Commands,

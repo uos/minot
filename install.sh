@@ -47,6 +47,101 @@ prompt() {
     printf "${CYAN}?${NC} %s " "$1"
 }
 
+# Write an uninstaller script to $1 (install dir) that removes
+# binaries, libraries, and headers installed by this script.
+write_uninstaller() {
+    DEST_DIR="$1"
+    BIN_DIR="$DEST_DIR"
+    INSTALL_PREFIX=$(dirname "$BIN_DIR")
+    LIB_DIR="${INSTALL_PREFIX}/lib"
+    INCLUDE_DIR="${INSTALL_PREFIX}/include"
+
+    UNINSTALL_PATH="${BIN_DIR}/minot-uninstall"
+    cat >"${UNINSTALL_PATH}" <<'EOF'
+#!/bin/sh
+set -e
+
+RED=$(printf '\033[0;31m')
+GREEN=$(printf '\033[0;32m')
+YELLOW=$(printf '\033[1;33m')
+BLUE=$(printf '\033[0;34m')
+BOLD=$(printf '\033[1m')
+NC=$(printf '\033[0m')
+
+info() { printf "${BLUE}${BOLD}==>${NC} ${BOLD}%s${NC}\n" "$1"; }
+success() { printf "${GREEN}${BOLD}✓${NC} ${GREEN}%s${NC}\n" "$1"; }
+warn() { printf "${YELLOW}${BOLD}⚠${NC} ${YELLOW}%s${NC}\n" "$1"; }
+error() { printf "${RED}${BOLD}✗${NC} ${RED}%s${NC}\n" "$1" >&2; exit 1; }
+prompt() { printf "${BLUE}?${NC} %s " "$1"; }
+
+# Check for -y/--yes flag for non-interactive mode
+SKIP_PROMPT=0
+if [ "$1" = "-y" ] || [ "$1" = "--yes" ]; then
+    SKIP_PROMPT=1
+fi
+
+# Resolve where this uninstaller lives to infer install prefix
+SELF="$0"
+BIN_DIR=$(dirname "$SELF")
+INSTALL_PREFIX=$(dirname "$BIN_DIR")
+LIB_DIR="${INSTALL_PREFIX}/lib"
+INCLUDE_DIR="${INSTALL_PREFIX}/include"
+
+printf "\n"; info "Minot Uninstallation Script"; printf "\n"
+printf "Will remove files from:\n  bin: ${BIN_DIR}\n  lib: ${LIB_DIR}\n  include: ${INCLUDE_DIR}\n\n"
+
+TO_REMOVE_LIST=""
+for f in \
+  "${BIN_DIR}/minot" \
+  "${BIN_DIR}/minot-coord" \
+  "${BIN_DIR}"/wind-* \
+  "${LIB_DIR}/librat.a" \
+  "${LIB_DIR}/librat.so" \
+  "${LIB_DIR}/librat.dylib" \
+  "${LIB_DIR}/libratpub.a" \
+  "${LIB_DIR}/libratpub.so" \
+  "${LIB_DIR}/libratpub.dylib" \
+    "${INCLUDE_DIR}/rat/rat.h"; do
+    if [ -f "$f" ]; then
+        TO_REMOVE_LIST="${TO_REMOVE_LIST}\n${f}"
+    fi
+done
+
+SELF_PATH="${BIN_DIR}/minot-uninstall"
+
+if [ -z "$TO_REMOVE_LIST" ]; then
+    info "No Minot files found to remove."
+    exit 0
+fi
+
+printf "The following files will be removed:\n"
+printf "%b\n\n" "$TO_REMOVE_LIST"
+
+# Skip prompt if -y/--yes was provided
+if [ $SKIP_PROMPT -eq 0 ]; then
+    prompt "Proceed? [y/N]"
+    read ans || exit 1
+    case "$ans" in y|Y|yes|YES) ;; *) info "Cancelled."; exit 0 ;; esac
+fi
+
+set +e
+printf "%b" "$TO_REMOVE_LIST" | while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    rm -f "$f" && success "Removed: $f" || warn "Could not remove: $f"
+done
+
+# Explicitly remove the uninstaller itself at the end
+if [ -f "$SELF_PATH" ]; then
+    rm -f "$SELF_PATH" && success "Removed: $SELF_PATH" || warn "Could not remove: $SELF_PATH"
+fi
+set -e
+
+printf "\n"; success "Minot has been successfully uninstalled!"; printf "\n"
+EOF
+    chmod +x "${UNINSTALL_PATH}"
+    success "Installed: minot-uninstall"
+}
+
 # Prefer the current stdin if it's a terminal,
 # otherwise try /dev/tty. Returns non-zero when no interactive input
 # source is available.
@@ -113,14 +208,17 @@ EOF
 
 get_latest_version() {
         info "Fetching latest release version..."
-        if command -v curl >/dev/null 2>&1; then
-            VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-        elif command -v wget >/dev/null 2>&1; then
-            VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-        else
-            warn "Neither curl nor wget found. Will fall back to building from source."
-            return 1
-        fi
+            if command -v curl >/dev/null 2>&1; then
+                # Keep silent for API calls but show a one-line info before
+                info "Contacting GitHub for latest release..."
+                VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+            elif command -v wget >/dev/null 2>&1; then
+                info "Contacting GitHub for latest release (wget)..."
+                VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+            else
+                warn "Neither curl nor wget found. Will fall back to building from source."
+                return 1
+            fi
 
         if [ -z "$VERSION" ]; then
             warn "Failed to fetch latest version from GitHub. Will fall back to building from source."
@@ -283,7 +381,6 @@ detect_ros_from_env_and_prompt() {
 }
 
 parse_semver() {
-    # parse_semver "v0.1.0-rc.6" --> prints: major minor patch prerelease raw
     local s="$1"
     # strip leading v
     s=${s#v}
@@ -446,8 +543,8 @@ embed_to_features() {
             coord) feat="embed-coord" ;;
             ratpub) feat="embed-ratpub" ;;
             ros) feat="embed-ros" ;;
-            ros1) feat="embed-ros1" ;;
-            ros2) feat="embed-ros2" ;;
+            ros1) feat="embed-ros1-native" ;;
+            ros2) feat="embed-ros2-native" ;;
             "ros2-c"|"ros2_c") feat="embed-ros2-c" ;;
             ros-native) feat="embed-ros-native" ;;
             "") continue ;;
@@ -506,12 +603,14 @@ download_and_install() {
     cd "$TMP_DIR" || { warn "Failed to enter temp dir; falling back to build"; return 1; }
 
     if command -v curl >/dev/null 2>&1; then
-        if ! curl -sSfL "$URL" -o "$ARCHIVE_FILE"; then
+        # Show a progress bar for curl when attached to a TTY
+        if ! curl --progress-bar -fL "$URL" -o "$ARCHIVE_FILE"; then
             warn "Failed to download binary archive from GitHub: $URL"
             return 1
         fi
     elif command -v wget >/dev/null 2>&1; then
-        if ! wget -q "$URL" -O "$ARCHIVE_FILE"; then
+        # Force a progress bar for wget
+        if ! wget --progress=bar:force "$URL" -O "$ARCHIVE_FILE"; then
             warn "Failed to download binary archive from GitHub: $URL"
             return 1
         fi
@@ -521,22 +620,33 @@ download_and_install() {
     fi
 
     info "Extracting archive..."
+    # Use verbose tar when running in a TTY to show progress of files
     if ! tar xzf "$ARCHIVE_FILE"; then
         warn "Failed to extract archive: $ARCHIVE_FILE"
         return 1
     fi
 
-    # Create install directory if it doesn't exist
+    # Create install directories if they don't exist
     mkdir -p "$INSTALL_DIR"
+    INSTALL_PREFIX=$(dirname "$INSTALL_DIR")
+    INSTALL_LIB_DIR="${INSTALL_PREFIX}/lib"
+    INSTALL_INCLUDE_DIR="${INSTALL_PREFIX}/include"
+    mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_INCLUDE_DIR"
 
     info "Installing binaries to $INSTALL_DIR..."
 
     INSTALLED_ANY=0
-    # Install all binaries from the archive
+    # Install all binaries from the archive (excluding libraries)
     if [ -d "$ARCHIVE_NAME" ]; then
         for binary in "$ARCHIVE_NAME"/*; do
             if [ -f "$binary" ] && [ -x "$binary" ]; then
                 BINARY_NAME=$(basename "$binary")
+                # Skip library files - they will be installed in lib/ directory
+                case "$BINARY_NAME" in
+                    *.a|*.so|*.dylib|*.dll)
+                        continue
+                        ;;
+                esac
                 cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
                 chmod +x "$INSTALL_DIR/$BINARY_NAME"
                 success "Installed: $BINARY_NAME"
@@ -545,15 +655,30 @@ download_and_install() {
         done
     fi
 
-    # Install library files if present
-    for lib_file in "$ARCHIVE_NAME"/*.a "$ARCHIVE_NAME"/*.so "$ARCHIVE_NAME"/*.dylib "$ARCHIVE_NAME"/*.h; do
+    # Install library files if present (.a, .so, .dylib)
+    for lib_file in "$ARCHIVE_NAME"/*.a "$ARCHIVE_NAME"/*.so "$ARCHIVE_NAME"/*.dylib; do
         if [ -f "$lib_file" ]; then
             FILENAME=$(basename "$lib_file")
-            cp "$lib_file" "$INSTALL_DIR/$FILENAME"
-            success "Installed library: $FILENAME"
+            cp "$lib_file" "$INSTALL_LIB_DIR/$FILENAME"
+            success "Installed library: $FILENAME -> $INSTALL_LIB_DIR"
             INSTALLED_ANY=1
         fi
     done
+
+    # Install headers if present (.h) into include/rat/
+    HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
+    mkdir -p "$HEADER_SUBDIR"
+    for header_file in "$ARCHIVE_NAME"/*.h; do
+        if [ -f "$header_file" ]; then
+            FILENAME=$(basename "$header_file")
+            cp "$header_file" "$HEADER_SUBDIR/$FILENAME"
+            success "Installed header: $FILENAME -> $HEADER_SUBDIR"
+            INSTALLED_ANY=1
+        fi
+    done
+
+    # Generate and install uninstaller script using detected paths
+    write_uninstaller "$INSTALL_DIR"
 
     if [ $INSTALLED_ANY -eq 0 ]; then
         warn "Archive did not contain any installable files; falling back to building from source"
@@ -620,13 +745,23 @@ build_from_source() {
 
     # Determine features to build with
     BUILD_FEATURES="$FEATURES"
-    if [ -z "$BUILD_FEATURES" ]; then
-        # Default to embed-coord if no features specified, unless user opted out
-        if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
-            BUILD_FEATURES="embed-coord"
-        else
-            BUILD_FEATURES=""
-        fi
+    
+    # Add default embed-coord unless user opted out with --no-default-embed
+    if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
+        # Check if coord is already in the features list
+        case ",$BUILD_FEATURES," in
+            *,embed-coord,*)
+                # already present, do nothing
+                ;;
+            *)
+                # Add embed-coord to the features
+                if [ -n "$BUILD_FEATURES" ]; then
+                    BUILD_FEATURES="embed-coord,${BUILD_FEATURES}"
+                else
+                    BUILD_FEATURES="embed-coord"
+                fi
+                ;;
+        esac
     fi
 
     if [ -n "$ROS_DISTRO" ]; then
@@ -726,46 +861,102 @@ build_from_source() {
     # Create install directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
 
-    # Prepare cargo install command. Only pass --features if non-empty.
-    CARGO_CMD="cargo install --git https://github.com/${REPO}.git minot --locked"
-    if [ -n "$BUILD_FEATURES" ]; then
-        CARGO_CMD="$CARGO_CMD --features $BUILD_FEATURES"
-    fi
+    # Clone the repository to a temporary directory
+    TMP_BUILD_DIR=$(mktemp -d)
+    trap "rm -rf '$TMP_BUILD_DIR'" EXIT
 
-    # Add version/tag if specified
+    info "Cloning repository..."
+    
+    # Determine git clone command with optional version/tag
+    GIT_CLONE_CMD="git clone --depth 1"
     if [ -n "$VERSION" ]; then
-        CARGO_CMD="$CARGO_CMD --tag $VERSION"
+        case "$VERSION" in
+            v*) TAG_TO_USE="$VERSION" ;;
+            *) TAG_TO_USE="v$VERSION" ;;
+        esac
+        GIT_CLONE_CMD="$GIT_CLONE_CMD --branch $TAG_TO_USE"
+    fi
+    GIT_CLONE_CMD="$GIT_CLONE_CMD https://github.com/${REPO}.git $TMP_BUILD_DIR"
+
+    # Show progress for git clone (default when attached to TTY)
+    if ! eval "$GIT_CLONE_CMD"; then
+        error "Failed to clone repository"
     fi
 
-    # Set custom installation root if not using default cargo bin
-    if [ "$INSTALL_DIR" != "${HOME}/.cargo/bin" ]; then
-        # Calculate the root (parent of bin directory)
-        INSTALL_ROOT=$(dirname "$INSTALL_DIR")
-        CARGO_CMD="$CARGO_CMD --root $INSTALL_ROOT"
+    cd "$TMP_BUILD_DIR" || error "Failed to enter build directory"
+
+    # Prepare cargo build command
+    BUILD_CMD="cargo build --release --locked"
+    if [ -n "$BUILD_FEATURES" ]; then
+        BUILD_CMD="$BUILD_CMD --features $BUILD_FEATURES"
     fi
 
-    printf "\n${BOLD}Build command:${NC} ${CYAN}%s${NC}\n\n" "$CARGO_CMD"
+    printf "\n${BOLD}Build command:${NC} ${CYAN}%s${NC}\n\n" "$BUILD_CMD"
 
-    # Run cargo install. If we need to source ROS, run the build in a bash subshell that sources the setup file first.
+    # Build the workspace to produce all artifacts
+    info "Building binaries and libraries..."
     if [ "$USE_BASH_SOURCE" -eq 1 ]; then
         if [ -n "$ROS_SETUP" ]; then
             if command -v bash >/dev/null 2>&1; then
                 info "Running build in a bash subshell with ROS sourced: ${ROS_SETUP}"
-                bash -lc ". \"${ROS_SETUP}\" && ${CARGO_CMD}" || error "Build failed"
+                bash -lc ". \"${ROS_SETUP}\" && cd \"$TMP_BUILD_DIR\" && ${BUILD_CMD}" || error "Build failed"
             else
                 warn "bash not found; attempting to source using sh. This may fail for some ROS setups."
-                . "${ROS_SETUP}" && eval "$CARGO_CMD" || error "Build failed"
+                . "${ROS_SETUP}" && eval "$BUILD_CMD" || error "Build failed"
             fi
         else
             error "Internal error: requested to source ROS but no setup script found."
         fi
     else
-        eval "$CARGO_CMD" || error "Build failed"
+        eval "$BUILD_CMD" || error "Build failed"
     fi
 
+    # Determine install prefix and destination directories
+    INSTALL_PREFIX=$(dirname "$INSTALL_DIR")
+    INSTALL_LIB_DIR="${INSTALL_PREFIX}/lib"
+    INSTALL_INCLUDE_DIR="${INSTALL_PREFIX}/include"
+    mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_INCLUDE_DIR"
+
     printf "\n"
-    success "Installed: minot"
-    success "Installed: minot-coord"
+    info "Installing binaries..."
+
+    ART_DIR="target/release"
+    for binary in "$ART_DIR"/minot "$ART_DIR"/minot-coord "$ART_DIR"/wind-*; do
+        if [ -f "$binary" ]; then
+            BINARY_NAME=$(basename "$binary")
+            # Skip .d files (dependency files from Rust build)
+            case "$BINARY_NAME" in
+                *.d)
+                    continue
+                    ;;
+            esac
+            cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
+            chmod +x "$INSTALL_DIR/$BINARY_NAME"
+            success "Installed: $BINARY_NAME"
+        fi
+    done
+
+    # Install libraries if present
+    for lib_file in "$ART_DIR"/lib*.a "$ART_DIR"/lib*.so "$ART_DIR"/lib*.dylib; do
+        if [ -f "$lib_file" ]; then
+            FILENAME=$(basename "$lib_file")
+            cp "$lib_file" "$INSTALL_LIB_DIR/$FILENAME"
+            success "Installed library: $FILENAME -> $INSTALL_LIB_DIR"
+        fi
+    done
+
+    # Install headers (currently rat.h) into include/rat/
+    HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
+    mkdir -p "$HEADER_SUBDIR"
+    if [ -f "rat/rat.h" ]; then
+        cp "rat/rat.h" "$HEADER_SUBDIR/rat.h"
+        success "Installed header: rat.h -> $HEADER_SUBDIR"
+    fi
+
+    # Generate and install uninstaller script using detected paths
+    write_uninstaller "$INSTALL_DIR"
+
+    cd - >/dev/null || true
 }
 
 # Check if installation directory is in PATH
@@ -852,25 +1043,36 @@ prompt_uninstall_existing() {
 
     if [ $YES_TO_ALL -eq 1 ]; then
         info "Auto-uninstall enabled (-y): attempting to uninstall existing Minot..."
-        if command -v minot >/dev/null 2>&1; then
-            if minot uninstall >/dev/null 2>&1; then
+        if command -v minot-uninstall >/dev/null 2>&1; then
+            # Use the uninstaller non-interactively with -y flag
+            if minot-uninstall -y; then
                 success "Previous Minot uninstalled"
                 return 0
             fi
-            error "Failed to run 'minot uninstall'. Please uninstall the existing Minot manually and re-run this script."
+            error "Failed to run 'minot-uninstall'. Please uninstall the existing Minot manually and re-run this script."
         else
-            # No 'minot' command available; try removing binaries from INSTALL_DIR
+            # No 'minot-uninstall' command available; try removing binaries from INSTALL_DIR
             if [ -f "${INSTALL_DIR}/minot" ] || [ -f "${INSTALL_DIR}/minot-coord" ]; then
-                rm -f "${INSTALL_DIR}/minot" "${INSTALL_DIR}/minot-coord" || error "Failed to remove existing binaries from ${INSTALL_DIR}. Please remove them manually."
+                rm -f "${INSTALL_DIR}/minot" "${INSTALL_DIR}/minot-coord" "${INSTALL_DIR}/minot-uninstall" || error "Failed to remove existing binaries from ${INSTALL_DIR}. Please remove them manually."
                 success "Removed existing binaries from ${INSTALL_DIR}"
                 return 0
             fi
-            error "Cannot run 'minot uninstall' and no binaries found in ${INSTALL_DIR}; please uninstall manually."
+            error "Cannot run 'minot-uninstall' and no binaries found in ${INSTALL_DIR}; please uninstall manually."
         fi
     fi
 
-    # Interactive prompt
+    # Interactive prompt - try minot-uninstall first (always with -y since user is in install flow)
     printf "\n"
+    if command -v minot-uninstall >/dev/null 2>&1; then
+        info "Previous Minot installation detected. Running 'minot-uninstall'..."
+        if minot-uninstall -y; then
+            success "Previous Minot uninstalled"
+            return 0
+        fi
+        error "Failed to run 'minot-uninstall'. Please uninstall manually and re-run this script."
+    fi
+    
+    # Fallback: prompt user and manually remove files
     prompt "A previous Minot installation was detected. Would you like me to uninstall it now? [Y/n]"
     if ! safe_read resp; then
         error "Could not read input from terminal. Re-run interactively or use --yes to auto-uninstall."
@@ -881,20 +1083,12 @@ prompt_uninstall_existing() {
             ;;
         *)
             info "Attempting to uninstall existing Minot..."
-            if command -v minot >/dev/null 2>&1; then
-                if minot uninstall >/dev/null 2>&1; then
-                    success "Previous Minot uninstalled"
-                    return 0
-                fi
-                error "Failed to run 'minot uninstall'. Please uninstall manually and re-run this script."
-            else
-                if [ -f "${INSTALL_DIR}/minot" ] || [ -f "${INSTALL_DIR}/minot-coord" ]; then
-                    rm -f "${INSTALL_DIR}/minot" "${INSTALL_DIR}/minot-coord" || error "Failed to remove existing binaries from ${INSTALL_DIR}. Please remove them manually."
-                    success "Removed existing binaries from ${INSTALL_DIR}"
-                    return 0
-                fi
-                error "No uninstaller available and no binaries found in ${INSTALL_DIR}; please uninstall manually."
+            if [ -f "${INSTALL_DIR}/minot" ] || [ -f "${INSTALL_DIR}/minot-coord" ]; then
+                rm -f "${INSTALL_DIR}/minot" "${INSTALL_DIR}/minot-coord" "${INSTALL_DIR}/minot-uninstall" || error "Failed to remove existing binaries from ${INSTALL_DIR}. Please remove them manually."
+                success "Removed existing binaries from ${INSTALL_DIR}"
+                return 0
             fi
+            error "No uninstaller available and no binaries found in ${INSTALL_DIR}; please uninstall manually."
             ;;
     esac
 }
@@ -1020,6 +1214,15 @@ main() {
             info "Installing version: ${CYAN}$VERSION${NC}"
         fi
         
+        # Normalize VERSION to have 'v' prefix for download URLs
+        VERSION_WITH_V="$VERSION"
+        if [ -n "$VERSION_WITH_V" ]; then
+            case "$VERSION_WITH_V" in
+                v*) ;; # already has v prefix
+                *) VERSION_WITH_V="v$VERSION_WITH_V" ;;
+            esac
+        fi
+        
         # Determine archive name based on ROS distro
         if [ -n "$ROS_DISTRO" ]; then
             ARCHIVE_NAME="minot-${ROS_DISTRO}-${TARGET}"
@@ -1029,10 +1232,10 @@ main() {
             info "Looking for prebuilt binary..."
         fi
         
-        if check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION"; then
+        if check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION_WITH_V"; then
             success "Found prebuilt binary!"
             printf "\n"
-            if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$VERSION"; then
+            if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$VERSION_WITH_V"; then
                 warn "Installing prebuilt binary failed — will fall back to building from source"
                 FORCE_BUILD=1
             fi
@@ -1088,9 +1291,9 @@ main() {
     printf "  ${GREEN}2.${NC} Read the docs: ${BLUE}https://uos.github.io/minot/${NC}\n\n"
     
     printf "${BOLD}To uninstall:${NC}\n"
-    printf "  Run the built-in uninstaller (this is the recommended way):\n"
-    printf "    ${CYAN}minot uninstall${NC}\n\n"
-    printf "  ${BOLD}Note:${NC} This will remove the 'minot' and 'minot-coord' binaries.\n"
+    printf "  Run the uninstaller to remove all installed files:\n"
+    printf "    ${CYAN}minot-uninstall${NC}\n\n"
+    printf "  ${BOLD}Note:${NC} This will remove all binaries, libraries, and headers installed by this script.\n"
     
 }
 
