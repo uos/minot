@@ -1,10 +1,6 @@
 #!/bin/sh
-# Minot Installation Script
-# This script installs Minot binaries from GitHub releases or builds from source
-
 set -e
 
-# Default values
 REPO="uos/minot"
 INSTALL_DIR="${HOME}/.local/bin"
 GITHUB_API="https://api.github.com/repos/${REPO}"
@@ -17,7 +13,6 @@ FORCE_BUILD=0
 YES_TO_ALL=0
 NO_DEFAULT_EMBED=0
 
-# Color output (always enabled for better readability)
 RED=$(printf '\033[0;31m')
 GREEN=$(printf '\033[0;32m')
 YELLOW=$(printf '\033[1;33m')
@@ -47,8 +42,6 @@ prompt() {
     printf "${CYAN}?${NC} %s " "$1"
 }
 
-# Write an uninstaller script to $1 (install dir) that removes
-# binaries, libraries, and headers installed by this script.
 write_uninstaller() {
     DEST_DIR="$1"
     BIN_DIR="$DEST_DIR"
@@ -139,7 +132,7 @@ set -e
 printf "\n"; success "All done!"; printf "\n"
 EOF
     chmod +x "${UNINSTALL_PATH}"
-    success "Installed: minot-uninstall"
+    success "Script: minot-uninstall -> ${UNINSTALL_PATH}"
 }
 
 # Prefer the current stdin if it's a terminal,
@@ -186,20 +179,17 @@ ${BOLD}EMBED COMPONENTS:${NC}
     ros-native    Both ROS1 and ROS2 native (no system dependencies)
 
 ${BOLD}EXAMPLES:${NC}
-    ${CYAN}# Install latest version from prebuilt binary${NC}
+    ${CYAN}# Install latest version and use prebuilt binaries if available${NC}
     ./install.sh
-
-    ${CYAN}# Single-line installation${NC}
-    curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
 
     ${CYAN}# Install with ROS2 Jazzy support${NC}
     ./install.sh --ros-distro jazzy
 
-    ${CYAN}# Build with embedded ROS2 native support${NC}
-    ./install.sh --build --embed ros2
+    ${CYAN}# Build with multiple embedded components and force build from source${NC}
+    ./install.sh --build --embed jazzy,ratpub
 
-    ${CYAN}# Build with multiple embedded components${NC}
-    ./install.sh --build --embed coord,ros1,ros2
+    ${CYAN}# Resolve to a semver compatible version${NC}
+    ./install.sh --version 0.1
 
 For more information, visit: ${BLUE}https://uos.github.io/minot/installation.html${NC}
 
@@ -228,7 +218,6 @@ get_latest_version() {
     }
 
 detect_os() {
-    # Use uname -s for reliable OS detection (works when script is piped)
     local uname_s
     uname_s=$(uname -s 2>/dev/null || true)
 
@@ -248,7 +237,6 @@ detect_os() {
     esac
 }
 
-# Detect architecture
 detect_arch() {
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -269,7 +257,6 @@ detect_arch() {
     esac
 }
 
-# Map OS and architecture to Rust target triple
 get_target_triple() {
     OS_NAME=$1
     ARCH_NAME=$2
@@ -315,23 +302,19 @@ get_target_triple() {
 
 
 detect_ros_from_env_and_prompt() {
-    # If user already set --ros-distro, respect it
     if [ -n "$ROS_DISTRO" ]; then
         return 0
     fi
 
-    # Prefer environment variable ROS_DISTRO if present
     local detected=""
     if [ -n "${ROS_DISTRO}" ]; then
         detected="${ROS_DISTRO}"
     fi
 
-    # Also try commonly set ROS env var
     if [ -z "$detected" ] && [ -n "${ROS_DISTRO}" ]; then
         detected="${ROS_DISTRO}"
     fi
 
-    # Try PATH detection as fallback: look for /opt/ros/<distro>/bin in PATH
     if [ -z "$detected" ] && echo ":${PATH}:" | grep -q '/opt/ros/'; then
         # extract distro name from first /opt/ros/<distro>/bin occurrence
         detected=$(echo ":${PATH}:" | sed -n 's/.*:\/opt\/ros\/\([^:]*\)\/bin:.*/\1/p' | sed -n '1p' || true)
@@ -341,10 +324,8 @@ detect_ros_from_env_and_prompt() {
         return 0
     fi
 
-    # Normalize to lowercase
     detected=$(echo "$detected" | tr '[:upper:]' '[:lower:]')
 
-    # Supported list (if not in this list, fall back to 'jazzy')
     case "$detected" in
         jazzy|humble|galactic|foxy|iron|rolling)
             ;; # supported
@@ -354,7 +335,6 @@ detect_ros_from_env_and_prompt() {
             ;;
     esac
 
-    # Ask the user whether to use this distro (unless -y / YES_TO_ALL)
     if [ $YES_TO_ALL -eq 1 ]; then
         ROS_DISTRO="$detected"
         info "Auto-enabled ROS distro: ${CYAN}$ROS_DISTRO${NC} (from environment)"
@@ -380,9 +360,7 @@ detect_ros_from_env_and_prompt() {
 
 parse_semver() {
     local s="$1"
-    # strip leading v
     s=${s#v}
-    # extract semver-like portion
     if echo "$s" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
         local sem=$(echo "$s" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+(-[^+]+)?')
         local major=$(echo "$sem" | cut -d. -f1)
@@ -400,7 +378,6 @@ parse_semver() {
 }
 
 compare_semver_parts() {
-    # compare two triplets: returns 0 if a==b, 1 if a>b, 2 if a<b
     local a_major=$1 a_minor=$2 a_patch=$3
     local b_major=$4 b_minor=$5 b_patch=$6
     if [ "$a_major" -gt "$b_major" ]; then return 1; fi
@@ -413,7 +390,6 @@ compare_semver_parts() {
 }
 
 compat_upper_bound() {
-    # Given major minor patch, print upper bound triplet (major,minor,patch)
     local major=$1 minor=$2 patch=$3
     if [ "$major" -eq 0 ]; then
         echo "$major $((minor + 1)) 0"
@@ -423,19 +399,16 @@ compat_upper_bound() {
 }
 
 is_in_range() {
-    # is_in_range candidate >= required && candidate < upper
     local c1=$1 c2=$2 c3=$3
     local r1=$4 r2=$5 r3=$6
     local u1=$7 u2=$8 u3=$9
 
-    # if candidate < required -> false
     compare_semver_parts "$c1" "$c2" "$c3" "$r1" "$r2" "$r3"
     local cmp_to_req=$?
     if [ $cmp_to_req -eq 2 ]; then
         return 1
     fi
 
-    # if candidate >= upper -> false
     compare_semver_parts "$c1" "$c2" "$c3" "$u1" "$u2" "$u3"
     local cmp_to_upper=$?
     if [ $cmp_to_upper -ne 2 ]; then
@@ -524,18 +497,14 @@ EOF
         return 1
     fi
 
-    # Otherwise assume VERSION is a concrete tag or semver and accept it.
     return 0
 }
 
-# Convert embed component names (comma-separated) to cargo feature names
 embed_to_features() {
-    # input: comma-separated components, e.g. "coord,ros2,ratpub"
     local input="$1"
     local IFS=','
     local out=""
     for comp in $input; do
-        # trim whitespace
         comp=$(printf "%s" "$comp" | sed -E 's/^\s+|\s+$//g')
         case "$comp" in
             coord) feat="embed-coord" ;;
@@ -563,7 +532,6 @@ embed_to_features() {
 }
 
 
-# Check if binary exists for target
 check_binary_exists() {
     TARGET=$1
     ARCHIVE_NAME=$2
@@ -584,7 +552,6 @@ check_binary_exists() {
     return 1
 }
 
-# Download and parse manifest.json for a given version
 get_release_manifest() {
     VERSION=$1
     MANIFEST_URL="${GITHUB_RELEASE}/${VERSION}/manifest.json"
@@ -598,69 +565,32 @@ get_release_manifest() {
     fi
 }
 
-# Extract features from manifest for a specific archive
-get_manifest_features() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-    
-    # Extract features array from nested structure: targets > archive_name > features
-    # Returns newline-separated list of features
-    echo "$MANIFEST_JSON" | sed -n "/\"${ARCHIVE_NAME}\"/,/}/p" | grep '"features"' | sed -E 's/.*"features":\s*\[([^\]]*)\].*/\1/' | tr -d '"' | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed '/^$/d'
-}
-
-# Extract ros_distro from manifest for a specific archive
-get_manifest_ros_distro() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-    
-    # Extract ros_distro value from nested structure if present
-    echo "$MANIFEST_JSON" | sed -n "/\"${ARCHIVE_NAME}\"/,/}/p" | grep '"ros_distro"' | sed -E 's/.*"ros_distro":\s*"([^"]+)".*/\1/'
-}
-
-# List archive names for a given target from manifest
-get_manifest_archives_for_target() {
-    MANIFEST_JSON="$1"
-    TARGET="$2"
-    # Extract archive names from nested targets object; filter by target substring
-    echo "$MANIFEST_JSON" | sed -n '/"targets":/,/^[[:space:]]*}/p' | grep -E '^[[:space:]]*"[^"]+"[[:space:]]*:' | sed -E 's/^[[:space:]]*"([^"]+)"[[:space:]]*:.*/\1/' | grep "$TARGET" || true
-}
-
-# Extract subdirs from manifest for a specific archive
 get_manifest_subdirs() {
     MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-    
-    # Extract subdirs array from nested structure
+    ARCHIVE_NAME="$2"    
     echo "$MANIFEST_JSON" | sed -n "/\"${ARCHIVE_NAME}\"/,/}/p" | grep '"subdirs"' | sed -E 's/.*"subdirs":\s*\[([^\]]*)\].*/\1/' | tr -d '"' | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed '/^$/d'
 }
 
-# Extract base target requirement from manifest (for ROS archives)
-get_manifest_base_target() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-    
-    # Extract requires_base_target if present
-    echo "$MANIFEST_JSON" | sed -n "/\"${ARCHIVE_NAME}\"/,/}/p" | grep '"requires_base_target"' | sed -E 's/.*"requires_base_target":\s*"([^"]+)".*/\1/'
-}
-
-# Check if requested (comma-separated) is subset of available (newline-separated)
 is_feature_subset() {
     REQUESTED="$1"
     AVAILABLE="$2"
+    
     if [ -z "$REQUESTED" ]; then
         return 0
     fi
+    
     echo "$REQUESTED" | tr ',' '\n' | while IFS= read -r req; do
         req=$(echo "$req" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         [ -z "$req" ] && continue
+        
         if ! echo "$AVAILABLE" | grep -qx "$req"; then
             exit 1
         fi
     done
-    return 0
+    
+    return $?
 }
 
-# Select minimal archive for target satisfying requested features and ros_distro
 select_best_archive() {
     MANIFEST_JSON="$1"
     TARGET="$2"
@@ -670,27 +600,52 @@ select_best_archive() {
     BEST_ARCH=""
     BEST_EXTRA_COUNT=999999
 
+    # info "DEBUG: Looking for target '$TARGET' with features '$REQUESTED_FEATURES' and distro '$ROS_DISTRO_REQ'"
+
     for arch in $(get_manifest_archives_for_target "$MANIFEST_JSON" "$TARGET"); do
+        # info "DEBUG: Checking archive candidate: $arch"
+        
         AVAIL_FEATS=$(get_manifest_features "$MANIFEST_JSON" "$arch")
-        [ -z "$AVAIL_FEATS" ] && continue
+        # info "DEBUG:   Available features: $(echo "$AVAIL_FEATS" | tr '\n' ',')"
+
         # feature subset check
         if ! is_feature_subset "$REQUESTED_FEATURES" "$AVAIL_FEATS"; then
+            # info "DEBUG:   -> Rejected: Missing required features"
             continue
         fi
+
         # ros distro match
         ARCH_DISTRO=$(get_manifest_ros_distro "$MANIFEST_JSON" "$arch")
+        # info "DEBUG:   Archive Distro: '$ARCH_DISTRO'"
+
         if [ -n "$ROS_DISTRO_REQ" ]; then
-            if [ -z "$ARCH_DISTRO" ] || [ "$(echo "$ARCH_DISTRO" | tr '[:upper:]' '[:lower:]')" != "$(echo "$ROS_DISTRO_REQ" | tr '[:upper:]' '[:lower:]')" ]; then
+            if [ -z "$ARCH_DISTRO" ]; then
+                 # info "DEBUG:   -> Rejected: Requesting ROS '$ROS_DISTRO_REQ' but archive has none"
+                 continue
+            fi
+            
+            # Case-insensitive comparison
+            REQ_LOWER=$(echo "$ROS_DISTRO_REQ" | tr '[:upper:]' '[:lower:]')
+            ARCH_LOWER=$(echo "$ARCH_DISTRO" | tr '[:upper:]' '[:lower:]')
+            
+            if [ "$REQ_LOWER" != "$ARCH_LOWER" ]; then
+                # info "DEBUG:   -> Rejected: Distro mismatch ($REQ_LOWER vs $ARCH_LOWER)"
                 continue
             fi
         fi
+        
+        # Calculate "Exactness" score
         AVAIL_COUNT=$(printf "%s\n" "$AVAIL_FEATS" | sed '/^$/d' | wc -l | tr -d ' ')
         REQ_COUNT=$(printf "%s" "$REQUESTED_FEATURES" | tr ',' '\n' | sed '/^$/d' | wc -l | tr -d ' ')
         EXTRA_COUNT=$((AVAIL_COUNT - REQ_COUNT))
+
+        # info "DEBUG:   -> Candidate Valid. Extra features: $EXTRA_COUNT"
+
         # prefer archives without ros_distro when not requested
         if [ -z "$ROS_DISTRO_REQ" ] && [ -n "$ARCH_DISTRO" ]; then
             EXTRA_COUNT=$((EXTRA_COUNT + 1000))
         fi
+        
         if [ "$EXTRA_COUNT" -lt "$BEST_EXTRA_COUNT" ]; then
             BEST_EXTRA_COUNT="$EXTRA_COUNT"
             BEST_ARCH="$arch"
@@ -704,16 +659,13 @@ select_best_archive() {
     return 1
 }
 
-# Check if a ROS distro is available (sourced or installed)
 check_ros_distro_available() {
     DISTRO="$1"
     
-    # Check if ROS is sourced in current environment
     if [ -n "${ROS_DISTRO}" ] && [ "${ROS_DISTRO}" = "$DISTRO" ]; then
         return 0
     fi
     
-    # Check if setup.bash exists for this distro
     if [ -f "/opt/ros/${DISTRO}/setup.bash" ]; then
         return 0
     fi
@@ -721,19 +673,15 @@ check_ros_distro_available() {
     return 1
 }
 
-# Check if requested features are available in prebuilt binary
 check_feature_compatibility() {
     REQUESTED_FEATURES="$1"  # comma-separated
     AVAILABLE_FEATURES="$2"  # newline-separated from get_manifest_features
     
-    # If no features requested, always compatible
     if [ -z "$REQUESTED_FEATURES" ]; then
         return 0
     fi
     
-    # Convert requested features to newline-separated and check each
     echo "$REQUESTED_FEATURES" | tr ',' '\n' | while IFS= read -r req_feat; do
-        # Trim whitespace
         req_feat=$(echo "$req_feat" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         [ -z "$req_feat" ] && continue
         
@@ -768,19 +716,14 @@ download_and_extract() {
         return 1
     fi
 
-    # Extract stripping the top-level directory (e.g., minot-x86.../file -> DEST/file)
-    # We use a temp dir for extraction to handle the directory name cleanly
     EXTRACT_TMP=$(mktemp -d)
     tar xzf "$ARCHIVE_FILE" -C "$EXTRACT_TMP"
     
-    # Move contents to DEST_DIR
-    # We find the single directory inside the tarball
     CREATED_DIR=$(find "$EXTRACT_TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)
     
     if [ -n "$CREATED_DIR" ]; then
         cp -R "$CREATED_DIR"/* "$DEST_DIR/"
     else
-        # Fallback if tarball didn't have a root folder (unlikely based on workflow)
         cp -R "$EXTRACT_TMP"/* "$DEST_DIR/"
     fi
     
@@ -788,17 +731,13 @@ download_and_extract() {
     return 0
 }
 
-# Download, Merge and Install binaries
 download_and_install() {
-    # We receive the main archive (Overlay/Target) and optionally a Base archive
     TARGET=$1
     PRIMARY_ARCH_NAME=$2
     BASE_ARCH_NAME=$3
     VERSION=$4
     REQUESTED_FEATURES="$5"
 
-    echo "VERSION=$VERSION"
-    
     TMP_DIR=$(mktemp -d)
     trap "rm -rf '$TMP_DIR'" EXIT
     
@@ -807,7 +746,7 @@ download_and_install() {
 
     cd "$TMP_DIR" || return 1
 
-    # 1. Download and Extract BASE Archive first (if it exists)
+    # Download and Extract BASE Archive first (if it exists)
     # This ensures libraries and standard tools are present
     if [ -n "$BASE_ARCH_NAME" ] && [ "$BASE_ARCH_NAME" != "$PRIMARY_ARCH_NAME" ]; then
         BASE_URL="${GITHUB_RELEASE}/${VERSION}/${BASE_ARCH_NAME}.tar.gz"
@@ -818,8 +757,7 @@ download_and_install() {
         fi
     fi
 
-    # 2. Download and Extract PRIMARY Archive (Overlay)
-    # This writes over the base, so specific ROS binaries replace/add to base ones
+    # Download and Extract PRIMARY Archive (Overlay)
     PRIMARY_URL="${GITHUB_RELEASE}/${VERSION}/${PRIMARY_ARCH_NAME}.tar.gz"
     if [ -n "$BASE_ARCH_NAME" ]; then
         info "Fetching overlay artifacts from ${PRIMARY_ARCH_NAME}..."
@@ -831,10 +769,6 @@ download_and_install() {
         warn "Failed to download primary archive."
         return 1
     fi
-
-    # ---------------------------------------------------------
-    # Installation Logic (working on the merged STAGE_DIR)
-    # ---------------------------------------------------------
     
     mkdir -p "$INSTALL_DIR"
     INSTALL_PREFIX=$(dirname "$INSTALL_DIR")
@@ -842,7 +776,8 @@ download_and_install() {
     INSTALL_INCLUDE_DIR="${INSTALL_PREFIX}/include"
     mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_INCLUDE_DIR"
 
-    info "Installing binaries to $INSTALL_DIR..."
+    info "Installing..."
+    printf "\n"
 
     should_install_binary() {
         binname="$1"
@@ -857,13 +792,11 @@ download_and_install() {
         esac
     }
 
-    # Logic to pick the correct subdirectory (min, co, rat, ros2, ros2_1) from STAGE_DIR
     choose_minot_path() {
         root="$1"
         req="$2"
         best_path=""
         
-        # Priority 1: ROS Variants
         case ",$req," in
             *,embed-ros2-c,*|*,embed-ros2-c-humble,*|*,embed-ros2-c-jazzy,*|*,embed-ros,*)
                 if echo ",$req," | grep -q ",embed-ros1-native,"; then
@@ -873,7 +806,6 @@ download_and_install() {
                 ;;
         esac
         
-        # Priority 2: Standard Variants (if no ROS selected or not found)
         if [ -z "$best_path" ]; then
             case ",$req," in
                 *,embed-ratpub,*) [ -x "$root/rat/minot" ] && best_path="$root/rat/minot" ;;
@@ -881,7 +813,6 @@ download_and_install() {
             esac
         fi
         
-        # Priority 3: Minimal
         if [ -z "$best_path" ] && [ -x "$root/min/minot" ]; then
             best_path="$root/min/minot"
         fi
@@ -893,21 +824,17 @@ download_and_install() {
 
     INSTALLED_ANY=0
     
-    # Install Minot Binary
     if [ -n "$CHOSEN_MINOT" ] && [ -x "$CHOSEN_MINOT" ]; then
-        # Determine variant name for logging
         VARIANT_NAME=$(basename "$(dirname "$CHOSEN_MINOT")")
-        info "Selected minot variant: ${CYAN}${VARIANT_NAME}${NC}"
         
-        cp "$CHOSEN_MINOT" "$INSTALL_DIR/minot"
-        chmod +x "$INSTALL_DIR/minot"
-        success "Installed: minot"
+    cp "$CHOSEN_MINOT" "$INSTALL_DIR/minot"
+    chmod +x "$INSTALL_DIR/minot"
+    success "Binary: minot -> $INSTALL_DIR/minot"
         INSTALLED_ANY=1
     else
         warn "No suitable 'minot' binary found in the downloaded artifacts."
     fi
 
-    # Install Sidecars (from root of STAGE_DIR)
     for binary in "$STAGE_DIR"/*; do
         if [ -f "$binary" ] && [ -x "$binary" ]; then
             BINARY_NAME=$(basename "$binary")
@@ -919,30 +846,28 @@ download_and_install() {
             if [ "$BINARY_NAME" = "minot-coord" ] || should_install_binary "$BINARY_NAME" "$REQUESTED_FEATURES"; then
                 cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
                 chmod +x "$INSTALL_DIR/$BINARY_NAME"
-                success "Installed: $BINARY_NAME"
+                success "Binary: $BINARY_NAME -> $INSTALL_DIR/$BINARY_NAME"
                 INSTALLED_ANY=1
             fi
         fi
     done
 
-    # Install Libraries
     for lib_file in "$STAGE_DIR"/*.a "$STAGE_DIR"/*.so "$STAGE_DIR"/*.dylib; do
         if [ -f "$lib_file" ]; then
             FILENAME=$(basename "$lib_file")
             cp "$lib_file" "$INSTALL_LIB_DIR/$FILENAME"
-            success "Installed library: $FILENAME -> $INSTALL_LIB_DIR"
+            success "Library: $FILENAME -> $INSTALL_LIB_DIR/$FILENAME"
             INSTALLED_ANY=1
         fi
     done
 
-    # Install Headers
     HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
     mkdir -p "$HEADER_SUBDIR"
     for header_file in "$STAGE_DIR"/*.h; do
         if [ -f "$header_file" ]; then
             FILENAME=$(basename "$header_file")
             cp "$header_file" "$HEADER_SUBDIR/$FILENAME"
-            success "Installed header: $FILENAME -> $HEADER_SUBDIR"
+            success "Header: $FILENAME -> $HEADER_SUBDIR/$FILENAME"
             INSTALLED_ANY=1
         fi
     done
@@ -958,7 +883,6 @@ download_and_install() {
     return 0
 }
 
-# Check if Rust is installed
 check_rust() {
     if ! command -v cargo >/dev/null 2>&1; then
         warn "Rust is not installed on your system."
@@ -994,13 +918,11 @@ check_rust() {
     return 0
 }
 
-# Build from source
 build_from_source() {
     if ! check_rust; then
         error "Rust is required to build from source"
     fi
 
-    # Convert embed components to features if specified
     if [ -n "$EMBED_COMPONENTS" ]; then
         EMBED_FEATURES=$(embed_to_features "$EMBED_COMPONENTS")
         if [ -n "$FEATURES" ]; then
@@ -1010,12 +932,9 @@ build_from_source() {
         fi
     fi
 
-    # Determine features to build with
     BUILD_FEATURES="$FEATURES"
     
-    # Add default embed-coord unless user opted out with --no-default-embed
     if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
-        # Check if coord is already in the features list
         case ",$BUILD_FEATURES," in
             *,embed-coord,*)
                 # already present, do nothing
@@ -1054,10 +973,9 @@ build_from_source() {
 
     info "Building with features: ${CYAN}$BUILD_FEATURES${NC}"
 
-    # Check if building with ros2-c features requires libclang-dev on Ubuntu
+    # Check if building with ros2-c. It requires libclang-dev on Ubuntu.
     case ",$BUILD_FEATURES," in
         *,embed-ros2-c,*|*,embed-ros2-c-*,*|*,embed-ros,*)
-            # Check if we're on Ubuntu/Debian without sourcing /etc/os-release
             if [ -f /etc/os-release ]; then
                 OS_ID=$(sed -n 's/^ID=\(.*\)$/\1/p' /etc/os-release | tr -d '"') || OS_ID=""
                 case "$OS_ID" in
@@ -1086,7 +1004,6 @@ build_from_source() {
         elif command -v ros2 >/dev/null 2>&1; then
             info "ROS support activated."
         else
-            # Not obviously sourced. Try to locate any setup script under /opt/ros
             FOUND_SETUP=""
             for p in /opt/ros/*/setup.bash /opt/ros/*/setup.sh /opt/ros/*/setup.zsh; do
                 if [ -f "$p" ]; then
@@ -1121,37 +1038,26 @@ build_from_source() {
         fi
     fi
 
-    # Create install directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
 
-    # Clone the repository to a temporary directory
     TMP_BUILD_DIR=$(mktemp -d)
     trap "rm -rf '$TMP_BUILD_DIR'" EXIT
 
     info "Cloning repository..."
 
-    # Determine git clone args with optional version/tag and run git directly
     if [ -n "$VERSION" ]; then
-        # Prefer extracting a semver-like token from the provided VERSION so
-        # we don't accidentally treat OS/pretty-name strings as tags. Examples:
-        # "v24.04.1 LTS (Noble Numbat)" -> "v24.04.1"
         RAW_VERSION="$VERSION"
         TAG_TO_USE=$(printf "%s" "$RAW_VERSION" | grep -Eo 'v?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
 
-        # If we couldn't find a semver-like token, fall back to first token
         if [ -z "$TAG_TO_USE" ]; then
             TAG_TO_USE=$(printf "%s" "$RAW_VERSION" | awk '{print $1}')
         fi
 
-        # Ensure tag has a leading 'v'
         case "$TAG_TO_USE" in
             v*) ;;
             *) TAG_TO_USE="v$TAG_TO_USE" ;;
         esac
 
-        # Try cloning the specific tag/branch first. If that fails, clone the
-        # repository and attempt to checkout the tag explicitly (handles cases
-        # where the tag exists but --branch with whitespace/remote-ref fails).
         if git clone --depth 1 --branch "$TAG_TO_USE" --single-branch "https://github.com/${REPO}.git" "$TMP_BUILD_DIR" 2>/dev/null; then
             : # success
         else
@@ -1159,7 +1065,6 @@ build_from_source() {
             if ! git clone --depth 1 "https://github.com/${REPO}.git" "$TMP_BUILD_DIR"; then
                 error "Failed to clone repository"
             fi
-            # Attempt to checkout the tag (fetch tags if necessary)
             (cd "$TMP_BUILD_DIR" && 
                 if git rev-parse --verify "refs/tags/$TAG_TO_USE" >/dev/null 2>&1; then
                     git checkout "refs/tags/$TAG_TO_USE" || exit 1
@@ -1177,7 +1082,6 @@ build_from_source() {
 
     cd "$TMP_BUILD_DIR" || error "Failed to enter build directory"
 
-    # Prepare cargo build command
     BUILD_CMD="cargo build --release --locked"
     if [ -n "$BUILD_FEATURES" ]; then
         BUILD_CMD="$BUILD_CMD --features $BUILD_FEATURES"
@@ -1185,7 +1089,6 @@ build_from_source() {
 
     printf "\n${BOLD}Build command:${NC} ${CYAN}%s${NC}\n\n" "$BUILD_CMD"
 
-    # Build the workspace to produce all artifacts
     info "Building binaries and libraries..."
     if [ "$USE_BASH_SOURCE" -eq 1 ]; then
         if [ -n "$ROS_SETUP" ]; then
@@ -1203,14 +1106,14 @@ build_from_source() {
         eval "$BUILD_CMD" || error "Build failed"
     fi
 
-    # Determine install prefix and destination directories
     INSTALL_PREFIX=$(dirname "$INSTALL_DIR")
     INSTALL_LIB_DIR="${INSTALL_PREFIX}/lib"
     INSTALL_INCLUDE_DIR="${INSTALL_PREFIX}/include"
     mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_INCLUDE_DIR"
 
     printf "\n"
-    info "Installing binaries..."
+    info "Installing..."
+    printf "\n"
 
     ART_DIR="target/release"
     for binary in "$ART_DIR"/minot "$ART_DIR"/minot-coord "$ART_DIR"/wind-*; do
@@ -1224,7 +1127,7 @@ build_from_source() {
             esac
             cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
             chmod +x "$INSTALL_DIR/$BINARY_NAME"
-            success "Installed: $BINARY_NAME"
+            success "Installed: $BINARY_NAME -> $INSTALL_DIR/$BINARY_NAME"
         fi
     done
 
@@ -1237,7 +1140,6 @@ build_from_source() {
         fi
     done
 
-    # Install headers (currently rat.h) into include/rat/
     HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
     mkdir -p "$HEADER_SUBDIR"
     if [ -f "rat/rat.h" ]; then
@@ -1251,7 +1153,6 @@ build_from_source() {
     cd - >/dev/null || true
 }
 
-# Check if installation directory is in PATH
 check_path() {
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*)
@@ -1263,7 +1164,6 @@ check_path() {
     esac
 }
 
-# Add directory to PATH
 suggest_path_update() {
     if ! check_path; then
         warn "Installation directory is not in your PATH: $INSTALL_DIR"
@@ -1293,9 +1193,7 @@ suggest_path_update() {
     fi
 }
 
-# Check if minot is already installed (in PATH or in the selected install dir)
 is_minot_installed() {
-    # If a 'minot' executable is on PATH, verify it behaves like Minot
     if command -v minot >/dev/null 2>&1; then
         MINOT_PATH=$(command -v minot)
         # Try to read a version string; if it prints something non-empty, accept it.
@@ -1316,7 +1214,6 @@ is_minot_installed() {
     return 1
 }
 
-# Prompt and (optionally) uninstall existing installation
 prompt_uninstall_existing() {
     if ! is_minot_installed; then
         return 0
@@ -1353,18 +1250,39 @@ prompt_uninstall_existing() {
         fi
     fi
 
-    # Interactive prompt - try minot-uninstall first (always with -y since user is in install flow)
     printf "\n"
     if command -v minot-uninstall >/dev/null 2>&1; then
-        info "Previous Minot installation detected. Running 'minot-uninstall'..."
-        if minot-uninstall -y; then
-            success "Previous Minot uninstalled"
-            return 0
+        if [ $YES_TO_ALL -eq 1 ]; then
+            info "Auto-uninstall enabled (-y): running 'minot-uninstall'..."
+            if minot-uninstall -y; then
+                success "Previous Minot uninstalled"
+                return 0
+            fi
+            error "Failed to run 'minot-uninstall'. Please uninstall manually and re-run this script."
         fi
-        error "Failed to run 'minot-uninstall'. Please uninstall manually and re-run this script."
+
+        # Ask the user before running the external uninstaller
+        prompt "Previous Minot installation detected. Run 'minot-uninstall' to uninstall it now? [Y/n]"
+        if safe_read resp; then
+            case "$resp" in
+                [nN][oO]|[nN])
+                    error "Please uninstall the existing Minot before proceeding, or re-run with --yes to auto-uninstall."
+                    ;;
+                *)
+                    info "Running 'minot-uninstall'..."
+                    # Run the uninstaller in non-interactive mode to ensure a clean removal
+                    if minot-uninstall -y; then
+                        success "Previous Minot uninstalled"
+                        return 0
+                    fi
+                    error "Failed to run 'minot-uninstall'. Please uninstall manually and re-run this script."
+                    ;;
+            esac
+        else
+            error "Could not read input from terminal. Re-run interactively or use --yes to auto-uninstall."
+        fi
     fi
     
-    # Fallback: prompt user and manually remove files
     prompt "A previous Minot installation was detected. Would you like me to uninstall it now? [Y/n]"
     if ! safe_read resp; then
         error "Could not read input from terminal. Re-run interactively or use --yes to auto-uninstall."
@@ -1385,9 +1303,7 @@ prompt_uninstall_existing() {
     esac
 }
 
-# Main installation logic
 parse_args() {
-    # Parse command line arguments. POSIX-compatible.
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help)
@@ -1457,24 +1373,104 @@ parse_args() {
         shift
     done
 }
+get_manifest_archives_for_target() {
+    MANIFEST_JSON="$1"
+    TARGET="$2"
+    
+    echo "$MANIFEST_JSON" | awk -v tgt="$TARGET" '
+    BEGIN { count=0; found_targets=0 }
+    
+    # Start tracking when we hit "targets": {
+    /"targets"[[:space:]]*:/ { found_targets=1 }
+    
+    found_targets {
+        # 1. Update Brace Count
+        # We perform substitions on a copy of the line to count braces
+        line=$0
+        n_open = gsub(/{/, "", line)
+        line=$0
+        n_close = gsub(/}/, "", line)
+        count += n_open - n_close
+
+        # 2. Check for Archive Keys
+        # We look for lines like: "minot-target": {
+        # We exclude the "targets" line itself
+        if ($0 ~ /^[[:space:]]*"[^"]+":[[:space:]]*{/ && $0 !~ /"targets"/) {
+             split($0, parts, "\"")
+             key = parts[2]
+             # Print if the key contains our target string
+             if (index(key, tgt) > 0) print key
+        }
+
+        # 3. Exit if block is closed
+        # If count drops to 0 (and we have started), we are done.
+        if (count <= 0) exit
+    }'
+}
+
+get_manifest_features() {
+    MANIFEST_JSON="$1"
+    ARCHIVE_NAME="$2"
+
+    echo "$MANIFEST_JSON" | awk -v arch="$ARCHIVE_NAME" '
+    # Find the start of the specific archive block
+    $0 ~ "\"" arch "\":" { in_block=1; next }
+    # If we hit the closing brace of the block, stop
+    in_block && /^[[:space:]]*},?/ { exit }
+    
+    in_block && /"features":/ {
+        # Line looks like: "features": ["embed-coord", "embed-ros2-c"],
+        # Strip the key
+        sub(/"features":/, "")
+        # Replace brackets, quotes, and commas with spaces
+        gsub(/[\[\]",]/, " ")
+        # Print each word on a new line
+        for(i=1; i<=NF; i++) if($i!="") print $i
+        exit
+    }'
+}
+
+get_manifest_ros_distro() {
+    MANIFEST_JSON="$1"
+    ARCHIVE_NAME="$2"
+
+    echo "$MANIFEST_JSON" | awk -v arch="$ARCHIVE_NAME" '
+    $0 ~ "\"" arch "\":" { in_block=1; next }
+    in_block && /^[[:space:]]*},?/ { exit }
+    
+    in_block && /"ros_distro":/ {
+        # Line looks like: "ros_distro": "jazzy",
+        split($0, parts, "\"")
+        # parts[1]=spaces, parts[2]=key, parts[3]=Colon, parts[4]=Value
+        print parts[4]
+        exit
+    }'
+}
+
+get_manifest_base_target() {
+    MANIFEST_JSON="$1"
+    ARCHIVE_NAME="$2"
+    
+    echo "$MANIFEST_JSON" | awk -v arch="$ARCHIVE_NAME" '
+    $0 ~ "\"" arch "\":" { in_block=1; next }
+    in_block && /^[[:space:]]*},?/ { exit }
+    
+    in_block && /"requires_base_target":/ {
+        split($0, parts, "\"")
+        print parts[4]
+        exit
+    }'
+}
 
 main() {
     parse_args "$@"
     
-    printf "\n"
-    info "Minot Installation Script"
-    printf "\n"
-
-    # If an existing installation is present, offer to uninstall (or auto-uninstall with -y)
     prompt_uninstall_existing
-    # Detect ROS environment and prompt to enable embed if found
     detect_ros_from_env_and_prompt
     
-    # Detect system
     OS_NAME=$(detect_os)
     ARCH_NAME=$(detect_arch)
     
-    # Prefer GNU targets for ROS builds
     PREFER_GNU=0
     if [ -n "$ROS_DISTRO" ]; then
         PREFER_GNU=1
@@ -1490,34 +1486,29 @@ main() {
         FORCE_BUILD=1
     fi
     
-    # Try to download prebuilt binary unless forced to build
     if [ $FORCE_BUILD -eq 0 ]; then
-    
         if [ -z "$VERSION" ]; then
             if ! get_latest_version; then
-                # If fetching version fails, fall back to building from source
                 FORCE_BUILD=1
             fi
         else
-            # If user supplied a custom VERSION, try to resolve prefixes like '0.1'
             if ! resolve_requested_version; then
                 error "Failed to resolve requested version: $VERSION"
             fi
             info "Installing version: ${CYAN}$VERSION${NC}"
         fi
         
-        # Normalize VERSION to have 'v' prefix for download URLs
         VERSION_WITH_V="$VERSION"
         if [ -n "$VERSION_WITH_V" ]; then
             case "$VERSION_WITH_V" in
-                v*) ;; # already has v prefix
+                v*) ;;
                 *) VERSION_WITH_V="v$VERSION_WITH_V" ;;
             esac
         fi
         
-        # Build requested feature list from embed components and custom features
         MANIFEST_JSON=""
         REQUESTED_FEATURES=""
+
         if [ -n "$EMBED_COMPONENTS" ]; then
             EMBED_FEATURES=$(embed_to_features "$EMBED_COMPONENTS")
             if [ -n "$FEATURES" ]; then
@@ -1529,10 +1520,41 @@ main() {
             REQUESTED_FEATURES="$FEATURES"
         fi
 
-        # Always download manifest and select the minimal matching archive
+        if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
+             case ",$REQUESTED_FEATURES," in
+                *,embed-coord,*) ;;
+                *)
+                    if [ -n "$REQUESTED_FEATURES" ]; then
+                        REQUESTED_FEATURES="embed-coord,${REQUESTED_FEATURES}"
+                    else
+                        REQUESTED_FEATURES="embed-coord"
+                    fi
+                    ;;
+            esac
+        fi
+
+        if [ -n "$ROS_DISTRO" ]; then
+            ROS_DISTRO_LC=$(echo "$ROS_DISTRO" | tr '[:upper:]' '[:lower:]')
+            if [ "$ROS_DISTRO_LC" = "jazzy" ]; then
+                ROS2_C_FEATURE="embed-ros2-c"
+            else
+                ROS2_C_FEATURE="embed-ros2-c-${ROS_DISTRO_LC}"
+            fi
+            
+            case ",$REQUESTED_FEATURES," in
+                *,${ROS2_C_FEATURE},*|*,embed-ros,*|*,embed-ros2-c,*) ;;
+                *)
+                    if [ -n "$REQUESTED_FEATURES" ]; then
+                        REQUESTED_FEATURES="${REQUESTED_FEATURES},${ROS2_C_FEATURE}"
+                    else
+                        REQUESTED_FEATURES="${ROS2_C_FEATURE}"
+                    fi
+                    ;;
+            esac
+        fi
+
         MANIFEST_JSON=$(get_release_manifest "$VERSION_WITH_V")
         if [ -z "$MANIFEST_JSON" ]; then
-            #warn "Could not download release manifest; falling back to static archive name"
             if [ -n "$ROS_DISTRO" ]; then
                 ARCHIVE_NAME="minot-${ROS_DISTRO}-${TARGET}"
             else
@@ -1542,51 +1564,38 @@ main() {
             SELECTED=$(select_best_archive "$MANIFEST_JSON" "$TARGET" "$REQUESTED_FEATURES" "$ROS_DISTRO") || true
             if [ -n "$SELECTED" ]; then
                 ARCHIVE_NAME="$SELECTED"
-                #success "Selected archive: ${CYAN}${ARCHIVE_NAME}${NC}"
             else
+                # Enable this temporarily to debug
+                # info "DEBUG: Failed to select archive. Target=$TARGET ReqFeatures=$REQUESTED_FEATURES Ros=$ROS_DISTRO"
                 info "Falling back to building from source; no suitable prebuilt binary found."
                 FORCE_BUILD=1
             fi
         fi
         
-        # If we have a manifest, check ROS distro compatibility for the selected archive
         if [ -n "$MANIFEST_JSON" ]; then
             BINARY_ROS_DISTRO=$(get_manifest_ros_distro "$MANIFEST_JSON" "$ARCHIVE_NAME")
-            
-            # Check if binary requires a specific ROS distro (runtime dependency)
             if [ -n "$BINARY_ROS_DISTRO" ]; then
-                info "Binary requires ROS ${CYAN}${BINARY_ROS_DISTRO}${NC} to be installed"
                 if ! check_ros_distro_available "$BINARY_ROS_DISTRO"; then
                     warn "ROS ${BINARY_ROS_DISTRO} not found"
-                    info "Install it with: ${CYAN}sudo apt install ros-${BINARY_ROS_DISTRO}-ros-base${NC}"
-                    info "Or source it: ${CYAN}source /opt/ros/${BINARY_ROS_DISTRO}/setup.bash${NC}"
-                    error "Cannot use prebuilt binary without ROS ${BINARY_ROS_DISTRO}. Install ROS or build from source without --ros-distro flag."
+                    error "Cannot use prebuilt binary without ROS ${BINARY_ROS_DISTRO}."
                 fi
             fi
         fi
         
-        # Feature compatibility is guaranteed by select_best_archive; no extra check needed
-        
-        # Only try to download if we haven't been forced to build
         if [ $FORCE_BUILD -eq 0 ] && check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION_WITH_V"; then
-            success "Found prebuilt binary!"
-            printf "\n"
-            # Determine if this archive requires a separate base archive (for ROS overlays)
+            success "Found prebuilt binary: ${CYAN}${ARCHIVE_NAME}${NC}"
+            
             BASE_ARCH_NAME=""
             if [ -n "$MANIFEST_JSON" ]; then
                 BASE_ARCH_NAME=$(get_manifest_base_target "$MANIFEST_JSON" "$ARCHIVE_NAME" || true)
             fi
 
-            # Call download_and_install with the correct argument order:
-            # download_and_install TARGET PRIMARY_ARCH_NAME BASE_ARCH_NAME VERSION REQUESTED_FEATURES
             if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$BASE_ARCH_NAME" "$VERSION_WITH_V" "$REQUESTED_FEATURES"; then
                 warn "Installing prebuilt binary failed — will fall back to building from source"
                 FORCE_BUILD=1
             fi
         elif [ $FORCE_BUILD -eq 0 ]; then
             warn "No prebuilt binary found for your system"
-            
-            # If ROS distro was specified but no binary found, inform user
             if [ -n "$ROS_DISTRO" ]; then
                 info "ROS ${CYAN}${ROS_DISTRO}${NC} build not available for ${CYAN}${TARGET}${NC}"
             fi
@@ -1595,15 +1604,11 @@ main() {
                 printf "\n"
                 prompt "Would you like to build from source? [Y/n]"
                 if ! safe_read response; then
-                    error "Could not read input from terminal. Installation cancelled."
+                    error "Installation cancelled."
                 fi
                 case "$response" in
-                    [nN][oO]|[nN])
-                        error "Installation cancelled"
-                        ;;
-                    *)
-                        FORCE_BUILD=1
-                        ;;
+                    [nN][oO]|[nN]) error "Installation cancelled" ;;
+                    *) FORCE_BUILD=1 ;;
                 esac
             else
                 FORCE_BUILD=1
@@ -1611,28 +1616,14 @@ main() {
         fi
     fi
     
-    # Build from source if necessary
     if [ $FORCE_BUILD -eq 1 ]; then
         printf "\n"
         build_from_source
     fi
     
-    printf "\n"
-    success "Installation Complete!"
-    
-    # Check if binaries are accessible
     suggest_path_update
-    
     printf "\n${BOLD}Next steps:${NC}\n"
-    printf "  ${GREEN}1.${NC} Verify installation: ${CYAN}minot --help${NC}\n"
-    printf "  ${GREEN}2.${NC} Read the docs: ${BLUE}https://uos.github.io/minot/${NC}\n\n"
-    
-    printf "${BOLD}To uninstall:${NC}\n"
-    printf "  Run the uninstaller to remove all installed files:\n"
-    printf "    ${CYAN}minot-uninstall${NC}\n\n"
-    printf "  ${BOLD}Note:${NC} This will remove all binaries, libraries, and headers installed by this script.\n"
-    
+    printf "  ${GREEN}1.${NC} Verify installation: ${CYAN}minot --help${NC}\n\n"
 }
 
-# Run main function
 main "$@"
