@@ -27,19 +27,19 @@ BOLD=$(printf '\033[1m')
 NC=$(printf '\033[0m') # No Color
 
 info() {
-    printf "${BLUE}${BOLD}==>${NC} ${BOLD}%s${NC}\n" "$1"
+    printf "${BLUE}${BOLD}>${NC} ${BOLD}%s${NC}\n" "$1"
 }
 
 success() {
-    printf "${GREEN}${BOLD}✓${NC} ${GREEN}%s${NC}\n" "$1"
+    printf "${GREEN}${BOLD}${NC}${GREEN}%s${NC}\n" "$1"
 }
 
 warn() {
-    printf "${YELLOW}${BOLD}⚠${NC} ${YELLOW}%s${NC}\n" "$1"
+    printf "${YELLOW}${BOLD}${NC}${YELLOW}%s${NC}\n" "$1"
 }
 
 error() {
-    printf "${RED}${BOLD}✗${NC} ${RED}%s${NC}\n" "$1" >&2
+    printf "${RED}${BOLD}ERROR${NC} ${RED}%s${NC}\n" "$1" >&2
     exit 1
 }
 
@@ -68,10 +68,10 @@ BLUE=$(printf '\033[0;34m')
 BOLD=$(printf '\033[1m')
 NC=$(printf '\033[0m')
 
-info() { printf "${BLUE}${BOLD}==>${NC} ${BOLD}%s${NC}\n" "$1"; }
-success() { printf "${GREEN}${BOLD}✓${NC} ${GREEN}%s${NC}\n" "$1"; }
-warn() { printf "${YELLOW}${BOLD}⚠${NC} ${YELLOW}%s${NC}\n" "$1"; }
-error() { printf "${RED}${BOLD}✗${NC} ${RED}%s${NC}\n" "$1" >&2; exit 1; }
+info() { printf "${BLUE}${BOLD}>${NC} ${BOLD}%s${NC}\n" "$1"; }
+success() { printf "${GREEN}${BOLD}${NC}${GREEN}%s${NC}\n" "$1"; }
+warn() { printf "${YELLOW}${BOLD}${NC}${YELLOW}%s${NC}\n" "$1"; }
+error() { printf "${RED}${BOLD}${NC}${RED}%s${NC}\n" "$1" >&2; exit 1; }
 prompt() { printf "${BLUE}?${NC} %s " "$1"; }
 
 # Check for -y/--yes flag for non-interactive mode
@@ -136,7 +136,7 @@ if [ -f "$SELF_PATH" ]; then
 fi
 set -e
 
-printf "\n"; success "Minot has been successfully uninstalled!"; printf "\n"
+printf "\n"; success "All done!"; printf "\n"
 EOF
     chmod +x "${UNINSTALL_PATH}"
     success "Installed: minot-uninstall"
@@ -210,10 +210,8 @@ get_latest_version() {
         info "Fetching latest release version..."
             if command -v curl >/dev/null 2>&1; then
                 # Keep silent for API calls but show a one-line info before
-                info "Contacting GitHub for latest release..."
                 VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
             elif command -v wget >/dev/null 2>&1; then
-                info "Contacting GitHub for latest release (wget)..."
                 VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
             else
                 warn "Neither curl nor wget found. Will fall back to building from source."
@@ -798,6 +796,8 @@ download_and_install() {
     BASE_ARCH_NAME=$3
     VERSION=$4
     REQUESTED_FEATURES="$5"
+
+    echo "VERSION=$VERSION"
     
     TMP_DIR=$(mktemp -d)
     trap "rm -rf '$TMP_DIR'" EXIT
@@ -996,8 +996,6 @@ check_rust() {
 
 # Build from source
 build_from_source() {
-    info "Building Minot from source..."
-
     if ! check_rust; then
         error "Rust is required to build from source"
     fi
@@ -1059,10 +1057,10 @@ build_from_source() {
     # Check if building with ros2-c features requires libclang-dev on Ubuntu
     case ",$BUILD_FEATURES," in
         *,embed-ros2-c,*|*,embed-ros2-c-*,*|*,embed-ros,*)
-            # Check if we're on Ubuntu/Debian
+            # Check if we're on Ubuntu/Debian without sourcing /etc/os-release
             if [ -f /etc/os-release ]; then
-                . /etc/os-release
-                case "$ID" in
+                OS_ID=$(sed -n 's/^ID=\(.*\)$/\1/p' /etc/os-release | tr -d '"') || OS_ID=""
+                case "$OS_ID" in
                     ubuntu|debian)
                         # Check if libclang-dev is installed
                         if ! dpkg -l libclang-dev >/dev/null 2>&1; then
@@ -1079,18 +1077,14 @@ build_from_source() {
             ;;
     esac
 
-    # If a ROS distro was requested, only require that ROS is sourced into the environment.
-    # We can't reliably detect every install location, so check PATH for a sourced ROS
-    # (e.g. /opt/ros/<distro>/bin) or a ros2 binary. If not sourced, offer to source any
-    # setup script we can find under /opt/ros/*.
     USE_BASH_SOURCE=0
     ROS_SETUP=""
     if [ -n "$ROS_DISTRO" ]; then
         # Check for any /opt/ros/*/bin entry in PATH (this indicates ROS was sourced)
         if echo ":${PATH}:" | grep -Eq '/opt/ros/[^:]+/bin'; then
-            info "ROS appears to be sourced (PATH contains /opt/ros/*/bin)."
+            info "ROS support activated."
         elif command -v ros2 >/dev/null 2>&1; then
-            info "ROS appears to be available (found 'ros2' in PATH)."
+            info "ROS support activated."
         else
             # Not obviously sourced. Try to locate any setup script under /opt/ros
             FOUND_SETUP=""
@@ -1135,21 +1129,50 @@ build_from_source() {
     trap "rm -rf '$TMP_BUILD_DIR'" EXIT
 
     info "Cloning repository..."
-    
-    # Determine git clone command with optional version/tag
-    GIT_CLONE_CMD="git clone --depth 1"
-    if [ -n "$VERSION" ]; then
-        case "$VERSION" in
-            v*) TAG_TO_USE="$VERSION" ;;
-            *) TAG_TO_USE="v$VERSION" ;;
-        esac
-        GIT_CLONE_CMD="$GIT_CLONE_CMD --branch $TAG_TO_USE"
-    fi
-    GIT_CLONE_CMD="$GIT_CLONE_CMD https://github.com/${REPO}.git $TMP_BUILD_DIR"
 
-    # Show progress for git clone (default when attached to TTY)
-    if ! eval "$GIT_CLONE_CMD"; then
-        error "Failed to clone repository"
+    # Determine git clone args with optional version/tag and run git directly
+    if [ -n "$VERSION" ]; then
+        # Prefer extracting a semver-like token from the provided VERSION so
+        # we don't accidentally treat OS/pretty-name strings as tags. Examples:
+        # "v24.04.1 LTS (Noble Numbat)" -> "v24.04.1"
+        RAW_VERSION="$VERSION"
+        TAG_TO_USE=$(printf "%s" "$RAW_VERSION" | grep -Eo 'v?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
+
+        # If we couldn't find a semver-like token, fall back to first token
+        if [ -z "$TAG_TO_USE" ]; then
+            TAG_TO_USE=$(printf "%s" "$RAW_VERSION" | awk '{print $1}')
+        fi
+
+        # Ensure tag has a leading 'v'
+        case "$TAG_TO_USE" in
+            v*) ;;
+            *) TAG_TO_USE="v$TAG_TO_USE" ;;
+        esac
+
+        # Try cloning the specific tag/branch first. If that fails, clone the
+        # repository and attempt to checkout the tag explicitly (handles cases
+        # where the tag exists but --branch with whitespace/remote-ref fails).
+        if git clone --depth 1 --branch "$TAG_TO_USE" --single-branch "https://github.com/${REPO}.git" "$TMP_BUILD_DIR" 2>/dev/null; then
+            : # success
+        else
+            warn "Could not clone branch/tag '$TAG_TO_USE' directly; attempting clone+checkout..."
+            if ! git clone --depth 1 "https://github.com/${REPO}.git" "$TMP_BUILD_DIR"; then
+                error "Failed to clone repository"
+            fi
+            # Attempt to checkout the tag (fetch tags if necessary)
+            (cd "$TMP_BUILD_DIR" && 
+                if git rev-parse --verify "refs/tags/$TAG_TO_USE" >/dev/null 2>&1; then
+                    git checkout "refs/tags/$TAG_TO_USE" || exit 1
+                else
+                    git fetch --tags origin || exit 1
+                    git checkout "refs/tags/$TAG_TO_USE" || exit 1
+                fi
+            ) || error "Failed to checkout tag: $TAG_TO_USE"
+        fi
+    else
+        if ! git clone --depth 1 "https://github.com/${REPO}.git" "$TMP_BUILD_DIR"; then
+            error "Failed to clone repository"
+        fi
     fi
 
     cd "$TMP_BUILD_DIR" || error "Failed to enter build directory"
@@ -1509,25 +1532,19 @@ main() {
         # Always download manifest and select the minimal matching archive
         MANIFEST_JSON=$(get_release_manifest "$VERSION_WITH_V")
         if [ -z "$MANIFEST_JSON" ]; then
-            warn "Could not download release manifest; falling back to static archive name"
+            #warn "Could not download release manifest; falling back to static archive name"
             if [ -n "$ROS_DISTRO" ]; then
                 ARCHIVE_NAME="minot-${ROS_DISTRO}-${TARGET}"
-                info "Looking for ROS ${CYAN}${ROS_DISTRO}${NC} prebuilt binary..."
             else
                 ARCHIVE_NAME="minot-${TARGET}"
-                info "Looking for prebuilt binary..."
             fi
         else
-            info "Selecting minimal archive from manifest for target ${CYAN}${TARGET}${NC}..."
             SELECTED=$(select_best_archive "$MANIFEST_JSON" "$TARGET" "$REQUESTED_FEATURES" "$ROS_DISTRO") || true
             if [ -n "$SELECTED" ]; then
                 ARCHIVE_NAME="$SELECTED"
-                success "Selected archive: ${CYAN}${ARCHIVE_NAME}${NC}"
+                #success "Selected archive: ${CYAN}${ARCHIVE_NAME}${NC}"
             else
-                warn "No archive satisfies requested features for ${TARGET} (and ROS: ${ROS_DISTRO:-none})."
-                if [ -n "$ROS_DISTRO" ]; then
-                    info "Will build from source due to ROS/feature constraints."
-                fi
+                info "Falling back to building from source; no suitable prebuilt binary found."
                 FORCE_BUILD=1
             fi
         fi
@@ -1554,7 +1571,15 @@ main() {
         if [ $FORCE_BUILD -eq 0 ] && check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION_WITH_V"; then
             success "Found prebuilt binary!"
             printf "\n"
-            if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$VERSION_WITH_V" "$REQUESTED_FEATURES"; then
+            # Determine if this archive requires a separate base archive (for ROS overlays)
+            BASE_ARCH_NAME=""
+            if [ -n "$MANIFEST_JSON" ]; then
+                BASE_ARCH_NAME=$(get_manifest_base_target "$MANIFEST_JSON" "$ARCHIVE_NAME" || true)
+            fi
+
+            # Call download_and_install with the correct argument order:
+            # download_and_install TARGET PRIMARY_ARCH_NAME BASE_ARCH_NAME VERSION REQUESTED_FEATURES
+            if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$BASE_ARCH_NAME" "$VERSION_WITH_V" "$REQUESTED_FEATURES"; then
                 warn "Installing prebuilt binary failed — will fall back to building from source"
                 FORCE_BUILD=1
             fi
@@ -1589,13 +1614,6 @@ main() {
     # Build from source if necessary
     if [ $FORCE_BUILD -eq 1 ]; then
         printf "\n"
-        
-        if [ -n "$VERSION" ]; then
-            info "Building from source, targeting version: ${CYAN}$VERSION${NC}"
-        else
-            info "Building from source (latest)"
-        fi
-        
         build_from_source
     fi
     
