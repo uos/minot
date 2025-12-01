@@ -147,7 +147,7 @@ pub async fn run_dyn_wind(
     let mut imu_publishers = HashMap::new();
 
     let mut wind_receiver = wind(&wind_name).await?;
-    
+
     if let Err(_) = ready.send(()) {
         log::warn!("ros1 wind could not signal to be ready to handle requests");
     }

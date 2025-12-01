@@ -75,11 +75,8 @@ pub struct Client {
     connected: tokio::sync::mpsc::Receiver<bool>,
     rm_rules_on_disconnect: bool,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
-    pub raw_recv_buff: std::sync::Arc<
-        std::sync::RwLock<
-            HashMap<u32, tokio::sync::mpsc::Receiver<(Vec<u8>, VariableType, String)>>,
-        >,
-    >,
+    pub raw_recv_buff:
+        std::sync::Arc<std::sync::RwLock<HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>>>,
     pools: std::sync::Arc<tokio::sync::Mutex<HashMap<String, TcpPool>>>,
 }
 
@@ -100,7 +97,8 @@ impl Client {
                 if e.kind() == std::io::ErrorKind::AddrInUse {
                     if let Some(_) = port {
                         error!(
-                            "Another Minot coordinator instance is likely running. Terminate the other instance before starting a new one.");
+                            "Another Minot coordinator instance is likely running. Terminate the other instance before starting a new one."
+                        );
                     } else {
                         error!(
                             "Dynamic UDP port already in use ({}). Terminate the other instance if it is still running.",
@@ -131,7 +129,7 @@ impl Client {
         }
         let manager = TcpManager { addr: addr.clone() };
         let pool = deadpool::managed::Pool::builder(manager)
-            .max_size(8)
+            .max_size(1)
             .build()
             .unwrap();
         pools.insert(addr.clone(), pool.clone());
@@ -684,9 +682,7 @@ impl Client {
         tcp_port: tokio::net::TcpListener,
         updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
         raw_recv_buff: std::sync::Arc<
-            std::sync::RwLock<
-                HashMap<u32, tokio::sync::mpsc::Receiver<(Vec<u8>, VariableType, String)>>,
-            >,
+            std::sync::RwLock<HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>>,
         >,
     ) -> ! {
         const HEADER_SIZE: usize = 1 + 4 + 1 + 4 + 64; // PROTO(1) + SIZE(4) + TYPE(1) + ID(4) + NAME(64)
@@ -754,19 +750,11 @@ impl Client {
                         break;
                     }
 
-                    let (tx, rx) = tokio::sync::mpsc::channel(1);
-
                     let response_data = (payload_buf, variable_type, var_name);
-                    if tx.send(response_data).await.is_err() {
-                        error!(
-                            "IMPOSSIBLE: Failed to send to a newly created channel for id {}.",
-                            msg_id
-                        );
-                        continue;
-                    }
 
                     {
-                        task_recv_buff.write().unwrap().insert(msg_id, rx);
+                        let mut lock = task_recv_buff.write().unwrap();
+                        lock.entry(msg_id).or_default().push(response_data);
                     }
 
                     if task_update_chan.send(msg_id).is_err() {

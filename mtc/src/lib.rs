@@ -2091,13 +2091,13 @@ where
                     include.clone(),
                     loop_stmt_rec,
                 ))
-                    .then_ignore(just(Token::NewLine).repeated())
-                    .repeated()
-                    .collect::<Vec<_>>()
-                    .delimited_by(
-                        just(Token::BlockStart).then_ignore(just(Token::NewLine).repeated()),
-                        just(Token::BlockEnd).then_ignore(just(Token::NewLine).repeated()),
-                    ),
+                .then_ignore(just(Token::NewLine).repeated())
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(
+                    just(Token::BlockStart).then_ignore(just(Token::NewLine).repeated()),
+                    just(Token::BlockEnd).then_ignore(just(Token::NewLine).repeated()),
+                ),
             )
             .map(
                 |(count, stmts): (usize, Vec<StatementKindPass1>)| StatementKindPass1::Loop {

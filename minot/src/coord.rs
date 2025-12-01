@@ -27,9 +27,7 @@ pub fn topic_from_eval_or_default(
     if let Some(topic) = topic {
         match topic {
             mtc::Rhs::Path(topic) | mtc::Rhs::Val(mtc::Val::StringVal(topic)) => Ok(topic),
-            _ => {
-                Err(anyhow!("Expected String or Path for sending lidar topic"))
-            }
+            _ => Err(anyhow!("Expected String or Path for sending lidar topic")),
         }
     } else {
         Ok(default.to_owned())
@@ -166,7 +164,8 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                 let rat_rules = std::sync::Arc::clone(&rules);
                                 let rat_coord_tx = coord_tx_new_client.clone();
                                 let winds_inner = std::sync::Arc::clone(&winds_changer);
-                                let rules_change_for_disconnect_inner = std::sync::Arc::clone(&rules_change_for_disconnect);
+                                let rules_change_for_disconnect_inner =
+                                    std::sync::Arc::clone(&rules_change_for_disconnect);
                                 // spawn task to handle variable requests for this rat
                                 tokio::spawn(async move {
                                     let minot_compare_name = COMPARE_NODE_NAME.to_string();
@@ -289,23 +288,25 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                             PacketKind::VariableTaskRequest(
                                                                 variable,
                                                             ) => {
-                                                                    let (minot_actions, mut my_actions) = {
-                                                                        let rat_rules_ref =
-                                                                            rat_rules.read().unwrap();
+                                                                let (minot_actions, mut my_actions) = {
+                                                                    let rat_rules_ref =
+                                                                        rat_rules.read().unwrap();
 
-                                                                            (sea::get_strategies(
-                                                                                &rat_rules_ref,
-                                                                                &minot_compare_name,
-                                                                                variable.clone(),
-                                                                                Some(&inner_name),
-                                                                            ), sea::get_strategies(
-                                                                                &rat_rules_ref,
-                                                                                &inner_name,
-                                                                                variable.clone(),
-                                                                                None,
-                                                                            ))
-                                                                        
-                                                                    };
+                                                                    (
+                                                                        sea::get_strategies(
+                                                                            &rat_rules_ref,
+                                                                            &minot_compare_name,
+                                                                            variable.clone(),
+                                                                            Some(&inner_name),
+                                                                        ),
+                                                                        sea::get_strategies(
+                                                                            &rat_rules_ref,
+                                                                            &inner_name,
+                                                                            variable.clone(),
+                                                                            None,
+                                                                        ),
+                                                                    )
+                                                                };
                                                                 for action in minot_actions {
                                                                     if !matches!(
                                                                         action,
@@ -322,13 +323,15 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     }
                                                                 }
 
-
                                                                 if my_actions.is_empty() {
                                                                     my_actions
                                                                         .push(ActionPlan::Sail);
                                                                 }
 
-                                                                debug!("sending actions: {:?}", my_actions);
+                                                                debug!(
+                                                                    "sending actions: {:?}",
+                                                                    my_actions
+                                                                );
 
                                                                 // answer the client that asked
                                                                 for action in my_actions {
@@ -343,7 +346,10 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     winds_inner.write().unwrap();
 
                                                                 let mut asked_for_dynamic = false;
-                                                                if let Some(wt) = winds.get_mut(&variable) { wt.iter_mut().for_each(|wte| {
+                                                                if let Some(wt) =
+                                                                    winds.get_mut(&variable)
+                                                                {
+                                                                    wt.iter_mut().for_each(|wte| {
                                                                         // TODO we saved many reguests here for the same var but only one will come through "already seen"
                                                                         if !wte.already_seen {
                                                                             match &mut wte.kind {
@@ -376,11 +382,11 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                             };
                                                                             wte.already_seen = true;
                                                                         }
-                                                                    }); }
+                                                                    });
+                                                                }
 
                                                                 // set all other to be sent again
-                                                                for (var, wind) in
-                                                                    winds.iter_mut()
+                                                                for (var, wind) in winds.iter_mut()
                                                                 {
                                                                     if var == &variable {
                                                                         continue;
@@ -412,7 +418,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     let mut current_rules = rules_change_for_disconnect_inner.write().unwrap();
                                                                     current_rules.remove_client(&inner_name);
                                                                 }
-                                                            }, 
+                                                            }
                                                             _ => {
                                                                 error!(
                                                                     "Could not receive packet from client {inner_name}: {e}"
@@ -538,11 +544,9 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                         for (c, _) in clients.iter() {
                             if let Err(e) = coordinator
                                 .rat_send(c.clone(), PacketKind::Acknowledge)
-                                .await {
-                                error!(
-                                    "Error while sending ack for unlocking to Rat {}: {}",
-                                    c, e
-                                );
+                                .await
+                            {
+                                error!("Error while sending ack for unlocking to Rat {}: {}", c, e);
                                 std::process::exit(1);
                             }
                         }
@@ -555,7 +559,8 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                     for (c, _) in clients.iter() {
                         if let Err(e) = coordinator
                             .rat_send(c.clone(), PacketKind::Acknowledge)
-                            .await {
+                            .await
+                        {
                             error!("Error while sending ack for unlocking to Rat {}: {}", c, e);
                             std::process::exit(1);
                         }
@@ -582,12 +587,17 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                 ActionPlan::Sail => data.clone(),
                                 ActionPlan::Shoot { target, id } => {
                                     let ntargets = target
-                                        .iter().filter(|&t| t != COMPARE_NODE_NAME).cloned()
+                                        .iter()
+                                        .filter(|&t| t != COMPARE_NODE_NAME)
+                                        .cloned()
                                         .collect::<Vec<_>>();
                                     if ntargets.is_empty() {
                                         ActionPlan::Sail
                                     } else {
-                                        ActionPlan::Shoot { target: ntargets, id: *id,}
+                                        ActionPlan::Shoot {
+                                            target: ntargets,
+                                            id: *id,
+                                        }
                                     }
                                 }
                                 ActionPlan::Catch { source, id: _ } => {
@@ -605,7 +615,8 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
 
                     if let Err(e) = coordinator
                         .rat_action_send(ship_name.clone(), data, lock_next)
-                        .await {
+                        .await
+                    {
                         error!("Error while sending action to Rat {}: {}", ship_name, e);
                         std::process::exit(1);
                     }
@@ -658,8 +669,9 @@ pub fn get_clients(eval: &mtc::Evaluated) -> anyhow::Result<HashSet<String>> {
     let winds = if let Some(winds) = winds {
         match winds {
             mtc::Rhs::Array(items)
-                if items.iter().all(|item| matches!(**item, mtc::Rhs::Val(mtc::Val::StringVal(_))))
-                 => 
+                if items
+                    .iter()
+                    .all(|item| matches!(**item, mtc::Rhs::Val(mtc::Val::StringVal(_)))) =>
             {
                 items
                     .into_iter()

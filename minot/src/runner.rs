@@ -119,7 +119,9 @@ pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<
         let mut user_input = String::new();
         let stdin = tokio::io::stdin();
         let mut stdin_reader = BufReader::new(stdin);
-        stdin_reader.read_line(&mut user_input).await
+        stdin_reader
+            .read_line(&mut user_input)
+            .await
             .map_err(|e| format!("Failed to read from stdin: {}", e))?;
         eprintln!("Received input, proceeding with execution");
     }

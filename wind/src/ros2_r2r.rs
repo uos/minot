@@ -158,7 +158,7 @@ pub async fn run_dyn_wind(
     let mut publishers: HashMap<String, r2r::PublisherUntyped> = HashMap::new();
 
     let mut wind_receiver = wind(wind_name).await?;
-    
+
     if let Err(_) = ready.send(()) {
         log::warn!("ros2_r2r wind could not signal to be ready to handle requests");
     }

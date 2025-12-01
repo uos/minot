@@ -89,8 +89,6 @@ impl EventHandler {
         self.receiver
             .recv()
             .await
-            .ok_or(Box::new(std::io::Error::other(
-                "This is an IO error",
-            )))
+            .ok_or(Box::new(std::io::Error::other("This is an IO error")))
     }
 }

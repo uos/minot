@@ -6,6 +6,7 @@ pub mod net;
 pub mod ship;
 
 pub use bagread::SensorTypeMapped;
+use mtc::{ActionPlan, VariableHuman};
 use rkyv::{
     Archive, Deserialize, Serialize,
     api::high::{HighSerializer, HighValidator},
@@ -15,7 +16,6 @@ use rkyv::{
     ser::allocator::ArenaHandle,
     util::AlignedVec,
 };
-use mtc::{ActionPlan, VariableHuman};
 
 #[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize, Hash, Eq, PartialOrd, Ord)]
 pub enum ShipKind {

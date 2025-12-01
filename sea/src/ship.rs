@@ -76,36 +76,31 @@ impl crate::Cannon for NetworkShipImpl {
 
         let mut out_buf = Vec::new();
         match update_id {
-            Some(mut en) => {
+            Some(data_vec) => {
                 // missed update call, the data is already waiting for us. gather all.
-                loop {
-                    if let Some((raw, _, _)) = en.recv().await {
-                        let mat = from_bytes::<T, rkyv::rancor::Error>(&raw)
-                            .expect("Could not decode data to T");
-                        out_buf.push(mat);
-                        if en.is_empty() {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
+                for (raw, _, _) in data_vec {
+                    let mat = from_bytes::<T, rkyv::rancor::Error>(&raw)
+                        .expect("Could not decode data to T");
+                    out_buf.push(mat);
                 }
             }
             None => loop {
                 // wait for update call for our id
                 if let Ok(update_id) = update_chan.recv().await {
                     if update_id == id {
-                        let mut recv = {
+                        let data_vec = {
                             let mut buf_lock = buf.write().unwrap();
-                            buf_lock.remove(&id).unwrap()
+                            match buf_lock.remove(&id) {
+                                Some(v) => v,
+                                None => continue,
+                            }
                         };
-                        let (nb, _, _) = recv.recv().await.unwrap();
-                        let mat = from_bytes::<T, rkyv::rancor::Error>(&nb)
-                            .expect("Could not decode data to T");
-                        out_buf.push(mat);
-                        if recv.is_empty() {
-                            break;
+                        for (raw, _, _) in data_vec {
+                            let mat = from_bytes::<T, rkyv::rancor::Error>(&raw)
+                                .expect("Could not decode data to T");
+                            out_buf.push(mat);
                         }
+                        break;
                     }
                 }
             },
@@ -158,29 +153,27 @@ impl crate::Cannon for NetworkShipImpl {
 
         let mut out_buf = Vec::new();
         match update_id {
-            Some(mut en) => {
+            Some(data_vec) => {
                 // missed update call, the data is already waiting for us. gather all.
-                loop {
-                    let (raw, var_type, var_name) = en.recv().await.unwrap();
+                for (raw, var_type, var_name) in data_vec {
                     out_buf.push((to_dyn_str(var_type, raw)?, var_type, var_name));
-                    if en.is_empty() {
-                        break;
-                    }
                 }
             }
             None => loop {
                 // wait for update call for our id
                 if let Ok(update_id) = update_chan.recv().await {
                     if update_id == id {
-                        let mut recv = {
+                        let data_vec = {
                             let mut buf_lock = buf.write().unwrap();
-                            buf_lock.remove(&id).unwrap()
+                            match buf_lock.remove(&id) {
+                                Some(v) => v,
+                                None => continue,
+                            }
                         };
-                        let (raw, var_type, var_name) = recv.recv().await.unwrap();
-                        out_buf.push((to_dyn_str(var_type, raw)?, var_type, var_name));
-                        if recv.is_empty() {
-                            break;
+                        for (raw, var_type, var_name) in data_vec {
+                            out_buf.push((to_dyn_str(var_type, raw)?, var_type, var_name));
                         }
+                        break;
                     }
                 }
             },
