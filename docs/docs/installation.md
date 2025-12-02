@@ -190,7 +190,7 @@ And link with `-lrat`.
 For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-rat = { version = "0.1.0", git = "https://github.com/uos/minot" }
+rat = { version = "0.1.1", git = "https://github.com/uos/minot" }
 ~~~
 
 ## Ratpub (Native Publish/Subscribe)
@@ -199,7 +199,7 @@ Ratpub is only available for Rust. It uses Tokio for async I/O.
 For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-ratpub = { version = "0.1.0", git = "https://github.com/uos/minot" }
+ratpub = { version = "0.1.1", git = "https://github.com/uos/minot" }
 tokio = { version = "1", features = ["full"] }
 ~~~
 
