@@ -1,7 +1,9 @@
+#![allow(clippy::multiple_crate_versions)] // nalgebra 0.34 uses many glam versions, fix needs https://github.com/rust-lang/cargo/issues/10801
+
 use clap::{Parser, Subcommand, command};
 mod runner;
 use log::{error, info, warn};
-use mtc::COMPARE_NODE_NAME;
+use net::COMPARE_NODE_NAME;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 use serde::{Deserialize, Serialize};

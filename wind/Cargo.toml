@@ -15,8 +15,8 @@ log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
 rkyv.workspace = true
-bincode.workspace = true
 mtc.workspace = true
+net.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 async-trait.workspace = true
@@ -24,17 +24,16 @@ async-trait.workspace = true
 roslibrust = { workspace = true, optional = true }
 r2r = { workspace = true, optional = true }
 ros2-client = { workspace = true, optional = true }
-ros2-interfaces-jazzy = { workspace = true, optional = true }
+ros2-interfaces-jazzy-serde = { workspace = true, optional = true }
 ros2-interfaces-jazzy-rkyv.workspace = true
 cdr-encoding = { version = "0.10" }
-byteorder = { version = "1.3", features = ["i128"] }
 ratpub = { workspace = true, optional = true }
 
 [features]
 default = ["ratpub"]
 humble = ["bagread/humble"]
-ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy"]
-ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy"]
+ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy-serde"]
+ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]
 ros1-native = ["dep:roslibrust"]
 ratpub = ["dep:ratpub"]
 

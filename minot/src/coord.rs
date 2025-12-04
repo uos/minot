@@ -7,7 +7,8 @@ use log::{debug, error, info, warn};
 use sea::net::Packet;
 use sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
-use mtc::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHistory};
+use mtc::VariableHistory;
+use net::{ActionPlan, COMPARE_NODE_NAME, RatPubRegisterKind, Rules, VariableHuman};
 use sea::{Coordinator, WindData};
 
 #[derive(Parser, Debug)]
@@ -38,7 +39,7 @@ pub fn topic_from_eval_or_default(
 enum MinotTask {
     AppendRule {
         variable: String,
-        commands: Vec<mtc::VariableHuman>,
+        commands: Vec<VariableHuman>,
     },
     LockNext {
         unlock_first: bool,
@@ -628,11 +629,9 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                         var,
                         ship,
                         match kind {
-                            sea::net::RatPubRegisterKind::Publish => {
-                                mtc::RatPubRegisterKind::Publish
-                            }
+                            sea::net::RatPubRegisterKind::Publish => RatPubRegisterKind::Publish,
                             sea::net::RatPubRegisterKind::Subscribe => {
-                                mtc::RatPubRegisterKind::Subscribe
+                                RatPubRegisterKind::Subscribe
                             }
                         },
                     );

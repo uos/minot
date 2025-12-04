@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
 use log::{debug, error};
+use net::{ActionPlan, COMPARE_NODE_NAME};
 
 use crate::{
     NetworkShipAddress, ShipName,
@@ -68,7 +69,7 @@ impl crate::Coordinator for CoordinatorImpl {
     async fn rat_action_send(
         &self,
         ship: String,
-        action: mtc::ActionPlan,
+        action: ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()> {
         let client_info = {
@@ -126,7 +127,7 @@ impl CoordinatorImpl {
             let rat = rats.read().await;
             for client in clients.iter() {
                 // ignore compare node for needed clients
-                if client != mtc::COMPARE_NODE_NAME && rat.get(client).is_none() {
+                if client != COMPARE_NODE_NAME && rat.get(client).is_none() {
                     all_there = false;
                     break;
                 }
@@ -140,13 +141,10 @@ impl CoordinatorImpl {
         }
     }
 
-    async fn convert_action(
-        &self,
-        human_action: &mtc::ActionPlan,
-    ) -> anyhow::Result<crate::Action> {
+    async fn convert_action(&self, human_action: &ActionPlan) -> anyhow::Result<crate::Action> {
         let action = match human_action {
-            mtc::ActionPlan::Sail => crate::Action::Sail,
-            mtc::ActionPlan::Shoot { target, id } => {
+            ActionPlan::Sail => crate::Action::Sail,
+            ActionPlan::Shoot { target, id } => {
                 let mut targets = Vec::with_capacity(target.len());
                 for client_name in target.iter() {
                     let rat = self.rat_qs.read().await;

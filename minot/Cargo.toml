@@ -16,9 +16,9 @@ nalgebra.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+net.workspace = true
 mtc.workspace = true
 bagread.workspace = true
-bincode.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 crossterm = { version = "0.28.1", features = ["event-stream"] }

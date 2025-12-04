@@ -1,5 +1,4 @@
 use std::io::{Read, Seek};
-use std::str::FromStr;
 use std::time::SystemTime;
 use std::{fs, path::Path};
 
@@ -12,20 +11,15 @@ use mtc::{
     AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
     SensorIdentification, SensorType,
 };
-use qos::{
-    RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
-};
-use rkyv::Archive;
+use net::{BagMsg, Qos, QosProfile, SensorTypeMapped};
 pub use ros_pointcloud2::PointCloud2Msg;
-use ros2_client::ros2::policy::{Durability, History, Reliability};
-use ros2_client::ros2::{self, Duration};
 use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
 
 pub mod qos;
-pub use Qos::*;
+pub use net::Qos::*;
 
 #[derive(Clone, Debug, Default, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TimeMsg {
@@ -100,29 +94,6 @@ pub struct TopicMetadata {
     // Use custom deserialization for the nested YAML string
     #[serde(deserialize_with = "deserialize_qos_profiles")]
     pub offered_qos_profiles: Vec<QosProfile>,
-}
-
-// --- QoS Profile Structs (New) ---
-
-#[derive(Archive, Deserialize, Debug, Serialize, Clone, rkyv::Deserialize, rkyv::Serialize)]
-pub struct QosProfile {
-    pub history: String,
-    pub depth: i32,
-    pub reliability: String,
-    pub durability: String,
-    pub deadline: QosTime,
-    pub lifespan: QosTime,
-    pub liveliness: String,
-    pub liveliness_lease_duration: QosTime,
-    pub avoid_ros_namespace_conventions: bool,
-}
-
-#[derive(
-    Deserialize, Serialize, rkyv::Serialize, rkyv::Deserialize, Archive, Debug, Clone, Copy,
-)] // Added Clone, Copy
-pub struct QosTime {
-    pub sec: u64,
-    pub nsec: u64,
 }
 
 // --- File Information Structs ---
@@ -220,21 +191,6 @@ impl fmt::Debug for Bagfile {
             // omitting "file",
             .finish()
     }
-}
-
-#[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
-pub struct BagMsg {
-    pub topic: String,
-    pub msg_type: String,
-    pub data: SensorTypeMapped,
-    pub qos: Option<Qos>,
-}
-
-#[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
-pub enum SensorTypeMapped {
-    Lidar(PointCloud2),
-    Imu(Imu),
-    Any(Vec<u8>),
 }
 
 #[derive(Clone, Debug)]
@@ -439,7 +395,7 @@ where
                 if pass {
                     let data = match send_type {
                         SensorType::Lidar => {
-                            let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
+                            let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2 =
                                 cdr::deserialize(data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
@@ -447,7 +403,7 @@ where
                             SensorTypeMapped::Lidar(data)
                         }
                         SensorType::Imu => {
-                            let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
+                            let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::Imu =
                                 cdr::deserialize(data)
                                     .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                             let data: Imu = unsafe { std::mem::transmute(dec) };
@@ -456,7 +412,7 @@ where
                         }
                         SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
-                                let dec: ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2 =
+                                let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2 =
                                     cdr::deserialize(data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
@@ -464,7 +420,7 @@ where
                                 SensorTypeMapped::Lidar(data)
                             }
                             IMU_ROS2_TYPE => {
-                                let dec: ros2_interfaces_jazzy::sensor_msgs::msg::Imu =
+                                let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::Imu =
                                     cdr::deserialize(data)
                                         .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: Imu = unsafe { std::mem::transmute(dec) };
@@ -515,146 +471,6 @@ where
         messages: msgs,
         end_of_bag: reached_end_naturally,
     })
-}
-
-#[derive(Clone, Debug, Default, Archive, rkyv::Serialize, rkyv::Deserialize)]
-pub enum Qos {
-    Sensor,
-    #[default]
-    SystemDefault,
-    Custom(QosProfile),
-}
-
-impl TryFrom<String> for Qos {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "sensor" => Ok(Qos::Sensor),
-            "system_default" => Ok(Qos::SystemDefault),
-            _ => Err(anyhow!("Invalid QoS value")),
-        }
-    }
-}
-
-impl TryFrom<crate::Qos> for ros2::QosPolicies {
-    type Error = anyhow::Error;
-    fn try_from(value: crate::Qos) -> Result<Self, Self::Error> {
-        Ok(match value {
-            Qos::Sensor => ros2::QosPolicyBuilder::new()
-                .durability(ros2::policy::Durability::Volatile)
-                .deadline(ros2::policy::Deadline(ros2::Duration::INFINITE))
-                .ownership(ros2::policy::Ownership::Shared)
-                .reliability(ros2::policy::Reliability::BestEffort)
-                .history(ros2::policy::History::KeepLast { depth: 5 })
-                .lifespan(ros2::policy::Lifespan {
-                    duration: ros2::Duration::INFINITE,
-                })
-                .build(),
-            Qos::SystemDefault => ros2::QosPolicyBuilder::new()
-                .durability(ros2::policy::Durability::Volatile)
-                .deadline(ros2::policy::Deadline(ros2::Duration::INFINITE))
-                .ownership(ros2::policy::Ownership::Shared)
-                .reliability(ros2::policy::Reliability::Reliable {
-                    max_blocking_time: ros2::Duration::from_millis(100),
-                })
-                .history(ros2::policy::History::KeepLast { depth: 1 })
-                .lifespan(ros2::policy::Lifespan {
-                    duration: ros2::Duration::INFINITE,
-                })
-                .build(),
-            Qos::Custom(q) => {
-                let deadline_dur = std::time::Duration::from_secs(q.deadline.sec)
-                    + std::time::Duration::from_nanos(q.deadline.nsec);
-                let deadline = ros2::policy::Deadline(Duration::from_std(deadline_dur));
-                let lifespan_dur = std::time::Duration::from_secs(q.lifespan.sec)
-                    + std::time::Duration::from_nanos(q.lifespan.nsec);
-                let lifespan = ros2::policy::Lifespan {
-                    duration: Duration::from_std(lifespan_dur),
-                };
-
-                let reliability = match RmwQosReliabilityPolicy::from_str(&q.reliability)? {
-                    RmwQosReliabilityPolicy::SystemDefault => Reliability::Reliable {
-                        max_blocking_time: Duration::INFINITE,
-                    },
-                    RmwQosReliabilityPolicy::Reliable => Reliability::Reliable {
-                        max_blocking_time: Duration::INFINITE,
-                    },
-                    RmwQosReliabilityPolicy::BestEffort => Reliability::BestEffort,
-                    RmwQosReliabilityPolicy::Unknown => {
-                        return Err(anyhow!("Unknown reliability"));
-                    }
-                    #[cfg(not(feature = "humble"))]
-                    RmwQosReliabilityPolicy::BestAvailable => {
-                        return Err(anyhow!("Unsupported QoS: Reliability::BestAvailable."));
-                    }
-                };
-
-                let durability = match RmwQosDurabilityPolicy::from_str(&q.durability)? {
-                    RmwQosDurabilityPolicy::SystemDefault => Durability::TransientLocal,
-                    RmwQosDurabilityPolicy::TransientLocal => Durability::TransientLocal,
-                    RmwQosDurabilityPolicy::Volatile => Durability::Volatile,
-                    RmwQosDurabilityPolicy::Unknown => {
-                        return Err(anyhow!("Durability set to unknown."));
-                    }
-                    #[cfg(not(feature = "humble"))]
-                    RmwQosDurabilityPolicy::BestAvailable => {
-                        return Err(anyhow!("Unsupported QoS: Durability::BestAvailable."));
-                    }
-                };
-
-                let history = match RmwQosHistoryPolicy::from_str(&q.history)? {
-                    RmwQosHistoryPolicy::SystemDefault => History::KeepLast { depth: q.depth },
-                    RmwQosHistoryPolicy::KeepLast => History::KeepLast { depth: q.depth },
-                    RmwQosHistoryPolicy::KeepAll => History::KeepAll,
-                    RmwQosHistoryPolicy::Unknown => {
-                        return Err(anyhow!("History set to unknown."));
-                    }
-                };
-
-                let liveliness_dur =
-                    std::time::Duration::from_secs(q.liveliness_lease_duration.sec)
-                        + std::time::Duration::from_nanos(q.liveliness_lease_duration.nsec);
-                let liveliness_dur = ros2::Duration::from_std(liveliness_dur);
-                let liveliness = match RmwQosLivelinessPolicy::from_str(&q.liveliness)? {
-                    RmwQosLivelinessPolicy::SystemDefault => {
-                        ros2::policy::Liveliness::ManualByParticipant {
-                            lease_duration: liveliness_dur,
-                        }
-                    }
-                    RmwQosLivelinessPolicy::Automatic => ros2::policy::Liveliness::Automatic {
-                        lease_duration: liveliness_dur,
-                    },
-                    RmwQosLivelinessPolicy::ManualByNode => {
-                        ros2::policy::Liveliness::ManualByTopic {
-                            lease_duration: liveliness_dur,
-                        }
-                    }
-                    RmwQosLivelinessPolicy::ManualByTopic => {
-                        ros2::policy::Liveliness::ManualByTopic {
-                            lease_duration: liveliness_dur,
-                        }
-                    }
-                    RmwQosLivelinessPolicy::Unknown => {
-                        return Err(anyhow!("Liveliness set to unknown."));
-                    }
-                    #[cfg(not(feature = "humble"))]
-                    RmwQosLivelinessPolicy::BestAvailable => {
-                        return Err(anyhow!("Unsupported QoS: Liveliness::BestAvailable."));
-                    }
-                };
-                ros2::QosPolicyBuilder::new()
-                    .durability(durability)
-                    .deadline(deadline)
-                    .history(history)
-                    .lifespan(lifespan)
-                    .reliability(reliability)
-                    .ownership(ros2::policy::Ownership::Shared)
-                    .liveliness(liveliness)
-                    .build()
-            }
-        })
-    }
 }
 
 impl Bagfile {

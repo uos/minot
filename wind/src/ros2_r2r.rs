@@ -16,7 +16,7 @@ use r2r::{
 
 use anyhow::{Context, anyhow};
 use log::{debug, error, info, warn};
-use sea::{SensorTypeMapped, Ship, ShipKind};
+use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use r2r::sensor_msgs::msg::{Imu, PointCloud2};
@@ -187,7 +187,7 @@ pub async fn run_dyn_wind(
             }
             let pubber = existing_pubber.expect("Should be inserted manually if not exists.");
             match data.data {
-                SensorTypeMapped::Lidar(l) => {
+                net::SensorTypeMapped::Lidar(l) => {
                     let native_t = PointCloud2 {
                         header: Header {
                             stamp: Time {
@@ -222,7 +222,7 @@ pub async fn run_dyn_wind(
 
                     debug!("published cloud");
                 }
-                SensorTypeMapped::Imu(imu) => {
+                net::SensorTypeMapped::Imu(imu) => {
                     let native_t = Imu {
                         header: Header {
                             stamp: Time {
@@ -258,7 +258,7 @@ pub async fn run_dyn_wind(
                     pubber.publish_raw(&raw)?;
                     debug!("published imu");
                 }
-                SensorTypeMapped::Any(raw_data) => {
+                net::SensorTypeMapped::Any(raw_data) => {
                     pubber.publish_raw(&raw_data)?;
                     debug!("published raw");
                 }

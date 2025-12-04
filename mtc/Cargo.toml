@@ -10,8 +10,8 @@ include.workspace = true
 [dependencies]
 env_logger.workspace = true
 log.workspace = true
-rkyv.workspace = true
 anyhow.workspace = true
+net.workspace = true
 logos = "0.15.0"
 chumsky = "0.10.0"
 ariadne = "0.4"

@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use byteorder::LittleEndian;
 use ros2_client::ros2;
 use ros2_client::{NodeName, NodeOptions};
-use ros2_interfaces_jazzy::sensor_msgs::msg::Imu;
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
@@ -125,7 +123,9 @@ pub async fn run_dyn_wind(
         NodeName::new("/", &node_name)?,
         NodeOptions::new().enable_rosout(true),
     )?;
-    let mut publishers: HashMap<(String, String), ros2_client::PublisherRaw> = HashMap::new();
+
+    let mut cloud_publishers = HashMap::new();
+    let mut imu_publishers = HashMap::new();
 
     let mut wind_receiver = wind(wind_name).await?;
 
@@ -147,56 +147,66 @@ pub async fn run_dyn_wind(
             let wanted_topic = ros2_client::Name::new(&topic_parse.0, &topic_parse.1).unwrap();
             let (package_name, type_name) = split_package_type(&data.msg_type);
             let pub_type = ros2_client::MessageTypeName::new(&package_name, &type_name);
-            let mut existing_pubber = publishers.get(&topic_parse);
-            if existing_pubber.is_none() {
-                let pubber = node
-                    .create_publisher_raw(
-                        &node.create_topic(&wanted_topic, pub_type, &qos).unwrap(),
-                        None,
-                    )
-                    .unwrap();
-                publishers.insert(topic_parse.clone(), pubber);
-                existing_pubber = Some(
-                    publishers
-                        .get(&topic_parse)
-                        .expect("Just inserted the line before"),
-                );
-            }
-            let pubber = existing_pubber.expect("Should be inserted manually if not exists.");
+
             match data.data {
-                SensorTypeMapped::Lidar(l) => {
+                net::SensorTypeMapped::Lidar(cloud_msg) => {
+                    let mut existing_pubber = cloud_publishers.get(&topic_parse);
+                    if existing_pubber.is_none() {
+                        let pubber = node
+                            .create_publisher::<ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2>(
+                                &node.create_topic(&wanted_topic, pub_type, &qos).unwrap(),
+                                None,
+                            )
+                            .unwrap();
+                        cloud_publishers.insert(topic_parse.clone(), pubber);
+                        existing_pubber = Some(
+                            cloud_publishers
+                                .get(&topic_parse)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
                     // reinterpret-cast from rkyv serializable type to serde serial type
-                    let l = unsafe {
+                    let cloud_msg = unsafe {
                         std::mem::transmute::<
                             ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::PointCloud2,
                             _,
-                        >(l)
+                        >(cloud_msg)
                     };
-                    let raw = cdr_encoding::to_vec::<
-                        ros2_interfaces_jazzy::sensor_msgs::msg::PointCloud2,
-                        LittleEndian,
-                    >(&l)
-                    .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
-
-                    pubber.async_publish(raw).await?;
+                    pubber.async_publish(cloud_msg).await?;
 
                     debug!("published cloud");
                 }
-                SensorTypeMapped::Imu(imu) => {
+                net::SensorTypeMapped::Imu(imu) => {
+                    let mut existing_pubber = imu_publishers.get(&topic_parse);
+                    if existing_pubber.is_none() {
+                        let pubber = node
+                            .create_publisher::<ros2_interfaces_jazzy_serde::sensor_msgs::msg::Imu>(
+                                &node.create_topic(&wanted_topic, pub_type, &qos).unwrap(),
+                                None,
+                            )
+                            .unwrap();
+                        imu_publishers.insert(topic_parse.clone(), pubber);
+                        existing_pubber = Some(
+                            imu_publishers
+                                .get(&topic_parse)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
                     let imu = unsafe {
                         std::mem::transmute::<ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::Imu, _>(
                             imu,
                         )
                     };
-                    let raw = cdr_encoding::to_vec::<Imu, LittleEndian>(&imu)
-                        .map_err(|e| anyhow!("Error encoding CDR: {e}"))?;
 
-                    pubber.async_publish(raw).await?;
+                    pubber.async_publish(imu).await?;
                     debug!("published imu");
                 }
-                SensorTypeMapped::Any(raw_data) => {
-                    pubber.async_publish(raw_data).await?;
-                    debug!("published raw");
+                net::SensorTypeMapped::Any(_) => {
+                    error!("Any-Types are not supported for RustDDS due to API incompatibilities.")
                 }
             }
         }

@@ -7,6 +7,7 @@ use std::{
 use anyhow::anyhow;
 use deadpool::managed::{Manager, Object, RecycleError};
 use log::{debug, error, info};
+use net::COMPARE_NODE_NAME;
 use pnet::datalink::{self, NetworkInterface};
 use rkyv::{api::low::from_bytes, to_bytes, util::AlignedVec};
 use tokio::{
@@ -559,7 +560,7 @@ impl Client {
 
         // only make non minot tui nodes wait for the coordinate since they ask for variables
         if match &self.kind {
-            ShipKind::Rat(name) => name != mtc::COMPARE_NODE_NAME,
+            ShipKind::Rat(name) => name != COMPARE_NODE_NAME,
             _ => true,
         } {
             // TODO disconnect not implemented yet, must send to disconnect_tx

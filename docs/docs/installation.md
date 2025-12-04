@@ -206,9 +206,9 @@ tokio = { version = "1", features = ["full"] }
 Since you probably want to use existing ROS2 message definitions, you can also add the following crate which is auto-generated from the Jazzy release. It bundles all usual types and implements the required `rkyv` traits for sending them over the Minot network.
 
 ~~~toml title="Cargo.toml"
-ros2-interfaces-jazzy-rkyv = { version = "0.0.4", features = [
+ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
   "std_msgs", # add more here
-], git = "https://github.com/stelzo/ros2-interfaces-jazzy-rkyv.git" }
+] }
 ~~~
 
 Learn more on how to use it in your Code by visiting the [feature page](./pubsub.md).

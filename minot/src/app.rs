@@ -10,9 +10,8 @@ use std::{
 
 use anyhow::{Error, anyhow};
 use log::{error, info, warn};
-use mtc::{
-    Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, Rules, VariableHistory, WindFunction,
-};
+use mtc::{Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, VariableHistory, WindFunction};
+use net::Rules;
 use once_cell::sync::Lazy;
 use ratatui::{
     layout::Constraint,

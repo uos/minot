@@ -1,5 +1,6 @@
 [package]
 name = "rat"
+description = "Share and sync variables over the network"
 edition.workspace = true
 include.workspace = true
 keywords.workspace = true
@@ -14,7 +15,6 @@ log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
 rkyv.workspace = true
-bincode.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 rand = "0.8"

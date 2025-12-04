@@ -5,8 +5,7 @@ pub mod coordinator;
 pub mod net;
 pub mod ship;
 
-pub use bagread::SensorTypeMapped;
-use mtc::{ActionPlan, VariableHuman};
+use ::net::{ActionPlan, BagMsg, Rules, VariableHuman};
 use rkyv::{
     Archive, Deserialize, Serialize,
     api::high::{HighSerializer, HighValidator},
@@ -54,7 +53,7 @@ pub struct Variable {
 }
 
 pub fn get_strategies(
-    haystack: &mtc::Rules,
+    haystack: &Rules,
     rat_ship: &str,
     variable: String,
     indirect_parent_rat: Option<&str>,
@@ -214,7 +213,7 @@ pub struct Header {
     pub frame_id: String,
 }
 
-pub type WindData = bagread::BagMsg;
+pub type WindData = BagMsg;
 
 #[async_trait::async_trait]
 pub trait Coordinator: Send + Sync + 'static {
@@ -228,7 +227,7 @@ pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_send(
         &self,
         ship: String,
-        action: mtc::ActionPlan,
+        action: ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()>;
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
+use net::SensorTypeMapped;
 use ratpub::Node;
 use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -52,7 +53,7 @@ pub async fn run_dyn_wind(
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             match data.data {
-                sea::SensorTypeMapped::Lidar(cloud_msg) => {
+                SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
                         let pubber = node.create_publisher(data.topic.clone()).await?;
@@ -69,7 +70,7 @@ pub async fn run_dyn_wind(
                     pubber.publish(&cloud_msg).await?;
                     debug!("published cloud");
                 }
-                sea::SensorTypeMapped::Imu(imu_msg) => {
+                SensorTypeMapped::Imu(imu_msg) => {
                     let mut existing_pubber = imu_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
                         let pubber = node.create_publisher(data.topic.clone()).await?;
@@ -86,7 +87,7 @@ pub async fn run_dyn_wind(
                     pubber.publish(&imu_msg).await?;
                     debug!("published imu");
                 }
-                sea::SensorTypeMapped::Any(_) => {
+                SensorTypeMapped::Any(_) => {
                     error!(
                         "Any-Types are not supported for ratpub due to different message encodings."
                     )
