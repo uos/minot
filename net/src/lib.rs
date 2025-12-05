@@ -13,16 +13,132 @@ pub enum Qos {
     Custom(QosProfile),
 }
 
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(untagged)]
+pub enum HistoryValue {
+    Numeric(i32),
+    String(HistoryPolicy),
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryPolicy {
+    KeepLast,
+    KeepAll,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(untagged)]
+pub enum ReliabilityValue {
+    Numeric(i32),
+    String(ReliabilityPolicy),
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ReliabilityPolicy {
+    Reliable,
+    BestEffort,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(untagged)]
+pub enum DurabilityValue {
+    Numeric(i32),
+    String(DurabilityPolicy),
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum DurabilityPolicy {
+    Volatile,
+    TransientLocal,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(untagged)]
+pub enum LivelinessValue {
+    Numeric(i32),
+    String(LivelinessPolicy),
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum LivelinessPolicy {
+    Automatic,
+    ManualByTopic,
+}
+
+fn deserialize_history<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = HistoryValue::deserialize(deserializer)?;
+    Ok(match value {
+        HistoryValue::Numeric(1) => "keep_last".to_string(),
+        HistoryValue::Numeric(2) => "keep_all".to_string(),
+        HistoryValue::Numeric(_) => "keep_last".to_string(), // default
+        HistoryValue::String(HistoryPolicy::KeepLast) => "keep_last".to_string(),
+        HistoryValue::String(HistoryPolicy::KeepAll) => "keep_all".to_string(),
+    })
+}
+
+fn deserialize_reliability<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = ReliabilityValue::deserialize(deserializer)?;
+    Ok(match value {
+        ReliabilityValue::Numeric(1) => "reliable".to_string(),
+        ReliabilityValue::Numeric(2) => "best_effort".to_string(),
+        ReliabilityValue::Numeric(_) => "reliable".to_string(), // default
+        ReliabilityValue::String(ReliabilityPolicy::Reliable) => "reliable".to_string(),
+        ReliabilityValue::String(ReliabilityPolicy::BestEffort) => "best_effort".to_string(),
+    })
+}
+
+fn deserialize_durability<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = DurabilityValue::deserialize(deserializer)?;
+    Ok(match value {
+        DurabilityValue::Numeric(1) => "transient_local".to_string(),
+        DurabilityValue::Numeric(2) => "volatile".to_string(),
+        DurabilityValue::Numeric(_) => "volatile".to_string(), // default
+        DurabilityValue::String(DurabilityPolicy::TransientLocal) => "transient_local".to_string(),
+        DurabilityValue::String(DurabilityPolicy::Volatile) => "volatile".to_string(),
+    })
+}
+
+fn deserialize_liveliness<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = LivelinessValue::deserialize(deserializer)?;
+    Ok(match value {
+        LivelinessValue::Numeric(1) => "automatic".to_string(),
+        LivelinessValue::Numeric(3) => "manual_by_topic".to_string(),
+        LivelinessValue::Numeric(_) => "automatic".to_string(), // default
+        LivelinessValue::String(LivelinessPolicy::Automatic) => "automatic".to_string(),
+        LivelinessValue::String(LivelinessPolicy::ManualByTopic) => "manual_by_topic".to_string(),
+    })
+}
+
 #[derive(
     rkyv::Archive, Deserialize, Debug, Serialize, Clone, rkyv::Deserialize, rkyv::Serialize,
 )]
 pub struct QosProfile {
+    #[serde(deserialize_with = "deserialize_history")]
     pub history: String,
     pub depth: i32,
+    #[serde(deserialize_with = "deserialize_reliability")]
     pub reliability: String,
+    #[serde(deserialize_with = "deserialize_durability")]
     pub durability: String,
     pub deadline: QosTime,
     pub lifespan: QosTime,
+    #[serde(deserialize_with = "deserialize_liveliness")]
     pub liveliness: String,
     pub liveliness_lease_duration: QosTime,
     pub avoid_ros_namespace_conventions: bool,

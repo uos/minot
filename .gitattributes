@@ -3,6 +3,7 @@ rat/examples/* linguist-vendored
 rat/rat.h linguist-vendored
 install.sh linguist-vendored
 docs/* linguist-vendored
+bagread/test/* linguist-vendored
 msg/* linguist-vendored
 vscode/eslint.config.mjs linguist-vendored
 vscode/.vscode-test.mjs linguist-vendored

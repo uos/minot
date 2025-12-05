@@ -49,54 +49,51 @@ impl Metadata {
     }
 }
 
-// --- Top Level Struct ---
-
 #[derive(Deserialize, Debug)]
 pub struct Rosbag2BagfileInformation {
     pub version: i32,
     pub storage_identifier: String,
     pub duration: Nanoseconds,
     pub starting_time: NanosecondsSinceEpoch,
-    pub message_count: i64, // Changed to i64 for potentially large counts
+    pub message_count: i64,
     pub topics_with_message_count: Vec<TopicWithMessageCount>,
     pub compression_format: String,
     pub compression_mode: String,
     pub relative_file_paths: Vec<String>,
     pub files: Vec<File>,
+    #[serde(default)]
+    pub custom_data: Option<serde_yml::Value>,
+    #[serde(default)]
+    pub ros_distro: Option<String>,
 }
 
-// --- Time/Duration Structs ---
-
-#[derive(Deserialize, Debug, Clone, Copy)] // Added Clone, Copy
+#[derive(Deserialize, Debug, Clone, Copy)]
 pub struct Nanoseconds {
     pub nanoseconds: u64,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)] // Added Clone, Copy
+#[derive(Deserialize, Debug, Clone, Copy)]
 pub struct NanosecondsSinceEpoch {
     pub nanoseconds_since_epoch: u64,
 }
 
-// --- Topic Information Structs ---
-
 #[derive(Deserialize, Debug)]
 pub struct TopicWithMessageCount {
     pub topic_metadata: TopicMetadata,
-    pub message_count: i64, // Changed to i64
+    pub message_count: i64,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct TopicMetadata {
     pub name: String,
-    #[serde(rename = "type")] // Use rename instead of r#
+    #[serde(rename = "type")]
     pub topic_type: String,
     pub serialization_format: String,
-    // Use custom deserialization for the nested YAML string
     #[serde(deserialize_with = "deserialize_qos_profiles")]
     pub offered_qos_profiles: Vec<QosProfile>,
+    #[serde(default)]
+    pub type_description_hash: Option<String>,
 }
-
-// --- File Information Structs ---
 
 #[derive(Deserialize, Debug)]
 pub struct File {
@@ -106,8 +103,6 @@ pub struct File {
     pub message_count: i64,
 }
 
-/// Custom deserializer for the `offered_qos_profiles` field.
-/// It expects a string containing YAML, which it then parses using `serde_yaml`.
 fn deserialize_qos_profiles<'de, D>(deserializer: D) -> Result<Vec<QosProfile>, D::Error>
 where
     D: Deserializer<'de>,
@@ -198,27 +193,6 @@ pub struct BagReadResult {
     pub messages: Vec<(u64, BagMsg)>,
     pub end_of_bag: bool,
 }
-
-// pub fn detect_endianness_from_header<R>(mut reader: R) -> anyhow::Result<Endian>
-// where
-//     R: std::io::Read,
-// {
-//     const ENCAPSULATION_HEADER_SIZE: usize = 4;
-//     let mut header_buffer = [0u8; ENCAPSULATION_HEADER_SIZE];
-
-//     match reader.read_exact(&mut header_buffer) {
-//         Ok(_) => match header_buffer.get(1) {
-//             Some(&0) | Some(&2) => Ok(Endian::Big),
-//             Some(&1) | Some(&3) => Ok(Endian::Little),
-//             Some(_) => Err(anyhow!("Invalid Header")),
-//             None => Err(anyhow!("Unexpected eof")),
-//         },
-//         Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-//             Err(anyhow!("Unexpected eof"))
-//         }
-//         Err(e) => Err(e.into()),
-//     }
-// }
 
 fn collect_until<T>(
     reader: &mut IndexedReader,
@@ -587,6 +561,395 @@ mod tests {
     use super::*;
 
     #[test]
+    fn metadata_v5_parsing() {
+        let metadata_contents = std::fs::read_to_string("test/metadata-v5.yml")
+            .expect("Could not read test/metadata-v5.yml");
+        let metadata: Metadata =
+            serde_yml::from_str(&metadata_contents).expect("Failed to parse v5 metadata");
+
+        // Verify basic fields
+        assert_eq!(metadata.rosbag2_bagfile_information.version, 5);
+        assert_eq!(
+            metadata.rosbag2_bagfile_information.storage_identifier,
+            "mcap"
+        );
+        assert_eq!(metadata.rosbag2_bagfile_information.message_count, 65178);
+
+        // Verify topics parsed correctly
+        assert_eq!(
+            metadata
+                .rosbag2_bagfile_information
+                .topics_with_message_count
+                .len(),
+            4
+        );
+
+        // Check IMU topic QoS was parsed and normalized correctly
+        let imu_topic = metadata
+            .get_topic_meta("/imu/data")
+            .expect("IMU topic not found");
+        assert_eq!(imu_topic.name, "/imu/data");
+        assert_eq!(imu_topic.topic_type, "sensor_msgs/msg/Imu");
+        assert!(!imu_topic.offered_qos_profiles.is_empty());
+
+        let qos = &imu_topic.offered_qos_profiles[0];
+        assert_eq!(qos.history, "keep_last"); // 1 -> keep_last
+        assert_eq!(qos.depth, 5);
+        assert_eq!(qos.reliability, "reliable"); // 1 -> reliable
+        assert_eq!(qos.durability, "volatile"); // 2 -> volatile
+        assert_eq!(qos.liveliness, "automatic"); // 1 -> automatic
+
+        // Check PointCloud2 topic
+        let lidar_topic = metadata
+            .get_topic_meta("/velodyne_points")
+            .expect("Lidar topic not found");
+        assert_eq!(lidar_topic.topic_type, "sensor_msgs/msg/PointCloud2");
+
+        // Check tf_static has transient_local durability (1 -> transient_local)
+        let tf_static = metadata
+            .get_topic_meta("/tf_static")
+            .expect("tf_static not found");
+        let tf_qos = &tf_static.offered_qos_profiles[0];
+        assert_eq!(tf_qos.durability, "transient_local"); // 1 -> transient_local
+    }
+
+    #[test]
+    fn metadata_v9_parsing() {
+        let metadata_contents = std::fs::read_to_string("test/metadata-v9.yml")
+            .expect("Could not read test/metadata-v9.yml");
+        let metadata: Metadata =
+            serde_yml::from_str(&metadata_contents).expect("Failed to parse v9 metadata");
+
+        // Verify basic fields
+        assert_eq!(metadata.rosbag2_bagfile_information.version, 9);
+        assert_eq!(
+            metadata.rosbag2_bagfile_information.storage_identifier,
+            "mcap"
+        );
+        assert_eq!(metadata.rosbag2_bagfile_information.message_count, 688909);
+
+        // Verify optional v9 fields
+        assert_eq!(
+            metadata.rosbag2_bagfile_information.ros_distro,
+            Some("jazzy".to_string())
+        );
+
+        // Verify topics parsed correctly
+        assert!(
+            metadata
+                .rosbag2_bagfile_information
+                .topics_with_message_count
+                .len()
+                >= 3
+        );
+
+        // Check PointCloud2 topic QoS was parsed correctly
+        let lidar_topic = metadata
+            .get_topic_meta("/velodyne_points")
+            .expect("Lidar topic not found");
+        assert_eq!(lidar_topic.name, "/velodyne_points");
+        assert_eq!(lidar_topic.topic_type, "sensor_msgs/msg/PointCloud2");
+        assert_eq!(lidar_topic.type_description_hash, Some("".to_string()));
+        assert!(!lidar_topic.offered_qos_profiles.is_empty());
+
+        let qos = &lidar_topic.offered_qos_profiles[0];
+        assert_eq!(qos.history, "keep_last");
+        assert_eq!(qos.depth, 10);
+        assert_eq!(qos.reliability, "reliable");
+        assert_eq!(qos.durability, "volatile");
+        assert_eq!(qos.liveliness, "automatic");
+
+        // Check tf_static has transient_local durability
+        let tf_static = metadata
+            .get_topic_meta("/tf_static")
+            .expect("tf_static not found");
+        let tf_qos = &tf_static.offered_qos_profiles[0];
+        assert_eq!(tf_qos.durability, "transient_local");
+
+        // Check multiple QoS profiles on /tf topic
+        let tf_topic = metadata.get_topic_meta("/tf").expect("tf topic not found");
+        assert_eq!(tf_topic.offered_qos_profiles.len(), 3);
+    }
+
+    #[test]
+    fn qos_normalization_consistency() {
+        // Parse both versions
+        let v5_contents =
+            std::fs::read_to_string("test/metadata-v5.yml").expect("Could not read v5 metadata");
+        let v5_metadata: Metadata =
+            serde_yml::from_str(&v5_contents).expect("Failed to parse v5 metadata");
+
+        let v9_contents =
+            std::fs::read_to_string("test/metadata-v9.yml").expect("Could not read v9 metadata");
+        let v9_metadata: Metadata =
+            serde_yml::from_str(&v9_contents).expect("Failed to parse v9 metadata");
+
+        // Both should have normalized /velodyne_points with same QoS values
+        let v5_lidar = v5_metadata
+            .get_topic_meta("/velodyne_points")
+            .expect("v5 lidar topic not found");
+        let v9_lidar = v9_metadata
+            .get_topic_meta("/velodyne_points")
+            .expect("v9 lidar topic not found");
+
+        let v5_qos = &v5_lidar.offered_qos_profiles[0];
+        let v9_qos = &v9_lidar.offered_qos_profiles[0];
+
+        // After normalization, both should have the same string values
+        assert_eq!(v5_qos.history, v9_qos.history);
+        assert_eq!(v5_qos.depth, v9_qos.depth);
+        assert_eq!(v5_qos.reliability, v9_qos.reliability);
+        assert_eq!(v5_qos.durability, v9_qos.durability);
+        assert_eq!(v5_qos.liveliness, v9_qos.liveliness);
+    }
+
+    #[test]
+    fn v5_offered_qos_profiles_stored_correctly() {
+        let metadata_contents = std::fs::read_to_string("test/metadata-v5.yml")
+            .expect("Could not read test/metadata-v5.yml");
+        let metadata: Metadata =
+            serde_yml::from_str(&metadata_contents).expect("Failed to parse v5 metadata");
+
+        // Verify all topics have their QoS profiles stored
+        for topic_with_count in &metadata
+            .rosbag2_bagfile_information
+            .topics_with_message_count
+        {
+            let topic_meta = &topic_with_count.topic_metadata;
+            assert!(
+                !topic_meta.offered_qos_profiles.is_empty(),
+                "Topic {} should have QoS profiles",
+                topic_meta.name
+            );
+
+            // Verify each QoS profile has normalized string values
+            for qos in &topic_meta.offered_qos_profiles {
+                // History should be normalized from numeric to string
+                assert!(
+                    qos.history == "keep_last" || qos.history == "keep_all",
+                    "History should be normalized for topic {}: got {}",
+                    topic_meta.name,
+                    qos.history
+                );
+
+                // Reliability should be normalized
+                assert!(
+                    qos.reliability == "reliable" || qos.reliability == "best_effort",
+                    "Reliability should be normalized for topic {}: got {}",
+                    topic_meta.name,
+                    qos.reliability
+                );
+
+                // Durability should be normalized
+                assert!(
+                    qos.durability == "volatile" || qos.durability == "transient_local",
+                    "Durability should be normalized for topic {}: got {}",
+                    topic_meta.name,
+                    qos.durability
+                );
+
+                // Liveliness should be normalized
+                assert!(
+                    qos.liveliness == "automatic" || qos.liveliness == "manual_by_topic",
+                    "Liveliness should be normalized for topic {}: got {}",
+                    topic_meta.name,
+                    qos.liveliness
+                );
+            }
+        }
+
+        // Test specific topics
+        let imu = metadata.get_topic_meta("/imu/data").unwrap();
+        assert_eq!(imu.offered_qos_profiles.len(), 1);
+        assert_eq!(imu.offered_qos_profiles[0].depth, 5);
+
+        let odom = metadata.get_topic_meta("/odom").unwrap();
+        assert_eq!(odom.offered_qos_profiles.len(), 1);
+        assert_eq!(odom.offered_qos_profiles[0].depth, 50);
+
+        let tf_static = metadata.get_topic_meta("/tf_static").unwrap();
+        assert_eq!(tf_static.offered_qos_profiles.len(), 1);
+        assert_eq!(
+            tf_static.offered_qos_profiles[0].durability,
+            "transient_local"
+        );
+
+        let velodyne = metadata.get_topic_meta("/velodyne_points").unwrap();
+        assert_eq!(velodyne.offered_qos_profiles.len(), 1);
+        assert_eq!(velodyne.offered_qos_profiles[0].depth, 10);
+    }
+
+    #[test]
+    fn v9_offered_qos_profiles_stored_correctly() {
+        let metadata_contents = std::fs::read_to_string("test/metadata-v9.yml")
+            .expect("Could not read test/metadata-v9.yml");
+        let metadata: Metadata =
+            serde_yml::from_str(&metadata_contents).expect("Failed to parse v9 metadata");
+
+        // Verify all topics have their QoS profiles stored
+        for topic_with_count in &metadata
+            .rosbag2_bagfile_information
+            .topics_with_message_count
+        {
+            let topic_meta = &topic_with_count.topic_metadata;
+            assert!(
+                !topic_meta.offered_qos_profiles.is_empty(),
+                "Topic {} should have QoS profiles",
+                topic_meta.name
+            );
+
+            // Verify type_description_hash field exists (v9 feature)
+            assert!(
+                topic_meta.type_description_hash.is_some(),
+                "Topic {} should have type_description_hash field",
+                topic_meta.name
+            );
+        }
+
+        // Test /tf topic has 3 QoS profiles
+        let tf = metadata.get_topic_meta("/tf").unwrap();
+        assert_eq!(
+            tf.offered_qos_profiles.len(),
+            3,
+            "/tf should have 3 QoS profiles"
+        );
+        for (i, qos) in tf.offered_qos_profiles.iter().enumerate() {
+            assert_eq!(qos.history, "keep_last", "QoS profile {} history", i);
+            assert_eq!(qos.depth, 100, "QoS profile {} depth", i);
+            assert_eq!(qos.reliability, "reliable", "QoS profile {} reliability", i);
+            assert_eq!(qos.durability, "volatile", "QoS profile {} durability", i);
+            assert_eq!(qos.liveliness, "automatic", "QoS profile {} liveliness", i);
+        }
+
+        // Test other topics have single QoS profiles with correct values
+        let velodyne = metadata.get_topic_meta("/velodyne_points").unwrap();
+        assert_eq!(velodyne.offered_qos_profiles.len(), 1);
+        assert_eq!(velodyne.offered_qos_profiles[0].depth, 10);
+        assert_eq!(velodyne.offered_qos_profiles[0].durability, "volatile");
+
+        let tf_static = metadata.get_topic_meta("/tf_static").unwrap();
+        assert_eq!(tf_static.offered_qos_profiles.len(), 1);
+        assert_eq!(tf_static.offered_qos_profiles[0].depth, 1);
+        assert_eq!(
+            tf_static.offered_qos_profiles[0].durability,
+            "transient_local"
+        );
+
+        let imu = metadata.get_topic_meta("/imu/data").unwrap();
+        assert_eq!(imu.offered_qos_profiles.len(), 1);
+        assert_eq!(imu.offered_qos_profiles[0].depth, 5);
+        assert_eq!(imu.offered_qos_profiles[0].durability, "volatile");
+
+        let odom = metadata.get_topic_meta("/odom").unwrap();
+        assert_eq!(odom.offered_qos_profiles.len(), 1);
+        assert_eq!(odom.offered_qos_profiles[0].depth, 50);
+
+        let joint_states = metadata.get_topic_meta("/joint_states").unwrap();
+        assert_eq!(joint_states.offered_qos_profiles.len(), 1);
+        assert_eq!(joint_states.offered_qos_profiles[0].depth, 10);
+    }
+
+    #[test]
+    fn both_formats_parse_without_errors() {
+        let v5_result = std::fs::read_to_string("test/metadata-v5.yml").and_then(|contents| {
+            serde_yml::from_str::<Metadata>(&contents)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        });
+        assert!(
+            v5_result.is_ok(),
+            "v5 metadata should parse successfully: {:?}",
+            v5_result.err()
+        );
+
+        let v9_result = std::fs::read_to_string("test/metadata-v9.yml").and_then(|contents| {
+            serde_yml::from_str::<Metadata>(&contents)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        });
+        assert!(
+            v9_result.is_ok(),
+            "v9 metadata should parse successfully: {:?}",
+            v9_result.err()
+        );
+
+        let v5_metadata = v5_result.unwrap();
+        let v9_metadata = v9_result.unwrap();
+
+        // Verify both have valid data
+        assert!(v5_metadata.rosbag2_bagfile_information.message_count > 0);
+        assert!(v9_metadata.rosbag2_bagfile_information.message_count > 0);
+        assert!(
+            !v5_metadata
+                .rosbag2_bagfile_information
+                .topics_with_message_count
+                .is_empty()
+        );
+        assert!(
+            !v9_metadata
+                .rosbag2_bagfile_information
+                .topics_with_message_count
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn verify_qos_profiles_complete_data() {
+        // Verify that QoS profiles contain all expected fields with proper values
+        let v5_contents =
+            std::fs::read_to_string("test/metadata-v5.yml").expect("Could not read v5 metadata");
+        let v5_metadata: Metadata =
+            serde_yml::from_str(&v5_contents).expect("Failed to parse v5 metadata");
+
+        let v9_contents =
+            std::fs::read_to_string("test/metadata-v9.yml").expect("Could not read v9 metadata");
+        let v9_metadata: Metadata =
+            serde_yml::from_str(&v9_contents).expect("Failed to parse v9 metadata");
+
+        // Check V5 QoS profile completeness
+        let v5_imu = v5_metadata.get_topic_meta("/imu/data").unwrap();
+        let v5_qos = &v5_imu.offered_qos_profiles[0];
+
+        assert_eq!(v5_qos.history, "keep_last");
+        assert_eq!(v5_qos.depth, 5);
+        assert_eq!(v5_qos.reliability, "reliable");
+        assert_eq!(v5_qos.durability, "volatile");
+        assert_eq!(v5_qos.deadline.sec, 9223372036);
+        assert_eq!(v5_qos.deadline.nsec, 854775807);
+        assert_eq!(v5_qos.lifespan.sec, 9223372036);
+        assert_eq!(v5_qos.lifespan.nsec, 854775807);
+        assert_eq!(v5_qos.liveliness, "automatic");
+        assert_eq!(v5_qos.liveliness_lease_duration.sec, 9223372036);
+        assert_eq!(v5_qos.liveliness_lease_duration.nsec, 854775807);
+        assert_eq!(v5_qos.avoid_ros_namespace_conventions, false);
+
+        // Check V9 QoS profile completeness
+        let v9_imu = v9_metadata.get_topic_meta("/imu/data").unwrap();
+        let v9_qos = &v9_imu.offered_qos_profiles[0];
+
+        assert_eq!(v9_qos.history, "keep_last");
+        assert_eq!(v9_qos.depth, 5);
+        assert_eq!(v9_qos.reliability, "reliable");
+        assert_eq!(v9_qos.durability, "volatile");
+        assert_eq!(v9_qos.deadline.sec, 9223372036);
+        assert_eq!(v9_qos.deadline.nsec, 854775807);
+        assert_eq!(v9_qos.lifespan.sec, 9223372036);
+        assert_eq!(v9_qos.lifespan.nsec, 854775807);
+        assert_eq!(v9_qos.liveliness, "automatic");
+        assert_eq!(v9_qos.liveliness_lease_duration.sec, 9223372036);
+        assert_eq!(v9_qos.liveliness_lease_duration.nsec, 854775807);
+        assert_eq!(v9_qos.avoid_ros_namespace_conventions, false);
+
+        // Verify both have identical normalized values for the same topic
+        assert_eq!(v5_qos.history, v9_qos.history);
+        assert_eq!(v5_qos.depth, v9_qos.depth);
+        assert_eq!(v5_qos.reliability, v9_qos.reliability);
+        assert_eq!(v5_qos.durability, v9_qos.durability);
+        assert_eq!(v5_qos.liveliness, v9_qos.liveliness);
+        assert_eq!(v5_qos.deadline.sec, v9_qos.deadline.sec);
+        assert_eq!(v5_qos.deadline.nsec, v9_qos.deadline.nsec);
+    }
+
+    #[test]
+    #[ignore] // Requires actual bag file to be present
     fn bag_read_simple() {
         let path = "../dlg_cut";
         let mut bag = Bagfile::default();
@@ -610,6 +973,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires actual bag file to be present
     fn bag_read_time() {
         let path = "../dlg_cut";
         let mut bag = Bagfile::default();
