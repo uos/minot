@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-musl
@@ -155,7 +155,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
@@ -204,7 +204,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: sudo apt-get install -y gcc-arm-linux-gnueabihf
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf
       - name: Build Variants
         env:
           RUST_TARGET: armv7-unknown-linux-gnueabihf
