@@ -14,7 +14,7 @@ use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client}
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
 pub const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
-pub const CLIENT_LISTEN_PORT: u16 = 6594;
+pub const CLIENT_LISTEN_PORT_BASE: u16 = 6594;
 pub const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 pub const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
@@ -23,6 +23,22 @@ pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::MAX; // TODO can be deleted in that case
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
+
+/// Get the domain ID from the MINOT_DOMAIN_ID environment variable.
+/// Returns 0 if not set or invalid, allowing domain IDs from 0-99.
+pub fn get_domain_id() -> u16 {
+    std::env::var("MINOT_DOMAIN_ID")
+        .ok()
+        .and_then(|val| val.parse::<u16>().ok())
+        .map(|id| id.min(99)) // Limit to 0-99 to keep port numbers reasonable
+        .unwrap_or(0)
+}
+
+/// Get the client listen port based on the domain ID.
+/// Port = BASE_PORT + DOMAIN_ID
+pub fn get_client_listen_port() -> u16 {
+    CLIENT_LISTEN_PORT_BASE + get_domain_id()
+}
 
 #[derive(Archive, Serialize, Deserialize, Clone, Debug)]
 pub struct WindAt {
@@ -206,7 +222,12 @@ impl Sea {
 
         // task to handle join requests on udp socket
         tokio::spawn(async move {
-            let udp_listener = Client::get_udp_socket(external_ip, Some(CLIENT_LISTEN_PORT)).await;
+            let domain_id = get_domain_id();
+            let listen_port = get_client_listen_port();
+            if domain_id > 0 {
+                info!("Using domain ID {} (port {})", domain_id, listen_port);
+            }
+            let udp_listener = Client::get_udp_socket(external_ip, Some(listen_port)).await;
             let rejoin_request = Packet {
                 header: Header {
                     source: ShipName::MAX,
@@ -521,3 +542,62 @@ impl Sea {
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_domain_id_default() {
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+        assert_eq!(get_domain_id(), 0);
+    }
+
+    #[test]
+    fn test_get_domain_id_valid() {
+        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "5"); }
+        assert_eq!(get_domain_id(), 5);
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+    }
+
+    #[test]
+    fn test_get_domain_id_max_capped() {
+        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "150"); }
+        assert_eq!(get_domain_id(), 99); // Should cap at 99
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+    }
+
+    #[test]
+    fn test_get_domain_id_invalid() {
+        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "invalid"); }
+        assert_eq!(get_domain_id(), 0); // Should default to 0
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+    }
+
+    #[test]
+    fn test_get_client_listen_port_default() {
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+        assert_eq!(get_client_listen_port(), CLIENT_LISTEN_PORT_BASE);
+    }
+
+    #[test]
+    fn test_get_client_listen_port_with_domain() {
+        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "10"); }
+        assert_eq!(get_client_listen_port(), CLIENT_LISTEN_PORT_BASE + 10);
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+    }
+
+    #[test]
+    fn test_different_domains_use_different_ports() {
+        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "1"); }
+        let port1 = get_client_listen_port();
+        
+        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "2"); }
+        let port2 = get_client_listen_port();
+        
+        assert_ne!(port1, port2);
+        assert_eq!(port2 - port1, 1);
+        
+        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+    }
+}

@@ -21,8 +21,9 @@ use tokio::{
 use crate::{
     ShipKind, ShipName, VariableType,
     net::{
-        CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
+        CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
         CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
+        get_client_listen_port,
     },
 };
 const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
@@ -796,7 +797,7 @@ impl Client {
                         addr.octets()[1],
                         addr.octets()[2],
                         addr.octets()[3],
-                        CLIENT_LISTEN_PORT
+                        get_client_listen_port()
                     );
 
                     let sent = udp_socket.send_to(&data, &target_str).await?;
