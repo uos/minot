@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-use bagread::qos::{
+use mt_bagread::qos::{
     RmwQosDurabilityPolicy, RmwQosHistoryPolicy, RmwQosLivelinessPolicy, RmwQosReliabilityPolicy,
 };
 use r2r::{
@@ -78,13 +78,13 @@ impl From<Qos> for r2r::QosProfile {
 #[derive(Clone, Debug)]
 pub struct QosR2RMap(r2r::QosProfile);
 
-impl TryFrom<bagread::Qos> for QosR2RMap {
+impl TryFrom<mt_net::Qos> for QosR2RMap {
     type Error = anyhow::Error;
-    fn try_from(value: bagread::Qos) -> Result<Self, Self::Error> {
+    fn try_from(value: mt_net::Qos) -> Result<Self, Self::Error> {
         Ok(match value {
-            bagread::Qos::Sensor => Self(r2r::QosProfile::sensor_data()),
-            bagread::Qos::SystemDefault => Self(r2r::QosProfile::system_default()),
-            bagread::Qos::Custom(q) => {
+            mt_net::Qos::Sensor => Self(r2r::QosProfile::sensor_data()),
+            mt_net::Qos::SystemDefault => Self(r2r::QosProfile::system_default()),
+            mt_net::Qos::Custom(q) => {
                 let deadline = std::time::Duration::from_secs(q.deadline.sec)
                     + std::time::Duration::from_nanos(q.deadline.nsec);
                 let lifespan = std::time::Duration::from_secs(q.lifespan.sec)
