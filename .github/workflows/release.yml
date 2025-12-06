@@ -72,7 +72,7 @@ jobs:
           cp target/$RUST_TARGET/release/wind-rat dist/
           cp target/$RUST_TARGET/release/wind-ros2-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
-          cp rat/rat.h dist/
+          cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
@@ -127,7 +127,7 @@ jobs:
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
-          cp rat/rat.h dist/
+          cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
@@ -180,7 +180,7 @@ jobs:
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
-          cp rat/rat.h dist/
+          cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
@@ -235,7 +235,7 @@ jobs:
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
-          cp rat/rat.h dist/
+          cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
@@ -291,7 +291,7 @@ jobs:
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.dylib dist/
-          cp rat/rat.h dist/
+          cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
@@ -342,7 +342,7 @@ jobs:
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.dylib dist/
-          cp rat/rat.h dist/
+          cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
         run: |
