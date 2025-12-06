@@ -22,7 +22,7 @@ use crate::{
     ShipKind, ShipName, VariableType,
     net::{
         CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
-        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
+        CONTROLLER_CLIENT_ID, INTERFACE_QUERY_TIMEOUT, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
     },
 };
 const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
@@ -504,11 +504,32 @@ impl Client {
         }
     }
 
-    pub fn get_active_interfaces() -> Vec<NetworkInterface> {
-        datalink::interfaces()
-            .into_iter()
-            .filter(|i| i.is_running())
-            .collect::<Vec<_>>() // TODO maybe !i.is_loopback()?
+    pub async fn get_active_interfaces() -> Vec<NetworkInterface> {
+        let timeout_result = tokio::time::timeout(
+            INTERFACE_QUERY_TIMEOUT,
+            tokio::task::spawn_blocking(|| {
+                datalink::interfaces()
+                    .into_iter()
+                    .filter(|i| i.is_running())
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .await;
+
+        match timeout_result {
+            Ok(Ok(interfaces)) => interfaces,
+            Ok(Err(e)) => {
+                error!("Failed to query network interfaces: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                error!(
+                    "Timeout querying network interfaces after {:?}. Continuing with empty interface list.",
+                    INTERFACE_QUERY_TIMEOUT
+                );
+                Vec::new()
+            }
+        }
     }
 
     /// Register the client to the network and return a oneshot receiver to wait for the disconnect.
@@ -781,7 +802,7 @@ impl Client {
         let raw = to_bytes::<rkyv::rancor::Error>(packet).expect("packet not serializable");
         let mut data = vec![PROTO_IDENTIFIER];
         data.extend_from_slice(&raw);
-        for interface in Self::get_active_interfaces().iter() {
+        for interface in Self::get_active_interfaces().await.iter() {
             for ip_network in &interface.ips {
                 if let IpAddr::V4(ipv4_addr) = ip_network.ip() {
                     // let addr = if ipv4_addr.is_loopback() {

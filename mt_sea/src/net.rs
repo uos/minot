@@ -23,6 +23,7 @@ pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::MAX; // TODO can be deleted in that case
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
+pub const INTERFACE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Archive, Serialize, Deserialize, Clone, Debug)]
 pub struct WindAt {
