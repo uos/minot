@@ -11,7 +11,7 @@ Part of the [minot](https://github.com/uos/minot) family of crates.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.2.0"
+ratpub = "0.2.1"
 tokio = { version = "1", features = ["full"] }
 ~~~
 

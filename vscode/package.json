@@ -5,7 +5,7 @@
   "version": "0.2.1",
   "engines": {
     "vscode": "^1.105.0",
-    "minot": "0.2.0"
+    "minot": "0.2.1"
   },
   "icon": "assets/minot-icon.png",
   "publisher": "stelzo",

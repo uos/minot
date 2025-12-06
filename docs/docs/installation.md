@@ -192,7 +192,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.2.0"
+mt_rat = "0.2.1"
 ~~~
 
 ## Ratpub (Native Publish/Subscribe)
@@ -202,7 +202,7 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.2.0"
+ratpub = "0.2.1"
 tokio = { version = "1", features = ["full"] }
 ~~~
 
