@@ -98,28 +98,22 @@ With default settings, Minot builds with an integrated coordinator. When running
 **To help you get up and running quickly, here are some popular configurations.**
 
 ~~~bash title="(Recommended) With ROS2 publisher (+ any-type, needs sourced ROS2)"
-cargo install \
-  --git https://github.com/uos/minot minot \
-  --locked \
+cargo install minot --locked \
   --features embed-ros2-c
 ~~~
 
 ---
 
-This next version does not need any ROS1 or ROS2 installation to compile but it expects to find a node in the network if you try to query a Bagfile:
+This next version does not need any ROS1 or ROS2 installation to compile. It tries to fallback to Ratpub for Pub/Sub as default but it also finds other standalone wind nodes in the network and publishes to them if you query a Bagfile:
 
 ~~~bash title="Minimal with embedded Coordinator"
-cargo install \
-  --git https://github.com/uos/minot minot \
-  --locked
+cargo install minot --locked
 ~~~
 
 Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the input is always a ROS2 Bagfile, only mapped types can be published (no any-type).
 
 ~~~bash title="With ROS1 and ROS2 publishers"
-cargo install \
-  --git https://github.com/uos/minot minot \
-  --locked \
+cargo install minot --locked \
   --features embed-ros-native
 ~~~
 
@@ -141,9 +135,7 @@ Standalone publishers live inside the `wind` module. You can compile/install the
 With `--all-features`, you'll get all binaries but you need to have ROS2 sourced.
 
 ~~~bash title="Standalone Publishers (needs sourced ROS2)"
-cargo install \
-  --git https://github.com/uos/minot wind \
-  --locked \
+cargo install mt_wind --locked \
   --all-features
 ~~~
 
@@ -190,7 +182,8 @@ And link with `-lrat`.
 For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-rat = { version = "0.1.1", git = "https://github.com/uos/minot" }
+[dependencies]
+mt_rat = "0.1.2"
 ~~~
 
 ## Ratpub (Native Publish/Subscribe)
@@ -199,13 +192,15 @@ Ratpub is only available for Rust. It uses Tokio for async I/O.
 For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
-ratpub = { version = "0.1.1", git = "https://github.com/uos/minot" }
+[dependencies]
+ratpub = "0.1.2"
 tokio = { version = "1", features = ["full"] }
 ~~~
 
 Since you probably want to use existing ROS2 message definitions, you can also add the following crate which is auto-generated from the Jazzy release. It bundles all usual types and implements the required `rkyv` traits for sending them over the Minot network.
 
 ~~~toml title="Cargo.toml"
+[dependencies]
 ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
   "std_msgs", # add more here
 ] }

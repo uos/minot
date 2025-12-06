@@ -25,8 +25,9 @@ async-trait.workspace = true
 rand = "0.8"
 
 [lib]
+name = "rat"
 crate-type = [
   "dylib",
   "rlib",      # needed when building the example
   "staticlib",
-] # use as crate on rust and as static library on c++
+] # use as crate on rust and as static library on C++
