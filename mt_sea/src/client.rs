@@ -22,8 +22,7 @@ use crate::{
     ShipKind, ShipName, VariableType,
     net::{
         CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
-        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
-        get_domain_id,
+        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea, get_domain_id,
     },
 };
 const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
@@ -509,7 +508,8 @@ impl Client {
         datalink::interfaces()
             .into_iter()
             .filter(|i| i.is_running())
-            .collect::<Vec<_>>() // TODO maybe !i.is_loopback()?
+            .filter(|i| i.is_up())
+            .collect::<Vec<_>>()
     }
 
     /// Register the client to the network and return a oneshot receiver to wait for the disconnect.
@@ -522,7 +522,7 @@ impl Client {
         if client_domain_id > 0 {
             info!("Client using domain ID {}", client_domain_id);
         }
-        
+
         let network_register_packet = Packet {
             header: crate::net::Header {
                 source: ShipName::MAX,
