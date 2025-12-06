@@ -63,9 +63,9 @@ jobs:
 
           # 4. Sidecars & Libs
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package wind --bin wind-rat --features ratpub
-          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package rat --lib 
+          $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package mt_rat --lib 
           
           # Move shared artifacts to root of dist
           cp target/$RUST_TARGET/release/minot-coord dist/
@@ -116,10 +116,10 @@ jobs:
 
           # 4. Sidecars & Libs
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package wind --bin wind-rat --features ratpub
-          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package rat --lib 
+          $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package mt_rat --lib 
           
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/wind-rat dist/
@@ -175,7 +175,7 @@ jobs:
 
           # Sidecars
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package rat --lib 
+          $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/librat.a dist/
@@ -224,10 +224,10 @@ jobs:
 
           # Sidecars
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package wind --bin wind-rat --features ratpub
-          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package rat --lib 
+          $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/wind-rat dist/
@@ -280,10 +280,10 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package wind --bin wind-rat --features ratpub
-          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package rat --lib 
+          $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/wind-rat dist/
@@ -331,10 +331,10 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package wind --bin wind-rat --features ratpub
-          $CARGO_CMD --package wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package rat --lib 
+          $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
+          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
+          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/wind-rat dist/
@@ -396,7 +396,7 @@ jobs:
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
-          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c
+          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
           $CARGO_CMD --package minot --bin minot-coord
           
           # Copy root artifacts
@@ -448,7 +448,7 @@ jobs:
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
-          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c
+          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
           
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
 
@@ -504,8 +504,8 @@ jobs:
           mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
 
           # 4. Sidecars (wind-ros2-c, wind-ros1-native, minot-coord)
-          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c,humble
-          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
+          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
 
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
@@ -559,8 +559,8 @@ jobs:
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble,embed-ros1-native
           mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
 
-          $CARGO_CMD --package wind --bin wind-ros2-c --features ros2-c,humble
-          $CARGO_CMD --package wind --bin wind-ros1-native --features ros1-native
+          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
+          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
           
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
