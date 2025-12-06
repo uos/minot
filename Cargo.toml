@@ -30,12 +30,12 @@ exclude = [
 ]
 
 [workspace.dependencies]
-mt_sea = { path = "mt_sea" }
-ratpub = { path = "ratpub" }
-mt_bagread = { path = "mt_bagread" }
-mt_net = { path = "mt_net" }
-mt_wind = { path = "mt_wind" }
-mt_mtc = { path = "mt_mtc" }
+mt_sea = { path = "mt_sea", version = "0.2.0" }
+ratpub = { path = "ratpub", version = "0.2.0" }
+mt_bagread = { path = "mt_bagread", version = "0.2.0" }
+mt_net = { path = "mt_net", version = "0.2.0" }
+mt_wind = { path = "mt_wind", version = "0.2.0" }
+mt_mtc = { path = "mt_mtc", version = "0.2.0" }
 
 anyhow = "1"
 r2r = "0.9.5"

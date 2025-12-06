@@ -21,7 +21,6 @@ log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
 rkyv.workspace = true
-mt_mtc.workspace = true
 mt_net.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true

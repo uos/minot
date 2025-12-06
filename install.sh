@@ -168,7 +168,7 @@ ${BOLD}OPTIONS:${NC}
     -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (jazzy, humble). Requires ROS2 sourced.
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
-    -n, --no-default-embed    Do not enable the default 'coord' embed when building
+    -n, --no-default-embed    Do not enable the default 'coord' and 'ratpub' embed when building
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
@@ -948,6 +948,20 @@ build_from_source() {
                 fi
                 ;;
         esac
+
+        case ",$BUILD_FEATURES," in
+            *,embed-ratpub,*)
+                # already present, do nothing
+                ;;
+            *)
+                # Add embed-ratpub to the features
+                if [ -n "$BUILD_FEATURES" ]; then
+                    BUILD_FEATURES="embed-ratpub,${BUILD_FEATURES}"
+                else
+                    BUILD_FEATURES="embed-ratpub"
+                fi
+                ;;
+        esac
     fi
 
     if [ -n "$ROS_DISTRO" ]; then
@@ -1083,6 +1097,9 @@ build_from_source() {
     cd "$TMP_BUILD_DIR" || error "Failed to enter build directory"
 
     BUILD_CMD="cargo build --release --locked"
+    if [ "$NO_DEFAULT_EMBED" -eq 1 ]; then
+        BUILD_CMD="$BUILD_CMD --no-default-features"
+    fi
     if [ -n "$BUILD_FEATURES" ]; then
         BUILD_CMD="$BUILD_CMD --features $BUILD_FEATURES"
     fi
@@ -1528,6 +1545,17 @@ main() {
                         REQUESTED_FEATURES="embed-coord,${REQUESTED_FEATURES}"
                     else
                         REQUESTED_FEATURES="embed-coord"
+                    fi
+                    ;;
+            esac
+
+             case ",$REQUESTED_FEATURES," in
+                *,embed-ratpub,*) ;;
+                *)
+                    if [ -n "$REQUESTED_FEATURES" ]; then
+                        REQUESTED_FEATURES="embed-ratpub,${REQUESTED_FEATURES}"
+                    else
+                        REQUESTED_FEATURES="embed-ratpub"
                     fi
                     ;;
             esac

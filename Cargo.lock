@@ -2258,7 +2258,6 @@ dependencies = [
  "env_logger",
  "log",
  "mt_bagread",
- "mt_mtc",
  "mt_net",
  "mt_sea",
  "nalgebra 0.33.2",
