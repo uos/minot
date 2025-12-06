@@ -1,6 +1,6 @@
 [package]
 name = "mt_net"
-description = "Integration network communication and pub/sub resolution in Minot"
+description = "Network communication types and pub/sub resolution in Minot."
 version.workspace = true
 keywords.workspace = true
 license.workspace = true

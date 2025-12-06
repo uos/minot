@@ -29,7 +29,6 @@ exclude = [
   "**/vscode/**",
 ]
 
-
 [workspace.dependencies]
 mt_sea = { path = "mt_sea" }
 ratpub = { path = "ratpub" }

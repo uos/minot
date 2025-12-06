@@ -556,7 +556,7 @@ impl Bagfile {
 
 #[cfg(test)]
 mod tests {
-    use mtc::PlayMode;
+    use mt_mtc::PlayMode;
 
     use super::*;
 
@@ -1002,7 +1002,7 @@ mod tests {
                 short: None,
             }],
             trigger: None,
-            count: PlayCount::TimeRangeMs(mtc::AbsTimeRange::Closed((30, 90))),
+            count: PlayCount::TimeRangeMs(mt_mtc::AbsTimeRange::Closed((30, 90))),
             play_mode: PlayMode::Fix,
         });
 
@@ -1017,7 +1017,7 @@ mod tests {
                 short: None,
             }],
             trigger: None,
-            count: PlayCount::TimeRangeMs(mtc::AbsTimeRange::Closed((0, 100))),
+            count: PlayCount::TimeRangeMs(mt_mtc::AbsTimeRange::Closed((0, 100))),
             play_mode: PlayMode::Fix,
         });
 

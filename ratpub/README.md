@@ -1,6 +1,13 @@
-# Ratpub
+# ratpub
 
-Minot's native Publish/Subscribe system.
+A simple and deterministic Pub/Sub implementation with Minot primitives.
+
+Part of the [minot](https://github.com/uos/minot) family of crates.
+
+[![Latest version](https://img.shields.io/crates/v/ratpub.svg)](https://crates.io/crates/ratpub)
+![MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Apache](https://img.shields.io/badge/license-Apache-blue.svg)
+
 
 ~~~toml title="Cargo.toml"
 [dependencies]
@@ -17,7 +24,7 @@ ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
 ] }
 ~~~
 
-Learn more on how to use it in your Code by visiting the [feature page](./pubsub.md).
+Learn more on how to use it in your Code by visiting the [Minot docs](https://uos.github.io/minot/pubsub.html).
 
 
 ## Running the Examples
