@@ -47,7 +47,6 @@ MINOT_DOMAIN_ID=1 cargo run --example sub
 The domain ID is included in the discovery protocol, so all domains can share the same UDP port (6594) without reserving multiple ports.
 
 Domain IDs range from 0-99. Invalid or out-of-range values default to domain 0.
-- ...and so on
 
 ## Notes
 
