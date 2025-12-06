@@ -5,7 +5,7 @@ use ros2_client::{NodeName, NodeOptions};
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
-use mt_sea::{SensorTypeMapped, Ship, ShipKind};
+use mt_sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
@@ -34,11 +34,12 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::Wi
     Ok(rx)
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub enum Qos {
     Sensor,
     #[default]
     SystemDefault,
+    Custom(mt_net::QosProfile),
 }
 
 impl TryFrom<String> for Qos {
@@ -49,6 +50,16 @@ impl TryFrom<String> for Qos {
             "sensor" => Ok(Qos::Sensor),
             "system_default" => Ok(Qos::SystemDefault),
             _ => Err(anyhow!("Invalid QoS value")),
+        }
+    }
+}
+
+impl From<mt_net::Qos> for Qos {
+    fn from(value: mt_net::Qos) -> Self {
+        match value {
+            mt_net::Qos::Sensor => Qos::Sensor,
+            mt_net::Qos::SystemDefault => Qos::SystemDefault,
+            mt_net::Qos::Custom(qos_profile) => Qos::Custom(qos_profile),
         }
     }
 }
@@ -136,7 +147,7 @@ pub async fn run_dyn_wind(
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             let qos = match data.qos {
-                Some(qos) => ros2::QosPolicies::try_from(qos)?,
+                Some(qos) => ros2::QosPolicies::try_from(Qos::from(qos))?,
                 None => {
                     warn!("Received message without QOS, choosing system default");
                     // TODO debounce warning or only use info
