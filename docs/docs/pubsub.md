@@ -12,6 +12,10 @@ When used in static and simple environments (no lifecycle node, assuming stable 
 
 After adding the library to your [Cargo.toml](./installation.md#ratpub-native-publishsubscribe), you can create a publisher and a subscriber. Like in ROS1, the communication needs a *Master*. In this case it is our Coordinator, which we can run [standalone](./installation.md#standalone-coordinator) without any arguments.
 
+## Domain ID for Network Isolation
+
+To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
+
 ~~~sh title="Start the Coordinator in your Shell"
 minot-coord
 ~~~

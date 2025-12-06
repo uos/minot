@@ -23,6 +23,7 @@ use crate::{
     net::{
         CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
         CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea,
+        get_domain_id,
     },
 };
 const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
@@ -517,6 +518,11 @@ impl Client {
         self.coordinator_receive.write().unwrap().take();
         self.coordinator_send.write().unwrap().take();
 
+        let client_domain_id = get_domain_id();
+        if client_domain_id > 0 {
+            info!("Client using domain ID {}", client_domain_id);
+        }
+        
         let network_register_packet = Packet {
             header: crate::net::Header {
                 source: ShipName::MAX,
@@ -527,6 +533,7 @@ impl Client {
                 other_client_entrance: self.other_client_entrance,
                 kind: Sea::pad_ship_kind_name(&self.kind),
                 remove_rules_on_disconnect: self.rm_rules_on_disconnect,
+                domain_id: client_domain_id,
             },
         };
 

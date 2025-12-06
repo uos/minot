@@ -24,6 +24,20 @@ pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::M
 pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
 
+pub fn get_domain_id() -> u16 {
+    let val = std::env::var("MINOT_DOMAIN_ID")
+        .ok()
+        .unwrap_or("0".to_owned());
+    let parsed = val.parse::<u16>().ok();
+    match parsed {
+        Some(parsed) => parsed,
+        None => {
+            warn!("Invalid MINOT_DOMAIN_ID, selecting default 0");
+            0
+        }
+    }
+}
+
 #[derive(Archive, Serialize, Deserialize, Clone, Debug)]
 pub struct WindAt {
     pub data: WindData,
@@ -74,6 +88,7 @@ pub enum PacketKind {
         other_client_entrance: u16,
         kind: ShipKind,
         remove_rules_on_disconnect: bool,
+        domain_id: u16,
     },
     Welcome {
         addr: crate::NetworkShipAddress,
@@ -206,6 +221,10 @@ impl Sea {
 
         // task to handle join requests on udp socket
         tokio::spawn(async move {
+            let coordinator_domain_id = get_domain_id();
+            if coordinator_domain_id > 0 {
+                info!("Coordinator using domain ID {}", coordinator_domain_id);
+            }
             let udp_listener = Client::get_udp_socket(external_ip, Some(CLIENT_LISTEN_PORT)).await;
             let rejoin_request = Packet {
                 header: Header {
@@ -218,6 +237,7 @@ impl Sea {
                     other_client_entrance: 0,
                     kind: Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
                     remove_rules_on_disconnect: false,
+                    domain_id: 0,
                 },
             };
             let bytes_rejoin_request = rkyv::api::high::to_bytes::<rancor::Error>(&rejoin_request)
@@ -288,6 +308,7 @@ impl Sea {
         // task to wait for each new join request
         let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
+            let coordinator_domain_id = get_domain_id();
             let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
             // let rat_lock_unlock = Arc::clone(&rat_lock); // currently we only allow unique names, so no unlock needed.
             loop {
@@ -299,7 +320,17 @@ impl Sea {
                             other_client_entrance: other_client_port,
                             kind: ship_kind,
                             remove_rules_on_disconnect,
+                            domain_id: client_domain_id,
                         } => {
+                            // Filter by domain ID
+                            if client_domain_id != coordinator_domain_id {
+                                debug!(
+                                    "Rejecting join request from domain {} (coordinator is domain {})",
+                                    client_domain_id, coordinator_domain_id
+                                );
+                                continue;
+                            }
+
                             let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
                             debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
                             {
