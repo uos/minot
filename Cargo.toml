@@ -4,7 +4,7 @@ members = ["minot", "ratpub", "mt_bagread", "mt_rat", "mt_mtc", "mt_sea", "mt_wi
 resolver = "2"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/uos/minot"
