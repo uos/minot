@@ -1,12 +1,21 @@
 ## Install Script (Recommended)
 
-For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
+For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
 curl -sSLf https://install.steado.tech/minot | sh
 ~~~
 
 For ROS support, make sure to have your ROS environment sourced before running the script.
+
+## Using Cargo
+
+Minot is on crates.io, so Rustaceans can just use Cargo as expected. This includes the `ratpub` crate as a library, but you will need a `minot-coord` running on the network for the ratpub nodes to communicate. The `minot-coord` binary is also installed with the following command.
+
+~~~bash
+cargo install minot
+~~~
+
 
 ### VS Code Extension
 
