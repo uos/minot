@@ -547,6 +547,10 @@ impl Sea {
 mod tests {
     use super::*;
 
+    // Note: std::env::set_var and remove_var are marked unsafe in Rust 1.87+ because
+    // they can cause data races in multi-threaded programs. In these single-threaded
+    // unit tests, the unsafe usage is acceptable.
+
     #[test]
     fn test_get_domain_id_default() {
         unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
