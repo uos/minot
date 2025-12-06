@@ -5,12 +5,12 @@ use ros2_client::{NodeName, NodeOptions};
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
-use sea::{SensorTypeMapped, Ship, ShipKind};
+use mt_sea::{SensorTypeMapped, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
+pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
+    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -149,7 +149,7 @@ pub async fn run_dyn_wind(
             let pub_type = ros2_client::MessageTypeName::new(&package_name, &type_name);
 
             match data.data {
-                net::SensorTypeMapped::Lidar(cloud_msg) => {
+                mt_net::SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&topic_parse);
                     if existing_pubber.is_none() {
                         let pubber = node
@@ -178,7 +178,7 @@ pub async fn run_dyn_wind(
 
                     debug!("published cloud");
                 }
-                net::SensorTypeMapped::Imu(imu) => {
+                mt_net::SensorTypeMapped::Imu(imu) => {
                     let mut existing_pubber = imu_publishers.get(&topic_parse);
                     if existing_pubber.is_none() {
                         let pubber = node
@@ -205,7 +205,7 @@ pub async fn run_dyn_wind(
                     pubber.async_publish(imu).await?;
                     debug!("published imu");
                 }
-                net::SensorTypeMapped::Any(_) => {
+                mt_net::SensorTypeMapped::Any(_) => {
                     error!("Any-Types are not supported for RustDDS due to API incompatibilities.")
                 }
             }

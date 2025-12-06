@@ -1,22 +1,28 @@
 [package]
-name = "wind"
-edition.workspace = true
-include.workspace = true
+name = "mt_wind"
+description = "Proxy nodes to publish Bagfile data from Minot to other publishing services."
+version.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+exclude.workspace = true
 
 [dependencies]
-sea.workspace = true
-bagread.workspace = true
+mt_sea.workspace = true
+mt_bagread.workspace = true
 env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
 rkyv.workspace = true
-mtc.workspace = true
-net.workspace = true
+mt_mtc.workspace = true
+mt_net.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 async-trait.workspace = true
@@ -31,7 +37,7 @@ ratpub = { workspace = true, optional = true }
 
 [features]
 default = ["ratpub"]
-humble = ["bagread/humble"]
+humble = ["mt_bagread/humble"]
 ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy-serde"]
 ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]
 ros1-native = ["dep:roslibrust"]

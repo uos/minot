@@ -1,18 +1,24 @@
 [package]
-name = "bagread"
+name = "mt_bagread"
+description = "Reading ROS Bagfiles with queries for Minot."
 version.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-include.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+exclude.workspace = true
 
 [dependencies]
 mcap = "0.17.0"
 log.workspace = true
 anyhow.workspace = true
-mtc.workspace = true
-net.workspace = true
+mt_mtc.workspace = true
+mt_net.workspace = true
 camino = "1.0"
 rkyv.workspace = true
 tokio.workspace = true

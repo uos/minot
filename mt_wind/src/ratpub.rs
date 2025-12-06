@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
-use net::SensorTypeMapped;
+use mt_net::SensorTypeMapped;
+use mt_sea::{Ship, ShipKind};
 use ratpub::Node;
-use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
+pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
+    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

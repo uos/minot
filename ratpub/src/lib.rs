@@ -6,7 +6,7 @@ use rkyv::{
 };
 use std::{marker::PhantomData, sync::Arc};
 
-use sea::{net::Packet, ship::NetworkShipImpl, *};
+use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
 
 #[derive(Debug, Clone)]
 pub struct Publisher<T: Sendable> {
@@ -18,11 +18,11 @@ pub struct Publisher<T: Sendable> {
 impl<T: Sendable> Publisher<T> {
     pub async fn publish(&self, data: &T) -> anyhow::Result<()> {
         match self.ship.ask_for_action(&self.topic).await {
-            Ok((sea::Action::Sail, _)) => {
+            Ok((mt_sea::Action::Sail, _)) => {
                 // debug!("Doing nothing but expected a shoot command {} ", self.topic);
                 Ok(())
             }
-            Ok((sea::Action::Shoot { target, id }, _)) => {
+            Ok((mt_sea::Action::Shoot { target, id }, _)) => {
                 debug!("Publishing to {} at {:?}", self.topic, target);
 
                 self.ship
@@ -34,7 +34,7 @@ impl<T: Sendable> Publisher<T> {
 
                 Ok(())
             }
-            Ok((sea::Action::Catch { .. }, _)) => Err(anyhow!(
+            Ok((mt_sea::Action::Catch { .. }, _)) => Err(anyhow!(
                 "Received Catch but we are in a publisher for {} ",
                 self.topic
             )),
@@ -107,7 +107,7 @@ impl Node {
         // // Request
         coord_tx
             .send(Packet {
-                header: sea::net::Header::default(),
+                header: mt_sea::net::Header::default(),
                 data: net::PacketKind::RegisterShipAtVar {
                     ship: self.name.to_owned(),
                     var: topic.to_owned(),
@@ -169,7 +169,7 @@ impl Node {
         // Request
         coord_tx
             .send(Packet {
-                header: sea::net::Header::default(),
+                header: mt_sea::net::Header::default(),
                 data: net::PacketKind::RegisterShipAtVar {
                     ship: self.name.to_owned(),
                     var: topic.to_owned(),
@@ -186,16 +186,16 @@ impl Node {
         tokio::spawn(async move {
             loop {
                 match rat_ship.ask_for_action(&topic).await {
-                    Ok((sea::Action::Sail, _)) => {
+                    Ok((mt_sea::Action::Sail, _)) => {
                         // debug!("Doing nothing but expected a catch command {} ", &topic);
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                         continue;
                     }
-                    Ok((sea::Action::Shoot { .. }, _)) => {
+                    Ok((mt_sea::Action::Shoot { .. }, _)) => {
                         error!("Received Shoot but we are in a subscriber for {} ", &topic);
                         continue;
                     }
-                    Ok((sea::Action::Catch { source, id }, _)) => {
+                    Ok((mt_sea::Action::Catch { source, id }, _)) => {
                         let recv_data = rat_ship.get_cannon().catch::<T>(id).await;
                         let recv_data = match recv_data {
                             Ok(recv_data) => recv_data,
@@ -234,7 +234,7 @@ impl Node {
 
     pub async fn create(name: String) -> anyhow::Result<Self> {
         let ship =
-            sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_owned()), None, true).await?;
+            mt_sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_owned()), None, true).await?;
 
         Ok(Self {
             name,

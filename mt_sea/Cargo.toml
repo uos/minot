@@ -1,16 +1,23 @@
 [package]
-name = "sea"
-edition.workspace = true
-include.workspace = true
+name = "mt_sea"
+description = "Primitives for a Minot network."
+version.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+exclude.workspace = true
+
 
 [dependencies]
 nalgebra.workspace = true
 log.workspace = true
-net.workspace = true
+mt_net.workspace = true
 env_logger.workspace = true
 rand = "0.8.5"
 tokio.workspace = true

@@ -236,27 +236,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bagread"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "camino",
- "cdr",
- "log",
- "mcap",
- "mtc",
- "nalgebra 0.33.2",
- "net",
- "rkyv 0.8.12",
- "ros2-interfaces-jazzy-rkyv",
- "ros2-interfaces-jazzy-serde",
- "ros_pointcloud2",
- "serde",
- "serde_yml",
- "tokio",
-]
-
-[[package]]
 name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2096,31 +2075,31 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
- "bagread",
  "chrono",
  "clap",
  "crossterm",
  "env_logger",
  "futures",
  "log",
- "mtc",
+ "mt_bagread",
+ "mt_mtc",
+ "mt_net",
+ "mt_sea",
+ "mt_wind",
  "nalgebra 0.33.2",
- "net",
  "once_cell",
  "ratatui",
  "regex",
  "ros_pointcloud2",
  "rosbag2-rs",
  "rust_decimal",
- "sea",
  "serde",
  "serde_json",
  "tokio",
  "tui-logger",
- "wind",
 ]
 
 [[package]]
@@ -2191,8 +2170,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "mtc"
-version = "0.1.1"
+name = "mt_bagread"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "camino",
+ "cdr",
+ "log",
+ "mcap",
+ "mt_mtc",
+ "mt_net",
+ "nalgebra 0.33.2",
+ "rkyv 0.8.12",
+ "ros2-interfaces-jazzy-rkyv",
+ "ros2-interfaces-jazzy-serde",
+ "ros_pointcloud2",
+ "serde",
+ "serde_yml",
+ "tokio",
+]
+
+[[package]]
+name = "mt_mtc"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2200,7 +2200,77 @@ dependencies = [
  "env_logger",
  "log",
  "logos",
- "net",
+ "mt_net",
+]
+
+[[package]]
+name = "mt_net"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "rkyv 0.8.12",
+ "ros2-interfaces-jazzy-rkyv",
+ "ros_pointcloud2",
+ "serde",
+]
+
+[[package]]
+name = "mt_rat"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "env_logger",
+ "log",
+ "mt_sea",
+ "nalgebra 0.33.2",
+ "rand 0.8.5",
+ "rkyv 0.8.12",
+ "tokio",
+]
+
+[[package]]
+name = "mt_sea"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "deadpool",
+ "env_logger",
+ "log",
+ "mt_net",
+ "nalgebra 0.33.2",
+ "pnet",
+ "rand 0.8.5",
+ "rkyv 0.8.12",
+ "ros_pointcloud2",
+ "socket2 0.5.10",
+ "tokio",
+]
+
+[[package]]
+name = "mt_wind"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cdr-encoding",
+ "env_logger",
+ "log",
+ "mt_bagread",
+ "mt_mtc",
+ "mt_net",
+ "mt_sea",
+ "nalgebra 0.33.2",
+ "r2r",
+ "ratpub",
+ "rkyv 0.8.12",
+ "ros2-client",
+ "ros2-interfaces-jazzy-rkyv",
+ "ros2-interfaces-jazzy-serde",
+ "ros_pointcloud2",
+ "roslibrust",
+ "tokio",
 ]
 
 [[package]]
@@ -2322,17 +2392,6 @@ dependencies = [
  "quote",
  "serde",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "net"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "rkyv 0.8.12",
- "ros2-interfaces-jazzy-rkyv",
- "ros_pointcloud2",
- "serde",
 ]
 
 [[package]]
@@ -3046,21 +3105,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rat"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "env_logger",
- "log",
- "nalgebra 0.33.2",
- "rand 0.8.5",
- "rkyv 0.8.12",
- "sea",
- "tokio",
-]
-
-[[package]]
 name = "ratatui"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3083,17 +3127,18 @@ dependencies = [
 
 [[package]]
 name = "ratpub"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
  "env_logger",
  "futures-lite",
  "log",
+ "mt_net",
+ "mt_sea",
  "nalgebra 0.33.2",
  "rkyv 0.8.12",
  "ros2-interfaces-jazzy-rkyv",
- "sea",
  "tokio",
 ]
 
@@ -3678,25 +3723,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "sea"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "deadpool",
- "env_logger",
- "log",
- "nalgebra 0.33.2",
- "net",
- "pnet",
- "rand 0.8.5",
- "rkyv 0.8.12",
- "ros_pointcloud2",
- "socket2 0.5.10",
- "tokio",
-]
 
 [[package]]
 name = "seahash"
@@ -4766,31 +4792,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "wind"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "bagread",
- "cdr-encoding",
- "env_logger",
- "log",
- "mtc",
- "nalgebra 0.33.2",
- "net",
- "r2r",
- "ratpub",
- "rkyv 0.8.12",
- "ros2-client",
- "ros2-interfaces-jazzy-rkyv",
- "ros2-interfaces-jazzy-serde",
- "ros_pointcloud2",
- "roslibrust",
- "sea",
- "tokio",
-]
 
 [[package]]
 name = "windows-core"

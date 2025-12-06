@@ -10,11 +10,11 @@ use rkyv::{
 };
 use std::sync::{Arc, LazyLock, Mutex};
 
-use sea::{ship::NetworkShipImpl, *};
+use mt_sea::{ship::NetworkShipImpl, *};
 
+pub use mt_sea::VariableType;
+pub use mt_sea::net::NetArray;
 pub use rkyv::{Archive, Deserialize, Serialize};
-pub use sea::VariableType;
-pub use sea::net::NetArray;
 
 pub struct Rat {
     name: String,
@@ -44,7 +44,7 @@ impl Rat {
     ) -> anyhow::Result<Self> {
         let ship = rt.block_on(async {
             let init_future =
-                sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None, false);
+                mt_sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_string()), None, false);
 
             match timeout {
                 None => Ok(Some(init_future.await?)),
@@ -141,7 +141,7 @@ where
     if let Some(rat_ship) = rat.ship.as_ref() {
         rt.block_on(async move {
             match rat_ship.ask_for_action(variable_name).await {
-                Ok((sea::Action::Sail, lock_until_ack)) => {
+                Ok((mt_sea::Action::Sail, lock_until_ack)) => {
                     info!("Rat {} sails for variable {}", rat.name, variable_name);
                     let receiver = lock_until_ack.then_some({
                         let client = rat_ship.client.lock().await;
@@ -165,7 +165,7 @@ where
 
                     Ok(())
                 }
-                Ok((sea::Action::Shoot { target, id }, lock_until_ack)) => {
+                Ok((mt_sea::Action::Shoot { target, id }, lock_until_ack)) => {
                     info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
 
                     let receiver = lock_until_ack.then_some({
@@ -200,7 +200,7 @@ where
 
                     Ok(())
                 }
-                Ok((sea::Action::Catch { source, id }, lock_until_ack)) => {
+                Ok((mt_sea::Action::Catch { source, id }, lock_until_ack)) => {
                     info!(
                         "Rat {} catches {} from {:?}",
                         rat.name, variable_name, source

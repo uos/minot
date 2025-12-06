@@ -7,7 +7,7 @@ use std::{
 use anyhow::anyhow;
 use deadpool::managed::{Manager, Object, RecycleError};
 use log::{debug, error, info};
-use net::COMPARE_NODE_NAME;
+use mt_net::COMPARE_NODE_NAME;
 use pnet::datalink::{self, NetworkInterface};
 use rkyv::{api::low::from_bytes, to_bytes, util::AlignedVec};
 use tokio::{

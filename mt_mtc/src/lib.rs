@@ -10,7 +10,7 @@ use chumsky::{
     input::{Stream, ValueInput},
     prelude::*,
 };
-use net::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHuman};
+use mt_net::{ActionPlan, COMPARE_NODE_NAME, Rules, VariableHuman};
 
 fn floating_millimeter<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Option<f64> {
     let slice = lex.slice();

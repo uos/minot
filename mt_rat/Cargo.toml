@@ -1,15 +1,20 @@
 [package]
-name = "rat"
-description = "Share and sync variables over the network"
-edition.workspace = true
-include.workspace = true
+name = "mt_rat"
+description = "Share and sync variables over the Minot network."
+version.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+exclude.workspace = true
 
 [dependencies]
-sea.workspace = true
+mt_sea.workspace = true
 env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true

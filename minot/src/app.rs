@@ -10,8 +10,11 @@ use std::{
 
 use anyhow::{Error, anyhow};
 use log::{error, info, warn};
-use mtc::{Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, VariableHistory, WindFunction};
-use net::Rules;
+use mt_mtc::{
+    Evaluated, PlayKindUnitedPass3, PlayMode, PlayTrigger, VariableHistory, WindFunction,
+};
+use mt_net::Rules;
+use mt_sea::net::{PacketKind, WindAt};
 use once_cell::sync::Lazy;
 use ratatui::{
     layout::Constraint,
@@ -20,7 +23,6 @@ use ratatui::{
 };
 use regex::Regex;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
-use sea::net::{PacketKind, WindAt};
 
 // --- Add this static regex ---
 // This regex matches lines like:
@@ -728,8 +730,8 @@ pub struct WindCursor {
     pub(crate) wind_work_queue: usize,
     pub(crate) compile_state: WindCompile,
     wind_file_path: PathBuf,
-    bagfile: Arc<RwLock<bagread::Bagfile>>,
-    pub(crate) variable_cache: HashMap<mtc::Var, mtc::Rhs>,
+    bagfile: Arc<RwLock<mt_bagread::Bagfile>>,
+    pub(crate) variable_cache: HashMap<mt_mtc::Var, mt_mtc::Rhs>,
     dynamic_vars: HashMap<String, Vec<PlayKindUnitedPass3>>,
 }
 
@@ -744,7 +746,7 @@ impl Default for WindCursor {
             popup_title: WIND_POPUP_TITLE_NOERR,
             mode: WindMode::default(),
             wind_file_path: PathBuf::from("./wind.rl"),
-            bagfile: Arc::new(RwLock::new(bagread::Bagfile::default())),
+            bagfile: Arc::new(RwLock::new(mt_bagread::Bagfile::default())),
             variable_cache: HashMap::new(),
             wind_work_queue: 0,
             compile_state: WindCompile::default(),
@@ -1741,7 +1743,7 @@ impl App {
                 let fun = async move {
                     for windfn in eval.wind.iter() {
                         match windfn {
-                            mtc::WindFunction::Reset(path) => {
+                            mt_mtc::WindFunction::Reset(path) => {
                                 let bag_blocking = {
                                     let wc = wind_cursor_worker.read().unwrap();
                                     Arc::clone(&wc.bagfile)
@@ -1772,7 +1774,7 @@ impl App {
                                     }
                                 }
                             }
-                            mtc::WindFunction::SendFrames(kind) => {
+                            mt_mtc::WindFunction::SendFrames(kind) => {
                                 match kind {
                                     PlayKindUnitedPass3::SensorCount {
                                         sensors: _,
@@ -1891,20 +1893,20 @@ impl App {
                                 }
 
                                 let trigger = match &kind {
-                                    mtc::PlayKindUnitedPass3::SensorCount {
+                                    mt_mtc::PlayKindUnitedPass3::SensorCount {
                                         sensors: _,
                                         count: _,
                                         trigger,
                                         play_mode,
                                     }
-                                    | mtc::PlayKindUnitedPass3::UntilSensorCount {
+                                    | mt_mtc::PlayKindUnitedPass3::UntilSensorCount {
                                         sending: _,
                                         until_sensors: _,
                                         until_count: _,
                                         trigger,
                                         play_mode,
                                     } => trigger.as_ref().map(|trigger| match trigger {
-                                        mtc::PlayTrigger::DurationRelFactor(factor) => {
+                                        mt_mtc::PlayTrigger::DurationRelFactor(factor) => {
                                             let original_duration_ns =
                                                 end_time.unwrap() - start_time.unwrap();
 
@@ -1924,7 +1926,7 @@ impl App {
                                                 .parse::<u64>()
                                                 .unwrap_or(u64::MAX);
                                             let scaled_duration = Duration::from_nanos(scaled_ns);
-                                            let dur_ms = mtc::PlayTrigger::DurationMs(
+                                            let dur_ms = mt_mtc::PlayTrigger::DurationMs(
                                                 scaled_duration.as_millis() as u64,
                                             );
                                             (dur_ms, play_mode)
@@ -1935,7 +1937,7 @@ impl App {
 
                                 match &trigger {
                                     Some((
-                                        mtc::PlayTrigger::DurationMs(target_duration_ms),
+                                        mt_mtc::PlayTrigger::DurationMs(target_duration_ms),
                                         PlayMode::Fix,
                                     )) => {
                                         let total_nanos_decimal =
@@ -1989,7 +1991,7 @@ impl App {
                                             }
                                         }
                                     }
-                                    Some((mtc::PlayTrigger::Variable(var), PlayMode::Fix)) => {
+                                    Some((mt_mtc::PlayTrigger::Variable(var), PlayMode::Fix)) => {
                                         let wd = wind_data
                                             .into_iter()
                                             .map(|(_, wind)| WindAt {
@@ -2009,7 +2011,7 @@ impl App {
                                         }
                                     }
 
-                                    Some((mtc::PlayTrigger::Variable(_), PlayMode::Dynamic)) => {
+                                    Some((mt_mtc::PlayTrigger::Variable(_), PlayMode::Dynamic)) => {
                                         panic!("Dynamic variables should be resolved here");
                                     }
                                     Some((PlayTrigger::DurationRelFactor(_), _)) => {
@@ -2370,7 +2372,7 @@ impl App {
                         .unwrap()
                         .wind_file_path
                         .clone();
-                    let eval = mtc::compile_file_with_state(
+                    let eval = mt_mtc::compile_file_with_state(
                         &rats_file,
                         start_line,
                         end_line,

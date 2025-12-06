@@ -1,24 +1,42 @@
 [workspace]
 
-members = ["bagread", "minot", "rat", "ratpub", "mtc", "sea", "wind", "net"]
+members = ["minot", "ratpub", "mt_bagread", "mt_rat", "mt_mtc", "mt_sea", "mt_wind", "mt_net"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/uos/minot"
 edition = "2024"
-include = ["**/*.rs", "**/*.md", "**/Cargo.toml"]
 authors = ["Christopher Sieh <csieh@uos.de>"]
+categories = [
+  "science::robotics",
+]
+documentation = "https://uos.github.io/minot"
+homepage = "https://uos.github.io/minot"
+rust-version = "1.87"
+exclude = [
+  "**/.github/**",
+  "**/tests/**",
+  "**/mt/**",
+  "**/benches/**",
+  "**/target/**",
+  "**/build/**",
+  "**/dist/**",
+  "**/docs/**",
+  "**/venv/**",
+  "**/vscode/**",
+]
+
 
 [workspace.dependencies]
-sea = { path = "sea" }
+mt_sea = { path = "mt_sea" }
 ratpub = { path = "ratpub" }
-bagread = { path = "bagread" }
-net = { path = "net" }
-wind = { path = "wind" }
-mtc = { path = "mtc" }
+mt_bagread = { path = "mt_bagread" }
+mt_net = { path = "mt_net" }
+mt_wind = { path = "mt_wind" }
+mt_mtc = { path = "mt_mtc" }
 
 anyhow = "1"
 r2r = "0.9.5"

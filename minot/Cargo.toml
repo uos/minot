@@ -1,24 +1,29 @@
 [package]
 name = "minot"
-edition.workspace = true
-include.workspace = true
+description = "A versatile toolset for debugging and verifying stateful robot perception software."
+version.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-version.workspace = true
+edition.workspace = true
 authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+exclude.workspace = true
 
 [dependencies]
-sea.workspace = true
+mt_sea.workspace = true
 env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-net.workspace = true
-mtc.workspace = true
-bagread.workspace = true
+mt_net.workspace = true
+mt_mtc.workspace = true
+mt_bagread.workspace = true
 anyhow.workspace = true
 ros_pointcloud2.workspace = true
 crossterm = { version = "0.28.1", features = ["event-stream"] }
@@ -31,7 +36,7 @@ clap = { version = "4.5.28", features = ["derive"] }
 regex = "1"
 once_cell = "1"
 
-wind = { optional = true, workspace = true }
+mt_wind = { optional = true, workspace = true }
 rust_decimal = "1.37.1"
 
 [[bin]]
@@ -44,13 +49,13 @@ path = "src/coord.rs"
 
 # Note: All following features only embed existing nodes that can be built and run separately through the network.
 [features]
-default = ["embed-coord"]
+default = ["embed-coord", "embed-ratpub"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
 embed-ros2-c = ["embed-ros2-c-turbine"]
 
 # Same as above but removing BestAvailable QoS to be compatible with Humble
-embed-ros2-c-humble = ["embed-ros2-c-turbine", "wind/humble"]
+embed-ros2-c-humble = ["embed-ros2-c-turbine", "mt_wind/humble"]
 
 # Use a native Rust implementation of ROS2 (ros2-client crate). Not stable for publishing the "any" type.
 embed-ros2-native = ["embed-ros2-turbine"]
@@ -63,7 +68,12 @@ embed-ratpub = ["embed-ratpub-turbine"]
 
 # Run the coordinator in the background.
 embed-coord = []
-embed-ros2-turbine = ["dep:wind", "wind/ros2-native"]
-embed-ros2-c-turbine = ["dep:wind", "wind/ros2-c"]
-embed-ros1-turbine = ["dep:wind", "wind/ros1-native"]
-embed-ratpub-turbine = ["dep:wind", "wind/ratpub"]
+embed-ros2-turbine = ["dep:mt_wind", "mt_wind/ros2-native"]
+embed-ros2-c-turbine = ["dep:mt_wind", "mt_wind/ros2-c"]
+embed-ros1-turbine = ["dep:mt_wind", "mt_wind/ros1-native"]
+embed-ratpub-turbine = ["dep:mt_wind", "mt_wind/ratpub"]
+
+[package.metadata.docs.rs]
+features = ["embed-coord", "embed-ratpub", "embed-ros1-native", "embed-ros2-c", "embed-ros2-c-humble", "embed-ros2-native"]
+default-target = "x86_64-unknown-linux-gnu"
+rustdoc-args = ["--cfg", "docsrs"]

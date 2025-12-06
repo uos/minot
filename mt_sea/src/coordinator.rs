@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
 use log::{debug, error};
-use net::{ActionPlan, COMPARE_NODE_NAME};
+use mt_net::{ActionPlan, COMPARE_NODE_NAME};
 
 use crate::{
     NetworkShipAddress, ShipName,

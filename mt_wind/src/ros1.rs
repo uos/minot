@@ -4,11 +4,11 @@ use anyhow::anyhow;
 use std::collections::HashMap;
 
 use log::{debug, error, info};
+use mt_sea::{Ship, ShipKind};
 use roslibrust::{
     codegen::Time,
     ros1::{NodeHandle, RosMasterError},
 };
-use sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use ros_pointcloud2::{CloudDimensions, Denseness, Endian, prelude::*};
@@ -96,9 +96,9 @@ impl From<PointCloud2Msg> for sensor_msgs::PointCloud2 {
     }
 }
 
-pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<sea::WindData>>> {
+pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
+    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -155,7 +155,7 @@ pub async fn run_dyn_wind(
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             match data.data {
-                net::SensorTypeMapped::Lidar(cloud_msg) => {
+                mt_net::SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
                         let pubber = nh
@@ -200,7 +200,7 @@ pub async fn run_dyn_wind(
                     pubber.publish(&msg).await?;
                     debug!("published cloud");
                 }
-                net::SensorTypeMapped::Imu(imu_msg) => {
+                mt_net::SensorTypeMapped::Imu(imu_msg) => {
                     let mut existing_pubber = imu_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
                         let pubber = nh
@@ -279,7 +279,7 @@ pub async fn run_dyn_wind(
                     pubber.publish(&msg).await?;
                     debug!("published cloud");
                 }
-                net::SensorTypeMapped::Any(_) => {
+                mt_net::SensorTypeMapped::Any(_) => {
                     error!(
                         "Any-Types are not supported for ROS1 due to different message encodings."
                     )

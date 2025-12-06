@@ -1,14 +1,21 @@
 [package]
 name = "ratpub"
+description = "A simple and deterministic Pub/Sub implementation with Minot primitives."
 version.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-include.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+exclude.workspace = true
 
 [dependencies]
-sea.workspace = true
+mt_sea.workspace = true
+mt_net.workspace = true
 env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true

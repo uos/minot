@@ -3,9 +3,10 @@
 use clap::{Parser, Subcommand, command};
 mod runner;
 use log::{error, info, warn};
-use net::COMPARE_NODE_NAME;
+use mt_mtc::{Rhs, Val};
+use mt_net::COMPARE_NODE_NAME;
+use mt_sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use sea::{Action, Cannon, Ship, ShipKind, net::Packet};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -87,14 +88,14 @@ pub(crate) enum Commands {
 
 async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Compiling {:#?}", &path.canonicalize()?);
-    let eval = mtc::compile_file(&path, None, None)?;
+    let eval = mt_mtc::compile_file(&path, None, None)?;
     // remove compile feebback
     print!("\x1b[1A");
     print!("\x1b[2K");
 
     let log_level = if let Some(rhs) = eval.vars.resolve("_log_level")? {
         match rhs {
-            mtc::Rhs::Val(mtc::Val::StringVal(v)) => match v.as_str() {
+            Rhs::Val(Val::StringVal(v)) => match v.as_str() {
                 "info" => Ok(log::LevelFilter::Info),
                 "debug" => Ok(log::LevelFilter::Debug),
                 "warn" => Ok(log::LevelFilter::Warn),
@@ -112,9 +113,11 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "embed-coord")]
     {
+        use mt_mtc::Evaluated;
+
         let locked_start = if let Some(rhs) = eval.vars.resolve("_start_locked")? {
             match rhs {
-                mtc::Rhs::Val(mtc::Val::BoolVal(locked)) => Ok(locked),
+                Rhs::Val(Val::BoolVal(locked)) => Ok(locked),
                 _ => Err(anyhow!("Expected bool for _start_locked.")),
             }
         } else {
@@ -123,7 +126,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         let coord_file = if let Some(rhs) = eval.vars.resolve("_rules")? {
             match rhs {
-                mtc::Rhs::Val(mtc::Val::StringVal(file)) | mtc::Rhs::Path(file) => Ok(Some(file)),
+                Rhs::Val(Val::StringVal(file)) | Rhs::Path(file) => Ok(Some(file)),
                 _ => Err(anyhow!("Expected _wind_file to be path or string.")),
             }
         } else {
@@ -133,7 +136,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "embed-ratpub-turbine")]
         {
             let wind_name =
-                wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+                mt_wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
 
             tokio::spawn(async move {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -142,7 +145,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                     // dump ready answer
                     _ = rx.await;
                 });
-                let res = wind::ratpub::run_dyn_wind(&wind_name, tx).await;
+                let res = mt_wind::ratpub::run_dyn_wind(&wind_name, tx).await;
                 match res {
                     Ok(_) => {} // will never return
                     Err(e) => {
@@ -162,9 +165,9 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 let joined = cfg_parent.join(cfpath);
                 println!("Compiling separate wind {:#?}", &joined);
 
-                mtc::compile_file(&joined, None, None)?
+                mt_mtc::compile_file(&joined, None, None)?
             }
-            (_, _) => mtc::Evaluated::new(),
+            (_, _) => Evaluated::new(),
         };
 
         #[allow(unused_mut)]
@@ -172,27 +175,29 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         #[cfg(feature = "embed-ros2-turbine")]
         {
-            let wind_name = wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
+            let wind_name =
+                mt_wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
         #[cfg(feature = "embed-ros2-c-turbine")]
         {
             let wind_name =
-                wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
+                mt_wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
         #[cfg(feature = "embed-ros1-turbine")]
         {
-            let wind_name = wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
+            let wind_name =
+                mt_wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
             clients.insert(wind_name);
         }
 
         #[cfg(feature = "embed-ratpub-turbine")]
         {
             let wind_name =
-                wind::get_env_or_default("wind_ratpub_name", &EMBED_RATPUB_TURBINE_NAME)?;
+                mt_wind::get_env_or_default("wind_ratpub_name", &EMBED_RATPUB_TURBINE_NAME)?;
             clients.insert(wind_name.clone() + "_pub");
             clients.insert(wind_name);
         }
@@ -202,7 +207,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "embed-ros2-turbine")]
     {
-        let wind_name = wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
+        let wind_name = mt_wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
 
         tokio::spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -211,7 +216,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 // dump ready answer
                 _ = rx.await;
             });
-            let res = wind::ros2::run_dyn_wind(&wind_name, tx).await;
+            let res = mt_wind::ros2::run_dyn_wind(&wind_name, tx).await;
             match res {
                 Ok(_) => {} // will never return
                 Err(e) => {
@@ -223,7 +228,8 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "embed-ros2-c-turbine")]
     {
-        let wind_name = wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
+        let wind_name =
+            mt_wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
 
         tokio::spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -232,7 +238,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 // dump ready answer
                 _ = rx.await;
             });
-            let res = wind::ros2_r2r::run_dyn_wind(&wind_name, tx).await;
+            let res = mt_wind::ros2_r2r::run_dyn_wind(&wind_name, tx).await;
             match res {
                 Ok(_) => {} // will never return
                 Err(e) => {
@@ -246,9 +252,9 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "embed-ros1-turbine")]
     {
-        let wind_name = wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
+        let wind_name = mt_wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
 
-        let master_uri = wind::get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
+        let master_uri = mt_wind::get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
 
         tokio::spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -257,7 +263,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 // dump ready answer
                 _ = rx.await;
             });
-            let res = wind::ros1::run_dyn_wind(&master_uri, &wind_name, tx).await;
+            let res = mt_wind::ros1::run_dyn_wind(&master_uri, &wind_name, tx).await;
             match res {
                 Ok(None) => {
                     log::warn!("ROS1 Master not found. Destroying node.");
@@ -274,9 +280,12 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     let rules = eval.rules;
     println!("Looking for coordinator...");
-    let comparer =
-        sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), None, false)
-            .await?;
+    let comparer = mt_sea::ship::NetworkShipImpl::init(
+        ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
+        None,
+        false,
+    )
+    .await?;
 
     // remove searching feedback
     print!("\x1b[1A");
@@ -312,8 +321,8 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         if !rules.raw().is_empty() {
             match recv
                 .send(Packet {
-                    header: sea::net::Header::default(),
-                    data: sea::net::PacketKind::RulesClear,
+                    header: mt_sea::net::Header::default(),
+                    data: mt_sea::net::PacketKind::RulesClear,
                 })
                 .await
             {
@@ -326,8 +335,8 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             for (var, rule) in rules.raw() {
                 match recv
                     .send(Packet {
-                        header: sea::net::Header::default(),
-                        data: sea::net::PacketKind::RuleAppend {
+                        header: mt_sea::net::Header::default(),
+                        data: mt_sea::net::PacketKind::RuleAppend {
                             variable: var.clone(), // TODO avoid both clone?
                             commands: rule.clone(),
                         },
@@ -345,7 +354,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         while let Some(ui_received) = rx.recv().await {
             match recv
                 .send(Packet {
-                    header: sea::net::Header::default(),
+                    header: mt_sea::net::Header::default(),
                     data: ui_received,
                 })
                 .await
@@ -362,7 +371,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             match sub.recv().await {
                 Ok((packet, _)) => match packet.data {
-                    sea::net::PacketKind::VariableTaskRequest(var) => {
+                    mt_sea::net::PacketKind::VariableTaskRequest(var) => {
                         info!("received var request: {var}");
                         match dyn_wind_tx.send(var).await {
                             Ok(_) => {}
@@ -371,7 +380,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    sea::net::PacketKind::RatAction {
+                    mt_sea::net::PacketKind::RatAction {
                         action: crate::Action::Catch { source, id },
                         lock_until_ack: _,
                     } => match comparer.get_cannon().catch_dyn(id).await {
@@ -751,7 +760,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         let dir = file_path.parent().ok_or(anyhow!(
                             "Could not get parent directory of source code file."
                         ))?;
-                        let eval = match mtc::compile_code_with_state(
+                        let eval = match mt_mtc::compile_code_with_state(
                             &selected_lines,
                             dir,
                             None,
@@ -773,10 +782,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         // });
                         #[cfg(feature = "embed-coord")]
                         {
+                            use mt_mtc::Evaluated;
+
                             let locked_start =
                                 if let Some(rhs) = eval.vars.resolve("_start_locked")? {
                                     match rhs {
-                                        mtc::Rhs::Val(mtc::Val::BoolVal(locked)) => Ok(locked),
+                                        Rhs::Val(Val::BoolVal(locked)) => Ok(locked),
                                         _ => Err(anyhow!("Expected bool for _start_locked.")),
                                     }
                                 } else {
@@ -785,8 +796,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             let coord_file = if let Some(rhs) = eval.vars.resolve("_rules")? {
                                 match rhs {
-                                    mtc::Rhs::Val(mtc::Val::StringVal(file))
-                                    | mtc::Rhs::Path(file) => Ok(Some(file)),
+                                    Rhs::Val(Val::StringVal(file)) | Rhs::Path(file) => {
+                                        Ok(Some(file))
+                                    }
                                     _ => Err(anyhow!("Expected _wind_file to be path or string.")),
                                 }
                             } else {
@@ -803,9 +815,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                     let joined = cfg_parent.join(cfpath);
                                     println!("Compiling separate wind {:#?}", &joined);
 
-                                    mtc::compile_file(&joined, None, None)?
+                                    mt_mtc::compile_file(&joined, None, None)?
                                 }
-                                (_, _) => mtc::Evaluated::new(),
+                                (_, _) => Evaluated::new(),
                             };
 
                             #[allow(unused_mut)]
@@ -813,7 +825,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             #[cfg(feature = "embed-ros2-turbine")]
                             {
-                                let wind_name = wind::get_env_or_default(
+                                let wind_name = mt_wind::get_env_or_default(
                                     "wind_ros2_name",
                                     &EMBED_ROS2_TURBINE_NAME,
                                 )?;
@@ -822,7 +834,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             #[cfg(feature = "embed-ros2-c-turbine")]
                             {
-                                let wind_name = wind::get_env_or_default(
+                                let wind_name = mt_wind::get_env_or_default(
                                     "wind_ros2_c_name",
                                     &EMBED_ROS2_C_TURBINE_NAME,
                                 )?;
@@ -831,7 +843,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             #[cfg(feature = "embed-ros1-turbine")]
                             {
-                                let wind_name = wind::get_env_or_default(
+                                let wind_name = mt_wind::get_env_or_default(
                                     "wind_ros1_name",
                                     &EMBED_ROS1_TURBINE_NAME,
                                 )?;
@@ -840,7 +852,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             #[cfg(feature = "embed-ratpub-turbine")]
                             {
-                                let wind_name = wind::get_env_or_default(
+                                let wind_name = mt_wind::get_env_or_default(
                                     "wind_ratpub_name",
                                     &EMBED_RATPUB_TURBINE_NAME,
                                 )?;
@@ -853,14 +865,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                         #[cfg(feature = "embed-ratpub-turbine")]
                         let ratpub_ready_rx = {
-                            let wind_name = wind::get_env_or_default(
+                            let wind_name = mt_wind::get_env_or_default(
                                 "ratpub_wind_name",
                                 &EMBED_RATPUB_TURBINE_NAME,
                             )?;
 
                             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = wind::ratpub::run_dyn_wind(&wind_name, ready_tx).await;
+                                let res = mt_wind::ratpub::run_dyn_wind(&wind_name, ready_tx).await;
                                 match res {
                                     Ok(_) => {} // will never return
                                     Err(e) => {
@@ -879,14 +891,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                         #[cfg(feature = "embed-ros2-turbine")]
                         let ros2_ready_rx = {
-                            let wind_name = wind::get_env_or_default(
+                            let wind_name = mt_wind::get_env_or_default(
                                 "wind_ros2_name",
                                 &EMBED_ROS2_TURBINE_NAME,
                             )?;
 
                             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = wind::ros2::run_dyn_wind(&wind_name, ready_tx).await;
+                                let res = mt_wind::ros2::run_dyn_wind(&wind_name, ready_tx).await;
                                 match res {
                                     Ok(_) => {} // will never return
                                     Err(e) => {
@@ -905,14 +917,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                         #[cfg(feature = "embed-ros2-c-turbine")]
                         let ros2_c_ready_rx = {
-                            let wind_name = wind::get_env_or_default(
+                            let wind_name = mt_wind::get_env_or_default(
                                 "wind_ros2_c_name",
                                 &EMBED_ROS2_C_TURBINE_NAME,
                             )?;
 
                             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = wind::ros2_r2r::run_dyn_wind(&wind_name, ready_tx).await;
+                                let res =
+                                    mt_wind::ros2_r2r::run_dyn_wind(&wind_name, ready_tx).await;
                                 match res {
                                     Ok(_) => {} // will never return
                                     Err(e) => {
@@ -931,12 +944,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                         #[cfg(feature = "embed-ros1-turbine")]
                         let ros1_ready_rx = {
-                            let wind_name = wind::get_env_or_default(
+                            let wind_name = mt_wind::get_env_or_default(
                                 "wind_ros1_name",
                                 &EMBED_ROS1_TURBINE_NAME,
                             )?;
 
-                            let master_uri = wind::get_env_or_default(
+                            let master_uri = mt_wind::get_env_or_default(
                                 "ROS_MASTER_URI",
                                 "http://localhost:11311",
                             )?;
@@ -944,7 +957,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
                                 let res =
-                                    wind::ros1::run_dyn_wind(&master_uri, &wind_name, ready_tx)
+                                    mt_wind::ros1::run_dyn_wind(&master_uri, &wind_name, ready_tx)
                                         .await;
                                 match res {
                                     Ok(None) => {
@@ -967,7 +980,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                         let rules = eval.rules;
                         info!("Looking for coordinator...");
-                        let comparer = sea::ship::NetworkShipImpl::init(
+                        let comparer = mt_sea::ship::NetworkShipImpl::init(
                             ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
                             None,
                             false,
@@ -1004,8 +1017,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             if !rules.raw().is_empty() {
                                 match recv
                                     .send(Packet {
-                                        header: sea::net::Header::default(),
-                                        data: sea::net::PacketKind::RulesClear,
+                                        header: mt_sea::net::Header::default(),
+                                        data: mt_sea::net::PacketKind::RulesClear,
                                     })
                                     .await
                                 {
@@ -1018,8 +1031,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 for (var, rule) in rules.raw() {
                                     match recv
                                         .send(Packet {
-                                            header: sea::net::Header::default(),
-                                            data: sea::net::PacketKind::RuleAppend {
+                                            header: mt_sea::net::Header::default(),
+                                            data: mt_sea::net::PacketKind::RuleAppend {
                                                 variable: var.clone(), // TODO avoid both clone?
                                                 commands: rule.clone(),
                                             },
@@ -1037,7 +1050,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             while let Some(ui_received) = rx.recv().await {
                                 match recv
                                     .send(Packet {
-                                        header: sea::net::Header::default(),
+                                        header: mt_sea::net::Header::default(),
                                         data: ui_received,
                                     })
                                     .await
@@ -1054,7 +1067,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             loop {
                                 match sub.recv().await {
                                     Ok((packet, _)) => match packet.data {
-                                        sea::net::PacketKind::VariableTaskRequest(var) => {
+                                        mt_sea::net::PacketKind::VariableTaskRequest(var) => {
                                             info!("received var request: {var}");
                                             match dyn_wind_tx.send(var).await {
                                                 Ok(_) => {}
@@ -1065,7 +1078,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                                 }
                                             }
                                         }
-                                        sea::net::PacketKind::RatAction {
+                                        mt_sea::net::PacketKind::RatAction {
                                             action: crate::Action::Catch { source, id },
                                             lock_until_ack: _,
                                         } => match comparer.get_cannon().catch_dyn(id).await {
@@ -1219,7 +1232,7 @@ async fn handle_command(command: TuiCommand, app: &mut App) -> ServerResponse {
                     return ServerResponse::error(e.to_string());
                 }
             };
-            let eval = mtc::compile_code_with_state(
+            let eval = mt_mtc::compile_code_with_state(
                 &selected_lines,
                 dir,
                 Some(var_state),
@@ -1246,7 +1259,7 @@ async fn handle_command(command: TuiCommand, app: &mut App) -> ServerResponse {
             for (var, rules) in eval.rules.raw() {
                 vars += 1;
                 app.send_coordinator
-                    .send(sea::net::PacketKind::RuleAppend {
+                    .send(mt_sea::net::PacketKind::RuleAppend {
                         variable: var.clone(),
                         commands: rules.clone(),
                     })

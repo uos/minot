@@ -1,11 +1,9 @@
-// #![feature(async_drop)]
-// #![feature(impl_trait_in_assoc_type)]
 pub mod client;
 pub mod coordinator;
 pub mod net;
 pub mod ship;
 
-use ::net::{ActionPlan, BagMsg, Rules, VariableHuman};
+use mt_net::{ActionPlan, BagMsg, Rules, VariableHuman};
 use rkyv::{
     Archive, Deserialize, Serialize,
     api::high::{HighSerializer, HighValidator},
