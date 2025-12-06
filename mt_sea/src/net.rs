@@ -14,7 +14,7 @@ use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client}
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
 pub const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
-pub const CLIENT_LISTEN_PORT_BASE: u16 = 6594;
+pub const CLIENT_LISTEN_PORT: u16 = 6594;
 pub const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 pub const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
@@ -30,14 +30,8 @@ pub fn get_domain_id() -> u16 {
     std::env::var("MINOT_DOMAIN_ID")
         .ok()
         .and_then(|val| val.parse::<u16>().ok())
-        .map(|id| id.min(99)) // Limit to 0-99 to keep port numbers reasonable
+        .map(|id| id.min(99)) // Limit to 0-99 to keep domain IDs reasonable
         .unwrap_or(0)
-}
-
-/// Get the client listen port based on the domain ID.
-/// Port = BASE_PORT + DOMAIN_ID
-pub fn get_client_listen_port() -> u16 {
-    CLIENT_LISTEN_PORT_BASE + get_domain_id()
 }
 
 #[derive(Archive, Serialize, Deserialize, Clone, Debug)]
@@ -90,6 +84,7 @@ pub enum PacketKind {
         other_client_entrance: u16,
         kind: ShipKind,
         remove_rules_on_disconnect: bool,
+        domain_id: u16,
     },
     Welcome {
         addr: crate::NetworkShipAddress,
@@ -222,12 +217,11 @@ impl Sea {
 
         // task to handle join requests on udp socket
         tokio::spawn(async move {
-            let domain_id = get_domain_id();
-            let listen_port = get_client_listen_port();
-            if domain_id > 0 {
-                info!("Using domain ID {} (port {})", domain_id, listen_port);
+            let coordinator_domain_id = get_domain_id();
+            if coordinator_domain_id > 0 {
+                info!("Coordinator using domain ID {}", coordinator_domain_id);
             }
-            let udp_listener = Client::get_udp_socket(external_ip, Some(listen_port)).await;
+            let udp_listener = Client::get_udp_socket(external_ip, Some(CLIENT_LISTEN_PORT)).await;
             let rejoin_request = Packet {
                 header: Header {
                     source: ShipName::MAX,
@@ -239,6 +233,7 @@ impl Sea {
                     other_client_entrance: 0,
                     kind: Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
                     remove_rules_on_disconnect: false,
+                    domain_id: 0,
                 },
             };
             let bytes_rejoin_request = rkyv::api::high::to_bytes::<rancor::Error>(&rejoin_request)
@@ -309,6 +304,7 @@ impl Sea {
         // task to wait for each new join request
         let clients_tx_inner = clients_tx.clone();
         tokio::spawn(async move {
+            let coordinator_domain_id = get_domain_id();
             let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
             // let rat_lock_unlock = Arc::clone(&rat_lock); // currently we only allow unique names, so no unlock needed.
             loop {
@@ -320,7 +316,17 @@ impl Sea {
                             other_client_entrance: other_client_port,
                             kind: ship_kind,
                             remove_rules_on_disconnect,
+                            domain_id: client_domain_id,
                         } => {
+                            // Filter by domain ID
+                            if client_domain_id != coordinator_domain_id {
+                                debug!(
+                                    "Rejecting join request from domain {} (coordinator is domain {})",
+                                    client_domain_id, coordinator_domain_id
+                                );
+                                continue;
+                            }
+                            
                             let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
                             debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
                             {
@@ -579,29 +585,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_client_listen_port_default() {
+    fn test_domain_id_zero_by_default() {
         unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
-        assert_eq!(get_client_listen_port(), CLIENT_LISTEN_PORT_BASE);
-    }
-
-    #[test]
-    fn test_get_client_listen_port_with_domain() {
-        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "10"); }
-        assert_eq!(get_client_listen_port(), CLIENT_LISTEN_PORT_BASE + 10);
-        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
-    }
-
-    #[test]
-    fn test_different_domains_use_different_ports() {
-        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "1"); }
-        let port1 = get_client_listen_port();
-        
-        unsafe { std::env::set_var("MINOT_DOMAIN_ID", "2"); }
-        let port2 = get_client_listen_port();
-        
-        assert_ne!(port1, port2);
-        assert_eq!(port2 - port1, 1);
-        
-        unsafe { std::env::remove_var("MINOT_DOMAIN_ID"); }
+        let id = get_domain_id();
+        assert_eq!(id, 0, "Domain ID should be 0 when not set");
     }
 }

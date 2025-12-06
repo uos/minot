@@ -16,12 +16,7 @@ After adding the library to your [Cargo.toml](./installation.md#ratpub-native-pu
 
 To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
 
-Each domain uses a different UDP port for discovery, preventing nodes from different domains from connecting to each other:
-
-- Domain 0 (default): port 6594
-- Domain 1: port 6595
-- Domain 2: port 6596
-- ...up to Domain 99: port 6693
+The domain ID is included in the discovery protocol, so nodes from different domains will ignore each other even though they share the same UDP port (6594). This approach doesn't reserve multiple ports on your system.
 
 ~~~sh title="Start the Coordinator with Domain ID"
 # Default domain (0)

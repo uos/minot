@@ -44,15 +44,14 @@ MINOT_DOMAIN_ID=1 cargo run --example sub
 
 **Important:** All nodes in the same network must use the same domain ID. Nodes with different domain IDs will not discover or communicate with each other.
 
-Domain IDs range from 0-99, where:
-- Domain 0 (default) uses port 6594
-- Domain 1 uses port 6595
-- Domain 2 uses port 6596
+The domain ID is included in the discovery protocol, so all domains can share the same UDP port (6594) without reserving multiple ports.
+
+Domain IDs range from 0-99. Invalid or out-of-range values default to domain 0.
 - ...and so on
 
 ## Notes
 
 - The coordinator must be running before starting publishers or subscribers
 - All nodes automatically discover each other via UDP broadcast when using the same domain ID
-- When running with a non-default domain ID, you'll see a log message like: "Using domain ID 1 (port 6595)"
+- When running with a non-default domain ID, you'll see a log message like: "Coordinator using domain ID 1" or "Client using domain ID 1"
 - For debugging, run with `RUST_LOG=debug` to see detailed connection information

@@ -77,7 +77,7 @@ struct WindTask {
 pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rules) {
     {
         use std::net::UdpSocket;
-        let port = net::get_client_listen_port();
+        let port = net::CLIENT_LISTEN_PORT;
         let addr = format!("0.0.0.0:{}", port);
         match UdpSocket::bind(&addr) {
             Ok(socket) => {
