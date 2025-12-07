@@ -19,11 +19,11 @@ cargo install minot
 ~~~
 
 
-### VS Code Extension
+## VS Code Extension
 
 Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Select some lines and run them with `Run Selection`. Hover over the buttons to see their keybindings.
 
-### Tree-sitter Support
+## Tree-sitter Support
 
 Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
 
@@ -76,7 +76,7 @@ Use the `--embed` option to specify which components to embed when building from
 ./install.sh --yes --build --embed ratpub
 ~~~
 
-## Prebuilt Binaries (Manual)
+## Prebuilt Binaries
 
 Binaries for common system configurations are available [here](https://github.com/uos/minot/releases).
 
@@ -94,7 +94,7 @@ Archives not specific to a ROS distribution contain builds that can be used inde
 
 While the prebuilt binaries cover many common use cases, you may need to build Minot from source to tailor it to your specific needs. Building from source requires the [Rust toolchain](https://www.rust-lang.org/tools/install) to be installed on your system.
 
-## Minot bundled binary
+## All-in-one Binary
 
 To build the Minot bundled binary, there are some feature flags for embedding common network participants for convenience. A detailed list of supported flags can be found in the [Minot features definition](https://github.com/uos/minot/blob/main/minot/Cargo.toml#L45).
 
@@ -126,11 +126,11 @@ Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a
 cargo install minot --locked --features embed-ros-native
 ~~~
 
-## Standalone Coordinator
+## Coordinator
 
 Running `cargo install` as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
 
-## Standalone Wind Turbines (Bagfile Publishers)
+## Bagfile Publishers
 
 !!! tip
 
@@ -156,11 +156,9 @@ The following flavours are available for publishing bagfile messages when specif
 
 Only the C version requires a ROS2 installation at compile time.
 
-## Rats (Variable Sharing)
+## Rats
 
-Nodes in the Minot network are called Rats ([here is why](./lore.md)). The functionality is shipped as a Rust and C library.
-
-<!-- You can get the precompiled shared or static library including the header file here. -->
+Nodes in the Minot network that share data are called Rats ([here is why](./lore.md)). The functionality is shipped as a Rust and C library.
 
 ### Debian-based Linux
 
@@ -175,8 +173,6 @@ curl -s https://api.github.com/repos/uos/minot/releases/latest \
 | xargs curl -L -O
 
 sudo dpkg -i ./librat-dev_*.deb
-
-sudo apt remove librat-dev
 ~~~
 
 The package also installed a pkg-config file, which allows the following usage in CMake.
@@ -229,7 +225,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 mt_rat = "0.2.1"
 ~~~
 
-## Ratpub (Native Publish/Subscribe)
+## Ratpub
 
 Ratpub is only available for Rust. It uses Tokio for async I/O.
 For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
@@ -254,4 +250,4 @@ Learn more on how to use it in your Code by visiting the [feature page](./pubsub
 
 ## Uninstall
 
-If you want to remove every file installed from the install script, you can run `minot-uninstall`. This executes a generated shell script that saved all added files and now removes them (including itself). You can also run `minot uninstall` to uninstall minot and minot-coord. Or `cargo uninstall wind` if you installed binaries with cargo.
+If you want to remove every file installed from the install script, you can run `minot-uninstall`. This executes a generated shell script that saved all added files and now removes them (including itself). You can also run `minot uninstall` to uninstall minot and minot-coord. Or `cargo uninstall wind` if you installed binaries with cargo. The debian packages can be uninstalled with `sudo apt remove librat-dev`.
