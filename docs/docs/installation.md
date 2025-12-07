@@ -174,9 +174,9 @@ curl -s https://api.github.com/repos/uos/minot/releases/latest \
 | cut -d '"' -f 4 \
 | xargs curl -L -O
 
-sudo dpkg -i ./librat-dev_*.deb # install
+sudo dpkg -i ./librat-dev_*.deb
 
-sudo apt remove librat-dev # uninstall whenever you like
+sudo apt remove librat-dev
 ~~~
 
 The package also installed a pkg-config file, which allows the following usage in CMake.
