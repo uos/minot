@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: librat
+Description: Share and sync variables over the Minot network.
+Version: 0.2.1
+Libs: -L${libdir} -lrat
+Cflags: -I${includedir}/rat

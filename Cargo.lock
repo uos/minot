@@ -2089,7 +2089,7 @@ dependencies = [
  "mt_net",
  "mt_sea",
  "mt_wind",
- "nalgebra 0.33.2",
+ "nalgebra",
  "once_cell",
  "ratatui",
  "regex",
@@ -2180,7 +2180,7 @@ dependencies = [
  "mcap",
  "mt_mtc",
  "mt_net",
- "nalgebra 0.33.2",
+ "nalgebra",
  "rkyv 0.8.12",
  "ros2-interfaces-jazzy-rkyv",
  "ros2-interfaces-jazzy-serde",
@@ -2223,7 +2223,7 @@ dependencies = [
  "env_logger",
  "log",
  "mt_sea",
- "nalgebra 0.33.2",
+ "nalgebra",
  "rand 0.8.5",
  "rkyv 0.8.12",
  "tokio",
@@ -2239,7 +2239,7 @@ dependencies = [
  "env_logger",
  "log",
  "mt_net",
- "nalgebra 0.33.2",
+ "nalgebra",
  "pnet",
  "rand 0.8.5",
  "rkyv 0.8.12",
@@ -2260,7 +2260,7 @@ dependencies = [
  "mt_bagread",
  "mt_net",
  "mt_sea",
- "nalgebra 0.33.2",
+ "nalgebra",
  "r2r",
  "ratpub",
  "rkyv 0.8.12",
@@ -2294,22 +2294,6 @@ dependencies = [
 
 [[package]]
 name = "nalgebra"
-version = "0.33.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26aecdf64b707efd1310e3544d709c5c0ac61c13756046aaaba41be5c4f66a3b"
-dependencies = [
- "approx",
- "matrixmultiply",
- "nalgebra-macros",
- "num-complex",
- "num-rational",
- "num-traits",
- "simba",
- "typenum",
-]
-
-[[package]]
-name = "nalgebra"
 version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4d5b3eff5cd580f93da45e64715e8c20a3996342f1e466599cf7a267a0c2f5f"
@@ -2332,6 +2316,7 @@ dependencies = [
  "glam 0.29.3",
  "glam 0.30.9",
  "matrixmultiply",
+ "nalgebra-macros",
  "num-complex",
  "num-rational",
  "num-traits",
@@ -2342,9 +2327,9 @@ dependencies = [
 
 [[package]]
 name = "nalgebra-macros"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "254a5372af8fc138e36684761d3c0cdb758a4410e938babcff1c860ce14ddbfc"
+checksum = "973e7178a678cfd059ccec50887658d482ce16b0aa9da3888ddeab5cd5eb4889"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3135,7 +3120,7 @@ dependencies = [
  "log",
  "mt_net",
  "mt_sea",
- "nalgebra 0.33.2",
+ "nalgebra",
  "rkyv 0.8.12",
  "ros2-interfaces-jazzy-rkyv",
  "tokio",
@@ -3414,7 +3399,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d4b4f4535d869b09a91ddc6eeacc16296ae8f5ddf1fb2ccf5c4b8b0f3ec64f"
 dependencies = [
- "nalgebra 0.34.1",
+ "nalgebra",
  "ros2-interfaces-jazzy-serde",
  "serde",
 ]

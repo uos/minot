@@ -172,7 +172,7 @@ ${BOLD}OPTIONS:${NC}
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
-    ratpub        Ratpub publisher
+    ratpub        Ratpub publisher (default)
     ros           Both ROS1 and ROS2-C (needs ROS2 sourced)
     ros1          ROS1 publisher (native, no system dependencies)
     ros2          ROS2 publisher with RustDDS (native, no system dependencies)

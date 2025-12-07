@@ -1,3 +1,5 @@
+Minot consists libraries and binaries, some with different compile flags for many use cases. A lot of ways to install various part of Minot are described on this page.
+
 ## Install Script (Recommended)
 
 For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
@@ -25,7 +27,7 @@ Search for "Minot" in your editor an install the package. Running it will requir
 
 Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
 
-### Advanced Installation
+## Advanced
 
 You can also download and run the install script manually for more control.
 Use `--help` to see all available configurations of Minot.
@@ -55,7 +57,7 @@ Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed 
 Use the `--embed` option to specify which components to embed when building from source:
 
 - `coord` - Embedded coordinator (default)
-- `ratpub` - Ratpub publisher
+- `ratpub` - Ratpub publisher (default)
 - `ros` - Both ROS1 and ROS2-C (needs ROS2 sourced)
 - `ros1` - ROS1 publisher (native, no system dependencies)
 - `ros2` - ROS2 publisher with RustDDS (native, no system dependencies)
@@ -107,8 +109,7 @@ With default settings, Minot builds with an integrated coordinator. When running
 **To help you get up and running quickly, here are some popular configurations.**
 
 ~~~bash title="(Recommended) With ROS2 publisher (+ any-type, needs sourced ROS2)"
-cargo install minot --locked \
-  --features embed-ros2-c
+cargo install minot --locked --features embed-ros2-c
 ~~~
 
 ---
@@ -122,8 +123,7 @@ cargo install minot --locked
 Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the input is always a ROS2 Bagfile, only mapped types can be published (no any-type).
 
 ~~~bash title="With ROS1 and ROS2 publishers"
-cargo install minot --locked \
-  --features embed-ros-native
+cargo install minot --locked --features embed-ros-native
 ~~~
 
 ## Standalone Coordinator
@@ -144,8 +144,7 @@ Standalone publishers live inside the `wind` module. You can compile/install the
 With `--all-features`, you'll get all binaries but you need to have ROS2 sourced.
 
 ~~~bash title="Standalone Publishers (needs sourced ROS2)"
-cargo install mt_wind --locked \
-  --all-features
+cargo install mt_wind --locked --all-features
 ~~~
 
 The following flavours are available for publishing bagfile messages when specifying the respective feature:
@@ -163,15 +162,50 @@ Nodes in the Minot network are called Rats ([here is why](./lore.md)). The funct
 
 <!-- You can get the precompiled shared or static library including the header file here. -->
 
-You need to build the library from source. It generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
+### Debian-based Linux
+
+There are prebuilt debian packages for the `rat` library.
+
+~~~bash title="Download the .deb"
+curl -s https://api.github.com/repos/uos/minot/releases/latest \
+| grep "browser_download_url" \
+| grep ".deb" \
+| grep "$(dpkg --print-architecture)" \
+| cut -d '"' -f 4 \
+| xargs curl -L -O
+
+sudo dpkg -i ./librat-dev_*.deb # install
+
+sudo apt remove librat-dev # uninstall whenever you like
+~~~
+
+The package also installed a pkg-config file, which allows the following usage in CMake.
+
+~~~cmake title="Example CMake"
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(RAT REQUIRED librat)
+
+add_executable(my_app main.c)
+target_include_directories(my_app PRIVATE ${RAT_INCLUDE_DIRS})
+target_link_libraries(myfind_package(PkgConfig REQUIRED)
+pkg_check_modules(RAT REQUIRED librat)
+
+add_executable(my_app main.c)
+target_include_directories(my_app PRIVATE ${RAT_INCLUDE_DIRS})
+target_link_libraries(my_app PRIVATE ${RAT_LIBRARIES})
+~~~
+
+### From source
+
+Building from source generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
 
 ~~~bash title="Build librat from source"
 git clone https://github.com/uos/minot
 cd minot
-cargo build --package rat --release
+cargo build --package mt_rat --release
 ~~~
 
-A typical system-wide installation is to copy the libraries to your linker path. Alternatively, you may change the link path and include search paths in your build system.
+A typical system-wide installation is done by copying the libraries to your linker path. Alternatively, you may change the link path and include search paths in your build system.
 
 ~~~bash
 sudo cp ./target/release/librat.* /usr/local/lib/
