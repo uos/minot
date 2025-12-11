@@ -145,6 +145,7 @@ pub async fn run_dyn_wind(
     };
     let mut cloud_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
+    let mut odom_publishers = HashMap::new();
 
     let mut wind_receiver = wind(&wind_name).await?;
 
@@ -283,6 +284,67 @@ pub async fn run_dyn_wind(
                     error!(
                         "Any-Types are not supported for ROS1 due to different message encodings."
                     )
+                }
+                mt_net::SensorTypeMapped::Odometry(odom_msg) => {
+                    let mut existing_pubber = odom_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        let pubber = nh
+                            .advertise::<nav_msgs::Odometry>(&data.topic, 10, false)
+                            .await?;
+                        odom_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            odom_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    let msg = nav_msgs::Odometry {
+                        header: std_msgs::Header {
+                            seq: 0,
+                            stamp: Time {
+                                secs: odom_msg.header.stamp.sec,
+                                nsecs: i32::try_from(odom_msg.header.stamp.nanosec)?,
+                            },
+                            frame_id: odom_msg.header.frame_id,
+                        },
+                        child_frame_id: odom_msg.child_frame_id,
+                        pose: geometry_msgs::PoseWithCovariance {
+                            pose: geometry_msgs::Pose {
+                                position: geometry_msgs::Point {
+                                    x: odom_msg.pose.pose.position.x,
+                                    y: odom_msg.pose.pose.position.y,
+                                    z: odom_msg.pose.pose.position.z,
+                                },
+                                orientation: geometry_msgs::Quaternion {
+                                    x: odom_msg.pose.pose.orientation.x,
+                                    y: odom_msg.pose.pose.orientation.y,
+                                    z: odom_msg.pose.pose.orientation.z,
+                                    w: odom_msg.pose.pose.orientation.w,
+                                },
+                            },
+                            covariance: odom_msg.pose.covariance,
+                        },
+                        twist: geometry_msgs::TwistWithCovariance {
+                            twist: geometry_msgs::Twist {
+                                linear: geometry_msgs::Vector3 {
+                                    x: odom_msg.twist.twist.linear.x,
+                                    y: odom_msg.twist.twist.linear.y,
+                                    z: odom_msg.twist.twist.linear.z,
+                                },
+                                angular: geometry_msgs::Vector3 {
+                                    x: odom_msg.twist.twist.angular.x,
+                                    y: odom_msg.twist.twist.angular.y,
+                                    z: odom_msg.twist.twist.angular.z,
+                                },
+                            },
+                            covariance: odom_msg.twist.covariance,
+                        },
+                    };
+
+                    pubber.publish(&msg).await?;
+                    debug!("published odom");
                 }
             }
         }

@@ -137,6 +137,7 @@ pub async fn run_dyn_wind(
 
     let mut cloud_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
+    let mut odom_publishers = HashMap::new();
 
     let mut wind_receiver = wind(wind_name).await?;
 
@@ -218,6 +219,33 @@ pub async fn run_dyn_wind(
                 }
                 mt_net::SensorTypeMapped::Any(_) => {
                     error!("Any-Types are not supported for RustDDS due to API incompatibilities.")
+                }
+                mt_net::SensorTypeMapped::Odometry(odom_msg) => {
+                    let mut existing_pubber = odom_publishers.get(&topic_parse);
+                    if existing_pubber.is_none() {
+                        let pubber = node
+                            .create_publisher::<ros2_interfaces_jazzy_serde::nav_msgs::msg::Odometry>(
+                                &node.create_topic(&wanted_topic, pub_type, &qos).unwrap(),
+                                None,
+                            )
+                            .unwrap();
+                        odom_publishers.insert(topic_parse.clone(), pubber);
+                        existing_pubber = Some(
+                            odom_publishers
+                                .get(&topic_parse)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    let odom_msg = unsafe {
+                        std::mem::transmute::<ros2_interfaces_jazzy_rkyv::nav_msgs::msg::Odometry, _>(
+                            odom_msg,
+                        )
+                    };
+
+                    pubber.async_publish(odom_msg).await?;
+                    debug!("published odometry");
                 }
             }
         }

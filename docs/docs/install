@@ -163,20 +163,20 @@ ${BOLD}OPTIONS:${NC}
     -h, --help                Show this help message
     -v, --version VERSION     Install specific version (default: latest)
     -d, --dir DIR             Installation directory (default: ~/.local/bin)
-    -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, ratpub, ros, ros-native)
+    -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, ratpub)
     -f, --features FEATURES   Advanced: Raw cargo features (comma-separated)
     -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (jazzy, humble). Requires ROS2 sourced.
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
-    -n, --no-default-embed    Do not enable the default 'coord' and 'ratpub' embed when building
+    -n, --no-default-embed    Do not enable the default 'coord' embed when building
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
-    ratpub        Ratpub publisher (default)
-    ros           Both ROS1 and ROS2-C (needs ROS2 sourced)
-    ros1          ROS1 publisher (native, no system dependencies)
-    ros2          ROS2 publisher with RustDDS (native, no system dependencies)
-    ros-native    Both ROS1 and ROS2 native (no system dependencies)
+    ratpub        Ratpub publisher
+    ros2-c        ROS2 publisher using the C bindings of rclc (needs sourced ROS)
+    ros2-c-humble ROS2 publisher with specific handling of Humble using the C bindings of rclc (needs sourced ROS Humble)
+    ros1-native   ROS1 publisher (native, no system dependencies)
+    ros2-native   ROS2 publisher with RustDDS (native, no system dependencies)
 
 ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Install latest version and use prebuilt binaries if available${NC}
@@ -509,11 +509,10 @@ embed_to_features() {
         case "$comp" in
             coord) feat="embed-coord" ;;
             ratpub) feat="embed-ratpub" ;;
-            ros) feat="embed-ros" ;;
-            ros1) feat="embed-ros1-native" ;;
-            ros2) feat="embed-ros2-native" ;;
-            "ros2-c"|"ros2_c") feat="embed-ros2-c" ;;
-            ros-native) feat="embed-ros-native" ;;
+            ros1-native) feat="embed-ros1-native" ;;
+            ros2-native) feat="embed-ros2-native" ;;
+            "ros2-c-humble"|"ros2_c_humble"|"ros2c-humble"|"ros2c_humble") feat="embed-ros2-c-humble" ;;
+            "ros2-c"|"ros2_c"|"ros2c") feat="embed-ros2-c" ;;
             "") continue ;;
             *)
                 warn "Unknown embed component: $comp; skipping"
@@ -945,20 +944,6 @@ build_from_source() {
                     BUILD_FEATURES="embed-coord,${BUILD_FEATURES}"
                 else
                     BUILD_FEATURES="embed-coord"
-                fi
-                ;;
-        esac
-
-        case ",$BUILD_FEATURES," in
-            *,embed-ratpub,*)
-                # already present, do nothing
-                ;;
-            *)
-                # Add embed-ratpub to the features
-                if [ -n "$BUILD_FEATURES" ]; then
-                    BUILD_FEATURES="embed-ratpub,${BUILD_FEATURES}"
-                else
-                    BUILD_FEATURES="embed-ratpub"
                 fi
                 ;;
         esac
@@ -1488,10 +1473,8 @@ main() {
     OS_NAME=$(detect_os)
     ARCH_NAME=$(detect_arch)
     
-    PREFER_GNU=0
-    if [ -n "$ROS_DISTRO" ]; then
-        PREFER_GNU=1
-    fi
+    # musl does not have the shared object of rat, so make it available but not the default
+    PREFER_GNU=1
     
     TARGET=$(get_target_triple "$OS_NAME" "$ARCH_NAME" "$PREFER_GNU" ) || true
 
@@ -1548,25 +1531,16 @@ main() {
                     fi
                     ;;
             esac
-
-             case ",$REQUESTED_FEATURES," in
-                *,embed-ratpub,*) ;;
-                *)
-                    if [ -n "$REQUESTED_FEATURES" ]; then
-                        REQUESTED_FEATURES="embed-ratpub,${REQUESTED_FEATURES}"
-                    else
-                        REQUESTED_FEATURES="embed-ratpub"
-                    fi
-                    ;;
-            esac
         fi
 
         if [ -n "$ROS_DISTRO" ]; then
+
             ROS_DISTRO_LC=$(echo "$ROS_DISTRO" | tr '[:upper:]' '[:lower:]')
-            if [ "$ROS_DISTRO_LC" = "jazzy" ]; then
-                ROS2_C_FEATURE="embed-ros2-c"
-            else
-                ROS2_C_FEATURE="embed-ros2-c-${ROS_DISTRO_LC}"
+            ROS2_C_FEATURE="embed-ros2-c"
+
+            if [ "$ROS_DISTRO_LC" = "humble" ]; then
+                # Wenn ja, fügen wir "-humble" hinzu
+                ROS2_C_FEATURE="${ROS2_C_FEATURE}-${ROS_DISTRO_LC}"
             fi
             
             case ",$REQUESTED_FEATURES," in

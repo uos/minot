@@ -49,7 +49,7 @@ mkdir minot-bagfile-demo && cd minot-bagfile-demo
 source /opt/ros/jazzy/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash
 
 # Get Minot with ROS2 publisher
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh --ros-distro $ROS_DISTRO
+curl -sSLf https://uos.github.io/minot/install | sh -s -- --ros-distro $ROS_DISTRO
 
 # Get a Bagfile saved with mcap storage
 curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
@@ -139,7 +139,7 @@ For these cases, the native publisher and subscriber Rust library *ratpub* can h
 git clone https://github.com/stelzo/ratpub-demo && cd ratpub-demo
 
 # Install the Coordinator
-curl -sSf https://raw.githubusercontent.com/uos/minot/main/install.sh | sh
+curl -sSLf https://uos.github.io/minot/install | sh
 
 # Run it
 minot-coord

@@ -46,6 +46,7 @@ pub async fn run_dyn_wind(
     let mut wind_receiver = wind_receiver.await??;
 
     let mut cloud_publishers = HashMap::new();
+    let mut odom_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
     if let Err(_) = ready.send(()) {
         warn!("ratpub could not signal to be ready to handle requests");
@@ -63,7 +64,6 @@ pub async fn run_dyn_wind(
                                 .get(&data.topic)
                                 .expect("Just inserted the line before"),
                         );
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // TODO rm
                     }
                     let pubber =
                         existing_pubber.expect("Should be inserted manually if not exists.");
@@ -80,7 +80,6 @@ pub async fn run_dyn_wind(
                                 .get(&data.topic)
                                 .expect("Just inserted the line before"),
                         );
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // TODO rm
                     }
                     let pubber =
                         existing_pubber.expect("Should be inserted manually if not exists.");
@@ -91,6 +90,22 @@ pub async fn run_dyn_wind(
                     error!(
                         "Any-Types are not supported for ratpub due to different message encodings."
                     )
+                }
+                SensorTypeMapped::Odometry(odom_msg) => {
+                    let mut existing_pubber = odom_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        odom_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            odom_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    pubber.publish(&odom_msg).await?;
+                    debug!("published odometry");
                 }
             }
         }

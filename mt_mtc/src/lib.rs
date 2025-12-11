@@ -119,6 +119,7 @@ fn rm_first_and_last<'a>(lex: &mut Lexer<'a, Token<'a>>) -> &'a str {
 pub enum SensorType {
     Lidar,
     Imu,
+    Odom,
     Mixed,
     Any,
 }
@@ -130,6 +131,7 @@ impl FromStr for SensorType {
         Ok(match s.to_lowercase().as_str() {
             "cloud" => Self::Lidar,
             "imu" => Self::Imu,
+            "odom" => Self::Odom,
             "mixed" => Self::Mixed,
             _ => Self::Any,
         })
@@ -138,14 +140,18 @@ impl FromStr for SensorType {
 
 pub const POINTCLOUD_ROS2_TYPE: &str = "sensor_msgs/msg/PointCloud2";
 pub const IMU_ROS2_TYPE: &str = "sensor_msgs/msg/Imu";
+pub const ODOM_ROS2_TYPE: &str = "nav_msgs/msg/Odometry";
 
 impl SensorType {
     pub fn is(&self, query: &str) -> bool {
         match self {
             SensorType::Lidar => query == POINTCLOUD_ROS2_TYPE,
             SensorType::Imu => query == IMU_ROS2_TYPE,
-            SensorType::Mixed => query == POINTCLOUD_ROS2_TYPE || query == IMU_ROS2_TYPE,
+            SensorType::Mixed => {
+                query == POINTCLOUD_ROS2_TYPE || query == IMU_ROS2_TYPE || query == ODOM_ROS2_TYPE
+            }
             SensorType::Any => true,
+            SensorType::Odom => query == ODOM_ROS2_TYPE,
         }
     }
 }

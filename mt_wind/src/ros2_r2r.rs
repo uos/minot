@@ -8,7 +8,9 @@ use mt_bagread::qos::{
 use r2r::{
     WrappedTypesupport,
     builtin_interfaces::msg::Time,
-    geometry_msgs::msg::{Quaternion, Vector3},
+    geometry_msgs::msg::{
+        Point, Pose, PoseWithCovariance, Quaternion, Twist, TwistWithCovariance, Vector3,
+    },
     qos::{DurabilityPolicy, HistoryPolicy, LivelinessPolicy, ReliabilityPolicy},
     sensor_msgs::msg::PointField,
     std_msgs::msg::Header,
@@ -19,6 +21,7 @@ use log::{debug, error, info, warn};
 use mt_sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use r2r::nav_msgs::msg::Odometry;
 use r2r::sensor_msgs::msg::{Imu, PointCloud2};
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
@@ -261,6 +264,56 @@ pub async fn run_dyn_wind(
                 mt_net::SensorTypeMapped::Any(raw_data) => {
                     pubber.publish_raw(&raw_data)?;
                     debug!("published raw");
+                }
+                mt_net::SensorTypeMapped::Odometry(odometry) => {
+                    let native_t = Odometry {
+                        header: Header {
+                            stamp: Time {
+                                sec: odometry.header.stamp.sec,
+                                nanosec: odometry.header.stamp.nanosec,
+                            },
+                            frame_id: odometry.header.frame_id,
+                        },
+                        child_frame_id: odometry.child_frame_id,
+                        pose: PoseWithCovariance {
+                            pose: Pose {
+                                position: Point {
+                                    x: odometry.pose.pose.position.x,
+                                    y: odometry.pose.pose.position.y,
+                                    z: odometry.pose.pose.position.z,
+                                },
+                                orientation: Quaternion {
+                                    x: odometry.pose.pose.orientation.x,
+                                    y: odometry.pose.pose.orientation.y,
+                                    z: odometry.pose.pose.orientation.z,
+                                    w: odometry.pose.pose.orientation.w,
+                                },
+                            },
+                            covariance: odometry.pose.covariance.to_vec(),
+                        },
+                        twist: TwistWithCovariance {
+                            twist: Twist {
+                                linear: Vector3 {
+                                    x: odometry.twist.twist.linear.x,
+                                    y: odometry.twist.twist.linear.y,
+                                    z: odometry.twist.twist.linear.z,
+                                },
+                                angular: Vector3 {
+                                    x: odometry.twist.twist.angular.x,
+                                    y: odometry.twist.twist.angular.y,
+                                    z: odometry.twist.twist.angular.z,
+                                },
+                            },
+                            covariance: odometry.twist.covariance.to_vec(),
+                        },
+                    };
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding CDR")?;
+
+                    pubber.publish_raw(&raw)?;
+
+                    debug!("published odom");
                 }
             }
         }

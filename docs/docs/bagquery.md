@@ -133,7 +133,7 @@ Now you can jump to sections with <kbd>PageDown</kbd>/<kbd>PageUp</kbd> in the M
       yourchosenname.{
         _topic = <Path>
         _short = <String>
-        _type = Cloud|Imu|Any
+        _type = Cloud|Imu|Odom|Mixed|Any
       }
   
       yournexttopic.{
@@ -152,7 +152,12 @@ When debugging something with a lot of iterations, it is often convenient to abb
 
 The field `_type` is of special interest for Minot when querying. It matches the given type to the message at the current cursor position. `_type` currently can be one of **Cloud**, **Imu** or **Any**. They can easily be extended to more messages as needed in the source code. A type is necessary when you want to publish messages outside of ROS2 installations.
 
-*Cloud* relates to `sensor_msgs/msg/PointCloud2` and *Imu* to `sensor_msgs/msg/Imu`. *Any* will match every message. In the [installation](./installation.md) section, this behaviour is defined as *with or without any-type*. By specifying an exisiting type, Minot can use it outside of ROS2 land. For example in ROS1 or the [Native Pub/Sub](./pubsub.md) library.
+- *Cloud* == `sensor_msgs/msg/PointCloud2`
+- *Imu* == `sensor_msgs/msg/Imu`
+- *Odom* == `nav_msgs/msg/Odometry`
+- *Mixed* == Any of the above
+
+The *Any* type will match every message type - regardless of existing mappings. In the [installation](./installation.md) section, this behaviour is defined as *with or without any-type*. By specifying an exisiting type, Minot can use it outside of ROS2 land. For example in ROS1 or the [Native Pub/Sub](./pubsub.md) library.
 
 Specifying `_topic` allows for more detailed message matching. When you got multiple Imu topics in your Bagfile, this parameter becomes essential.
 

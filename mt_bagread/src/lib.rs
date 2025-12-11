@@ -8,10 +8,10 @@ use mcap::Summary;
 use mcap::records::{nanos_to_system_time, system_time_to_nanos};
 use mcap::sans_io::{IndexedReadEvent, IndexedReader, IndexedReaderOptions, SummaryReadEvent};
 use mt_mtc::{
-    AbsTimeRange, AnySensor, IMU_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount, PlayKindUnitedPass3,
-    SensorIdentification, SensorType,
+    AbsTimeRange, AnySensor, IMU_ROS2_TYPE, ODOM_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount,
+    PlayKindUnitedPass3, SensorIdentification, SensorType,
 };
-use mt_net::{BagMsg, Qos, QosProfile, SensorTypeMapped};
+use mt_net::{BagMsg, Odometry, Qos, QosProfile, SensorTypeMapped};
 pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
@@ -387,8 +387,8 @@ where
                         SensorType::Mixed => match topic_meta.topic_type.as_str() {
                             POINTCLOUD_ROS2_TYPE => {
                                 let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2 =
-                                    cdr::deserialize(data)
-                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                                        cdr::deserialize(data)
+                                                            .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                                 let data: PointCloud2 = unsafe { std::mem::transmute(dec) };
 
                                 SensorTypeMapped::Lidar(data)
@@ -401,9 +401,25 @@ where
 
                                 SensorTypeMapped::Imu(data)
                             }
+                            ODOM_ROS2_TYPE => {
+                                let dec: ros2_interfaces_jazzy_serde::nav_msgs::msg::Odometry =
+                                    cdr::deserialize(data)
+                                        .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                                let data: Odometry = unsafe { std::mem::transmute(dec) };
+
+                                SensorTypeMapped::Odometry(data)
+                            }
                             _ => SensorTypeMapped::Any(data.to_vec()),
                         },
                         SensorType::Any => SensorTypeMapped::Any(data.to_vec()),
+                        SensorType::Odom => {
+                            let dec: ros2_interfaces_jazzy_serde::nav_msgs::msg::Odometry =
+                                cdr::deserialize(data)
+                                    .map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                            let data: Odometry = unsafe { std::mem::transmute(dec) };
+
+                            SensorTypeMapped::Odometry(data)
+                        }
                     };
                     let qos = topic_meta
                         .offered_qos_profiles

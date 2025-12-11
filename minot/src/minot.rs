@@ -449,10 +449,13 @@ fn get_compiled_features() -> Vec<String> {
     features.push("ratpub".to_string());
 
     #[cfg(feature = "embed-ros1-turbine")]
-    features.push("ros1".to_string());
+    features.push("ros1-native".to_string());
 
     #[cfg(feature = "embed-ros2-turbine")]
-    features.push("ros2".to_string());
+    features.push("ros2-native".to_string());
+
+    #[cfg(feature = "embed-ros2-c-humble")]
+    features.push("ros2-c-humble".to_string());
 
     #[cfg(feature = "embed-ros2-c-turbine")]
     features.push("ros2-c".to_string());
@@ -476,13 +479,13 @@ fn has_feature(feature_name: &str) -> bool {
             #[cfg(not(feature = "embed-ratpub-turbine"))]
             return false;
         }
-        "ros1" => {
+        "ros1-native" => {
             #[cfg(feature = "embed-ros1-turbine")]
             return true;
             #[cfg(not(feature = "embed-ros1-turbine"))]
             return false;
         }
-        "ros2" => {
+        "ros2-native" => {
             #[cfg(feature = "embed-ros2-turbine")]
             return true;
             #[cfg(not(feature = "embed-ros2-turbine"))]
@@ -492,6 +495,12 @@ fn has_feature(feature_name: &str) -> bool {
             #[cfg(feature = "embed-ros2-c-turbine")]
             return true;
             #[cfg(not(feature = "embed-ros2-c-turbine"))]
+            return false;
+        }
+        "ros2-c-humble" | "ros2_c_humble" => {
+            #[cfg(feature = "embed-ros2-c-humble")]
+            return true;
+            #[cfg(not(feature = "embed-ros2-c-humble"))]
             return false;
         }
         _ => false,

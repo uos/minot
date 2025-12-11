@@ -49,7 +49,7 @@ path = "src/coord.rs"
 
 # Note: All following features only embed existing nodes that can be built and run separately through the network.
 [features]
-default = ["embed-coord", "embed-ratpub"]
+default = ["embed-coord"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
 embed-ros2-c = ["embed-ros2-c-turbine"]

@@ -5,7 +5,7 @@ Minot consists libraries and binaries, some with different compile flags for man
 For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
-curl -sSLf https://install.steado.tech/minot | sh
+curl -sSLf https://uos.github.io/minot/install | sh
 ~~~
 
 For ROS support, make sure to have your ROS environment sourced before running the script.
@@ -33,7 +33,7 @@ You can also download and run the install script manually for more control.
 Use `--help` to see all available configurations of Minot.
 
 ~~~bash
-wget https://raw.githubusercontent.com/uos/minot/main/install.sh
+wget https://uos.github.io/minot/install -o install.sh
 chmod +x install.sh
 ./install.sh --help
 ~~~
@@ -57,11 +57,11 @@ Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed 
 Use the `--embed` option to specify which components to embed when building from source:
 
 - `coord` - Embedded coordinator (default)
-- `ratpub` - Ratpub publisher (default)
-- `ros` - Both ROS1 and ROS2-C (needs ROS2 sourced)
-- `ros1` - ROS1 publisher (native, no system dependencies)
-- `ros2` - ROS2 publisher with RustDDS (native, no system dependencies)
-- `ros-native` - Both ROS1 and ROS2 native (no system dependencies)
+- `ratpub` - Ratpub publisher
+- `ros1-native` - ROS1 publisher (native, no system dependencies)
+- `ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
+- `ros2-c` - Use the sourced rclc and build bindings around it. Needs to have ROS2 installed and sourced
+- `ros2-c-humble` - Use the sourced Humble rclc and build bindings around it. Needs to have ROS2 installed and sourced. Handles Humble specific QoS.
 
 **Common usage examples:**
 
@@ -114,7 +114,7 @@ cargo install minot --locked --features embed-ros2-c
 
 ---
 
-This next version does not need any ROS1 or ROS2 installation to compile. It tries to fallback to Ratpub for Pub/Sub as default but it also finds other standalone wind nodes in the network and publishes to them if you query a Bagfile:
+This next version does not need any ROS1 or ROS2 installation to compile. It tries to find other standalone Minot nodes in the network and publishes to them if you query a Bagfile:
 
 ~~~bash title="Minimal with embedded Coordinator"
 cargo install minot --locked
@@ -123,7 +123,7 @@ cargo install minot --locked
 Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the input is always a ROS2 Bagfile, only mapped types can be published (no any-type).
 
 ~~~bash title="With ROS1 and ROS2 publishers"
-cargo install minot --locked --features embed-ros-native
+cargo install minot --locked --features embed-ros1-native,embed-ros2-native
 ~~~
 
 ## Coordinator
@@ -222,7 +222,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.2.1"
+mt_rat = "0.3.0"
 ~~~
 
 ## Ratpub
@@ -232,7 +232,7 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.2.1"
+ratpub = "0.3.0"
 tokio = { version = "1", features = ["full"] }
 ~~~
 
