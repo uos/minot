@@ -14,7 +14,7 @@ Visit the [Documentation](https://uos.github.io/minot) to find out more.
 For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
-curl -sSLf https://install.steado.tech/minot | sh
+curl -sSLf https://uos.github.io/minot/install | sh
 ~~~
 
 For ROS support, make sure to have your ROS environment sourced before running the script.
