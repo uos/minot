@@ -1,6 +1,4 @@
-#![allow(clippy::multiple_crate_versions)] // nalgebra 0.34 uses many glam versions, fix needs https://github.com/rust-lang/cargo/issues/10801
-
-use clap::{Parser, Subcommand, command};
+use clap::{Parser, Subcommand};
 mod runner;
 use log::{error, info, warn};
 use mt_mtc::{Rhs, Val};
@@ -438,6 +436,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     tui.exit()
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn get_compiled_features() -> Vec<String> {
     #[allow(unused_mut)]
     let mut features = Vec::new();
@@ -660,11 +659,8 @@ impl ServerResponse {
 }
 
 struct StdioLogger {
-    stdout: std::sync::Arc<std::sync::Mutex<io::StdoutLock<'static>>>,
+    sender: std::sync::mpsc::Sender<String>,
 }
-
-unsafe impl Send for StdioLogger {}
-unsafe impl Sync for StdioLogger {}
 
 impl log::Log for StdioLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
@@ -685,42 +681,37 @@ impl log::Log for StdioLogger {
             target: record.target().to_string(),
         };
 
-        let _ = write_json_message(&self.stdout, &log_message);
+        if let Ok(json) = serde_json::to_string(&log_message) {
+            let _ = self.sender.send(json);
+        }
     }
 
     fn flush(&self) {
-        if let Ok(mut handle) = self.stdout.lock() {
-            let _ = handle.flush();
-        }
+        // Logging thread flushes on each write
     }
 }
 
 fn init_stdio_logger(
-    stdout_handle: std::sync::Arc<std::sync::Mutex<io::StdoutLock<'static>>>,
+    sender: std::sync::mpsc::Sender<String>,
     level: log::LevelFilter,
 ) -> Result<(), log::SetLoggerError> {
-    let logger = StdioLogger {
-        stdout: stdout_handle,
-    };
+    let logger = StdioLogger { sender };
     log::set_boxed_logger(Box::new(logger))?;
     log::set_max_level(level);
     Ok(())
 }
 
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
-    let stdout = io::stdout();
-    let stdout_lock = stdout.lock();
-    let stdout_handle = std::sync::Arc::new(std::sync::Mutex::new(stdout_lock));
-    init_stdio_logger(
-        std::sync::Arc::clone(&stdout_handle),
-        log::LevelFilter::Info,
-    )
-    .expect("Failed to initialize logger.");
+    // Create a dedicated logger thread and channel for serialized JSON messages
+    let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+    start_logging_thread(log_rx);
+    init_stdio_logger(log_tx.clone(), log::LevelFilter::Info)
+        .expect("Failed to initialize logger.");
 
     let mut app_state = None;
 
     let ready_message = ServerMessage::ServerReady;
-    if write_json_message(&stdout_handle, &ready_message).is_err() {
+    if write_json_message(&log_tx, &ready_message).is_err() {
         eprintln!(
             "[Server CRITICAL] Failed to write initial ServerReady message to stdout. Exiting."
         );
@@ -751,7 +742,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let response = match serde_json::from_str::<ClientMessage>(&input) {
+        let response = match serde_json::from_str::<ClientMessage>(input) {
             Ok(client_message) => {
                 match (&mut app_state, client_message) {
                     (
@@ -1189,7 +1180,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         };
         let message_to_send = ServerMessage::CommandResponse(response);
 
-        if write_json_message(&stdout_handle, &message_to_send).is_err() {
+        if write_json_message(&log_tx, &message_to_send).is_err() {
             eprintln!("[Server CRITICAL] Failed to write to stdout. Exiting.");
             break;
         }
@@ -1296,13 +1287,13 @@ async fn handle_command(command: TuiCommand, app: &mut App) -> ServerResponse {
                 }
             }
 
-            ServerResponse::ok(Some(format!("Enqueued compilation.",)))
+            ServerResponse::ok(Some("Enqueued compilation.".to_string()))
         }
     }
 }
 
 fn write_json_message(
-    stdout: &std::sync::Arc<std::sync::Mutex<io::StdoutLock<'static>>>,
+    sender: &std::sync::mpsc::Sender<String>,
     message: &ServerMessage,
 ) -> io::Result<()> {
     let response_json = match serde_json::to_string(message) {
@@ -1320,19 +1311,28 @@ fn write_json_message(
         }
     };
 
-    // Lock the mutex to get exclusive access to stdout
-    let mut handle = stdout.lock().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("Stdout mutex was poisoned: {}", e),
-        )
-    })?;
-
-    handle.write_all(response_json.as_bytes())?;
-    handle.write_all(b"\n")?;
-    handle.flush()?; // CRITICAL: Flush to send immediately
+    sender
+        .send(response_json)
+        .map_err(|_| std::io::Error::other("Logger thread has stopped"))?;
 
     Ok(())
+}
+
+fn start_logging_thread(rx: std::sync::mpsc::Receiver<String>) {
+    std::thread::Builder::new()
+        .name("minot-logger".to_string())
+        .spawn(move || {
+            while let Ok(line) = rx.recv() {
+                if line.is_empty() {
+                    continue;
+                }
+                let mut handle = io::stdout().lock();
+                let _ = handle.write_all(line.as_bytes());
+                let _ = handle.write_all(b"\n");
+                let _ = handle.flush();
+            }
+        })
+        .expect("Failed to spawn logger thread");
 }
 
 #[tokio::main(flavor = "multi_thread")]

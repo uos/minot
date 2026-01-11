@@ -63,7 +63,8 @@ pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<
 
     // If the provided minot_path is the default "minot" (no path), prefer the current running
     // executable so headless launched from the built binary uses the same version.
-    let spawn_path = if minot_path == PathBuf::from("minot") {
+    // #[allow(clippy::cmp_owned)] // clippy warning would be an error in 1.85
+    let spawn_path = if minot_path.to_string_lossy() == "minot" {
         std::env::current_exe().unwrap_or(minot_path.clone())
     } else {
         minot_path.clone()

@@ -48,7 +48,7 @@ pub async fn run_dyn_wind(
     let mut cloud_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
-    if let Err(_) = ready.send(()) {
+    if ready.send(()).is_err() {
         warn!("ratpub could not signal to be ready to handle requests");
     }
     while let Some(wind_data) = wind_receiver.recv().await {

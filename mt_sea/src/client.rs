@@ -39,10 +39,9 @@ impl Manager for TcpManager {
     fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
         let addr = self.addr.clone();
         Box::pin(async move {
-            let stream = tokio::net::TcpStream::connect(addr.clone())
+            tokio::net::TcpStream::connect(addr.clone())
                 .await
-                .map_err(|e| anyhow!("Failed to connect to {}: {}", addr, e));
-            stream
+                .map_err(|e| anyhow!("Failed to connect to {}: {}", addr, e))
         })
     }
 
@@ -60,13 +59,12 @@ impl Manager for TcpManager {
 
 type TcpPool = deadpool::managed::Pool<TcpManager>;
 
+pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>;
+pub type RecvBuffer = HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>;
+
 #[derive(Debug)]
 pub struct Client {
-    pub coordinator_receive: std::sync::Arc<
-        std::sync::RwLock<
-            Option<tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>>,
-        >,
-    >,
+    pub coordinator_receive: std::sync::Arc<std::sync::RwLock<Option<CoordSender>>>,
     tcp_port: u16,
     pub coordinator_send:
         std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<Packet>>>>,
@@ -76,8 +74,7 @@ pub struct Client {
     connected: tokio::sync::mpsc::Receiver<bool>,
     rm_rules_on_disconnect: bool,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
-    pub raw_recv_buff:
-        std::sync::Arc<std::sync::RwLock<HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>>>,
+    pub raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
     pools: std::sync::Arc<tokio::sync::Mutex<HashMap<String, TcpPool>>>,
 }
 
@@ -96,7 +93,7 @@ impl Client {
             Ok(s) => s,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::AddrInUse {
-                    if let Some(_) = port {
+                    if port.is_some() {
                         error!(
                             "Another Minot coordinator instance is likely running. Terminate the other instance before starting a new one."
                         );
@@ -165,10 +162,11 @@ impl Client {
 
         let (connected_tx, connected_rx) = tokio::sync::mpsc::channel(1);
 
+        type PacketSender = tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>;
+
         let coord_raw_send_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
-        let coord_raw_receive_tx: std::sync::Arc<
-            std::sync::RwLock<Option<tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>>>,
-        > = std::sync::Arc::new(std::sync::RwLock::new(None));
+        let coord_raw_receive_tx: std::sync::Arc<std::sync::RwLock<Option<PacketSender>>> =
+            std::sync::Arc::new(std::sync::RwLock::new(None));
         let coord_raw_send_tx_l = coord_raw_send_tx.clone();
         let coord_raw_receive_tx_l = coord_raw_receive_tx.clone();
         let (updated_raw_recv, _) = tokio::sync::broadcast::channel(100);
@@ -689,9 +687,7 @@ impl Client {
     pub async fn recv_raw_from_other_client(
         tcp_port: tokio::net::TcpListener,
         updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
-        raw_recv_buff: std::sync::Arc<
-            std::sync::RwLock<HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>>,
-        >,
+        raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
     ) -> ! {
         const HEADER_SIZE: usize = 1 + 4 + 1 + 4 + 64; // PROTO(1) + SIZE(4) + TYPE(1) + ID(4) + NAME(64)
         loop {

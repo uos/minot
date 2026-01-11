@@ -1,3 +1,4 @@
+/// Comile compiler for .mt files and resolve variables or functions.
 use core::fmt;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
@@ -422,7 +423,7 @@ fn vec_prepend<T: Clone>(prepend: &[T], source: &[T]) -> Vec<T> {
 }
 
 impl Var {
-    pub fn add_namespace(self, ns: &Vec<String>) -> Self {
+    pub fn add_namespace(self, ns: &[String]) -> Self {
         match self {
             Var::User { name, namespace } => Var::User {
                 name,
@@ -869,7 +870,7 @@ pub enum Statement {
 }
 
 impl Statement {
-    fn add_namespace(self, ns: &Vec<String>) -> Self {
+    fn add_namespace(self, ns: &[String]) -> Self {
         match self {
             Statement::AssignLeft { lhs, rhs } => {
                 let nlhs = lhs
@@ -890,7 +891,7 @@ impl Statement {
     }
 }
 
-fn ast_add_namespace(ns: &Vec<String>, ast: Vec<StatementKindOwned>) -> Vec<StatementKindOwned> {
+fn ast_add_namespace(ns: &[String], ast: Vec<StatementKindOwned>) -> Vec<StatementKindOwned> {
     ast.into_iter()
         .map(|stmt| match stmt {
             StatementKindOwned::VariableDef(statement) => {
@@ -908,25 +909,6 @@ pub enum Operator {
     Compare, // "=="
 }
 
-// TODO replace with rhs
-// #[derive(Clone, Copy, Debug)]
-// pub enum Expr<'a> {
-//     Var(&'a str),
-//     Predef(&'a str),
-//     Path(&'a str),
-//     Log, // represents the LOG keyword.
-// }
-
-// This function signature looks complicated, but don't fear! We're just saying that this function is generic over
-// inputs that:
-//     - Can have tokens pulled out of them by-value, by cloning (`ValueInput`)
-//     - Gives us access to slices of the original input (`SliceInput`)
-//     - Produces tokens of type `Token`, the type we defined above (`Token = Token<'a>`)
-//     - Produces spans of type `SimpleSpan`, a built-in span type provided by chumsky (`Span = SimpleSpan`)
-// The function then returns a parser that:
-//     - Has an input type of type `I`, the one we declared as a type parameter
-//     - Produces an `SExpr` as its output
-//     - Uses `Rich`, a built-in error type provided by chumsky, for error generation
 fn parser<'a, I>()
 -> impl Parser<'a, I, Vec<StatementKindPass1<'a>>, extra::Err<Rich<'a, Token<'a>>>>
 where
@@ -1469,6 +1451,7 @@ where
                 .or_not(),
         )
         .map(
+            #[allow(clippy::type_complexity)]
             |(((pt, arg), trigger), mode): (((PlayType, Rhs), Option<Rhs>), Option<String>)| {
                 let trigger = trigger.map(|trigger| match trigger {
                     Rhs::Val(Val::UnitedVal(UnitVal {
@@ -1837,7 +1820,7 @@ impl RuleSexpr {
 }
 
 pub fn compile_file(
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) -> anyhow::Result<Evaluated> {
@@ -1845,14 +1828,14 @@ pub fn compile_file(
 }
 
 pub fn compile_file_with_state(
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
     start_line: Option<usize>,
     end_line: Option<usize>,
     var_state: Option<HashMap<Var, Rhs>>,
     out: impl std::io::Write,
     rich_out: bool,
 ) -> anyhow::Result<Evaluated> {
-    let file = std::fs::read_to_string(path.clone());
+    let file = std::fs::read_to_string(path);
     let file = match file {
         Ok(file) => Ok(file),
         Err(e) => match e.kind() {
@@ -1910,21 +1893,21 @@ fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
     true
 }
 
-fn remove_prefix_from_target(prefix_definer: &[String], target_vec: &Vec<String>) -> Vec<String> {
+fn remove_prefix_from_target(prefix_definer: &[String], target: &[String]) -> Vec<String> {
     let prefix_len = prefix_definer.len();
-    let target_len = target_vec.len();
+    let target_len = target.len();
     let compare_len = std::cmp::min(prefix_len, target_len);
 
     let mut common_prefix_len = 0;
     for i in 0..compare_len {
-        if prefix_definer[i] == target_vec[i] {
+        if prefix_definer[i] == target[i] {
             common_prefix_len += 1;
         } else {
             break;
         }
     }
 
-    target_vec[common_prefix_len..].to_vec()
+    target[common_prefix_len..].to_vec()
 }
 
 fn truncate_namespace_var(ns: &[String], var: &Var) -> Var {
@@ -2130,9 +2113,11 @@ impl VariableHistory {
                         .iter()
                         .filter(|stmt| stmt_in_ns(namespace, stmt))
                         .map(|s| {
-                            trunc_ns
-                                .then_some(truncate_namespace_stmt(namespace, s))
-                                .unwrap_or(s.clone())
+                            if trunc_ns {
+                                truncate_namespace_stmt(namespace, s)
+                            } else {
+                                s.clone()
+                            }
                         })
                         .collect::<Vec<_>>();
 
@@ -2146,9 +2131,11 @@ impl VariableHistory {
                 }
                 StatementKindOwned::VariableDef(rstmt) => {
                     if stmt_in_ns(namespace, rstmt) {
-                        let rhs = trunc_ns
-                            .then_some(truncate_namespace(namespace, stmt))
-                            .unwrap_or(stmt.clone());
+                        let rhs = if trunc_ns {
+                            truncate_namespace(namespace, stmt)
+                        } else {
+                            stmt.clone()
+                        };
                         vars_in_ns.push(rhs);
                     }
                 }
@@ -2484,7 +2471,7 @@ pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     )
 }
 
-fn resolve_struct_in_ns(user_ns: &Vec<(Var, Rhs)>, var: &str) -> Option<AnySensor> {
+fn resolve_struct_in_ns(user_ns: &[(Var, Rhs)], var: &str) -> Option<AnySensor> {
     // var is the first namespace for the vars, so gather all and find _name, _type and _short in them.
     let name = var.to_owned();
     let mut short = None;
@@ -2581,10 +2568,7 @@ fn resolve_struct_in_ns(user_ns: &Vec<(Var, Rhs)>, var: &str) -> Option<AnySenso
     Some(AnySensor { name, id, short })
 }
 
-fn resolve_sensors(
-    user_ns: &Vec<(Var, Rhs)>,
-    sensors: &[String],
-) -> anyhow::Result<Vec<AnySensor>> {
+fn resolve_sensors(user_ns: &[(Var, Rhs)], sensors: &[String]) -> anyhow::Result<Vec<AnySensor>> {
     let mut mapped = vec![];
     for sensor in sensors {
         let any = resolve_struct_in_ns(user_ns, sensor)

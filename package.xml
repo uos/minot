@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>minot</name>
+  <version>0.4.0</version>
+  <description>A versatile toolset for debugging and verifying stateful robot perception software.</description>
+  <maintainer email="stelzo@steado.de">Christopher Sieh</maintainer>
+  <author email="stelzo@steado.de">Christopher Sieh</author>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <build_depend>cargo</build_depend>
+  <build_depend>python3-catkin-pkg-modules</build_depend>
+  <build_depend>libclang-dev</build_depend>
+
+  <build_depend>rcl</build_depend>
+  <exec_depend>rcl</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+

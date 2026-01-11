@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://gitlab.com/gitlab-org/gitlab/-/raw/master/app/assets/javascripts/editor/schema/ci.json
+ 
 image: ubuntu:latest
 
 variables:
@@ -6,44 +8,91 @@ variables:
 
 stages:
   - build
+  - test
+  - lint
   - snapshot
 
 before_script:
   - apt-get update
-  - apt-get install -y curl git unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
-  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-  - source "$HOME/.cargo/env"
+  - apt-get install -y curl git clang
 
-rust-stable:
+stable:
   stage: build
   script:
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
     - rustup default stable
-    - curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
-    - cargo build --verbose
-    - cargo test --verbose
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - cargo build --all-targets
 
-rust-nightly:
+nightly:
+  stage: build
+  timeout: 10m
+  script:
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - rustup default nightly
+    - cargo build
+  allow_failure: true
+
+lyrical: # verify that we can build on Ubuntu 26 LTS (TODO currently Trixie)
+  image: debian:trixie
   stage: build
   script:
-    - rustup default nightly
-    - curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
-    - cargo build --verbose
-    - cargo test --verbose
-  allow_failure: true
+    - apt-get install -y cargo
+    - cargo build
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: never
+    - when: on_success
+
+msrv:
+  stage: build
+  script:
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85
+    - source "$HOME/.cargo/env"
+    - cargo build
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+test:
+  stage: test
+  script:
+    - apt-get install -y unzip
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - rustup default stable
+    - curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
+    - cargo test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+lint:
+  stage: lint
+  script:
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - rustup default stable
+    - rustup component add clippy
+    - cargo fmt --check
+    - cargo clippy --all-targets -- -D warnings
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
 
 .build_template: &build_defaults
   stage: snapshot
   script:
+    - apt-get install -y unzip clang gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross gcc-arm-linux-gnueabihf
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
     - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
-    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
@@ -51,33 +100,31 @@ rust-nightly:
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
-      - wind-ros1-$TRIPLE
-      - wind-ros2-$TRIPLE
       - minot-$TRIPLE
       - minot-coord-$TRIPLE
       - librat.so
       - librat.a
     expire_in: 1 week
   rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
 
 snapshot:linux:x86_64-musl:
   stage: snapshot
   script:
+    - apt-get install -y unzip clang gcc-aarch64-linux-gnu musl-tools
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
     - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
-    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
     - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
   artifacts:
     paths:
       - minot-coord-$TRIPLE
-      - wind-ros1-$TRIPLE
-      - wind-ros2-$TRIPLE
       - minot-$TRIPLE
       - librat.a
     expire_in: 1 week
@@ -85,6 +132,7 @@ snapshot:linux:x86_64-musl:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
   rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
 
@@ -115,12 +163,13 @@ snapshot:linux:riscv64:
 snapshot:linux:riscv64-musl:
   stage: snapshot
   script:
+    - apt-get install -y unzip clang gcc-riscv64-linux-gnu musl-tools libc6-dev-riscv64-cross
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
     - rustup default stable
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/wind-ros1 wind-ros1-$TRIPLE
-    - mv target/$RUST_TARGET/release/wind-ros2 wind-ros2-$TRIPLE
     - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
@@ -128,8 +177,6 @@ snapshot:linux:riscv64-musl:
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
-      - wind-ros1-$TRIPLE
-      - wind-ros2-$TRIPLE
       - minot-coord-$TRIPLE
       - minot-$TRIPLE
       - librat.so
@@ -139,5 +186,26 @@ snapshot:linux:riscv64-musl:
     RUST_TARGET: riscv64gc-unknown-linux-musl
     TRIPLE: riscv64gc-linux-musl
   rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+
+jazzy-deb-amd64:
+  image: ubuntu:24.04
+  stage: snapshot
+  script:
+    - apt-get install -y unzip clang
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - rustup default stable
+    - bash ./scripts/install-jazzy.bash
+    - source /opt/ros/jazzy/setup.bash
+    - bash ./scripts/make-deb.bash
+  artifacts:
+    paths:
+      - "*.deb"
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never

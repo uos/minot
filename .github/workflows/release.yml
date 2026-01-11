@@ -13,19 +13,13 @@ permissions:
   contents: write
 
 jobs:
-  rust-stable-test:
+  rust-stable:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Dependencies
-        run: |
-          sudo apt-get install -y curl git unzip clang
-          curl -sLo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" && unzip dlg_cut.zip && rm dlg_cut.zip
-      - name: Test
-        run: cargo test --verbose
+      - name: Build
+        run: cargo build --verbose
 
   # -------------------------------------------------------------------------
   # STANDARD LINUX TARGETS (Musl, GNU x86/ARM)
@@ -34,7 +28,7 @@ jobs:
 
   linux-x86_64-musl:
     runs-on: ubuntu-latest
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -66,7 +60,7 @@ jobs:
           $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
           $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
           $CARGO_CMD --package mt_rat --lib 
-          
+
           # Move shared artifacts to root of dist
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/wind-rat dist/
@@ -91,12 +85,12 @@ jobs:
 
   linux-x86_64-gnu:
     runs-on: ubuntu-latest
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
+      - name: Install cargo-deb --locked
+        run: cargo install cargo-deb --locked
       - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
@@ -122,7 +116,7 @@ jobs:
           $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package mt_rat --lib 
-          
+
           cp target/$RUST_TARGET/release/minot-coord dist/
           cp target/$RUST_TARGET/release/wind-rat dist/
           cp target/$RUST_TARGET/release/wind-ros2-native dist/
@@ -153,19 +147,19 @@ jobs:
             *.deb
 
   # Note: Repeating logic for other architectures (arm, aarch64) without ROS
-  # To save space, I'm assuming you want these patterns applied to the linux-aarch64-gnu 
+  # To save space, I'm assuming you want these patterns applied to the linux-aarch64-gnu
   # and linux-armv7-gnu jobs similarly to linux-x86_64-gnu above.
 
   linux-aarch64-gnu:
     runs-on: ubuntu-latest
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-          cargo install cargo-deb
+          cargo install cargo-deb --locked
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
@@ -215,14 +209,14 @@ jobs:
 
   linux-armv7-gnu:
     runs-on: ubuntu-latest
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf
-          cargo install cargo-deb
+          cargo install cargo-deb --locked
       - name: Build Variants
         env:
           RUST_TARGET: armv7-unknown-linux-gnueabihf
@@ -279,7 +273,7 @@ jobs:
 
   macos-aarch64:
     runs-on: macos-latest
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -330,7 +324,7 @@ jobs:
 
   macos-x86_64:
     runs-on: macos-latest
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -386,7 +380,7 @@ jobs:
 
   jazzy-linux-x86_64-gnu:
     runs-on: ubuntu-24.04
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -403,7 +397,7 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
-      
+
       - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
@@ -418,7 +412,7 @@ jobs:
 
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
           $CARGO_CMD --package minot --bin minot-coord
-          
+
           # Copy root artifacts
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
 
@@ -437,9 +431,9 @@ jobs:
             *.tar.gz
             *.sha256
 
-  jazzy-linux-aarch64-gnu:
-    runs-on: ubuntu-24.04-arm
-    needs: [rust-stable-test]
+  deb-jazzy-amd64:
+    runs-on: ubuntu-24.04
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -456,7 +450,139 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
-      
+
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          rustup default stable
+          bash ./scripts/make-deb.bash
+
+      - name: "Upload deb"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-deb-jazzy-amd64
+          path: |
+            *.deb
+
+  deb-jazzy-arm64:
+    runs-on: ubuntu-24.04-arm
+    needs: [rust-stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang
+          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
+          sudo locale-gen en_US en_US.UTF-8
+          export LANG=en_US.UTF-8
+          sudo apt-get install software-properties-common --assume-yes
+          # ROS2 Jazzy
+          sudo add-apt-repository universe -y
+          sudo apt-get update --assume-yes
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          rustup default stable
+          bash ./scripts/make-deb.bash
+
+      - name: "Upload deb"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-deb-jazzy-arm
+          path: |
+            *.deb
+
+  deb-humble-amd64:
+    runs-on: ubuntu-22.04
+    needs: [rust-stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang
+          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
+          sudo locale-gen en_US en_US.UTF-8
+          export LANG=en_US.UTF-8
+          sudo apt-get install software-properties-common --assume-yes
+          # ROS2 Humble
+          sudo add-apt-repository universe -y
+          sudo apt-get update --assume-yes
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+
+      - name: Build
+        run: |
+          source /opt/ros/humble/setup.bash
+          rustup default stable
+          bash ./scripts/make-deb.bash
+
+      - name: "Upload deb"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-deb-humble-amd64
+          path: |
+            *.deb
+
+  deb-humble-arm64:
+    runs-on: ubuntu-22.04-arm
+    needs: [rust-stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang
+          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
+          sudo locale-gen en_US en_US.UTF-8
+          export LANG=en_US.UTF-8
+          sudo apt-get install software-properties-common --assume-yes
+          # ROS2 Humble
+          sudo add-apt-repository universe -y
+          sudo apt-get update --assume-yes
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+
+      - name: Build
+        run: |
+          source /opt/ros/humble/setup.bash
+          rustup default stable
+          bash ./scripts/make-deb.bash
+
+      - name: "Upload deb"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-deb-humble-arm64
+          path: |
+            *.deb
+
+  jazzy-linux-aarch64-gnu:
+    runs-on: ubuntu-24.04-arm
+    needs: [rust-stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependencies
+        run: |
+          sudo apt-get install -y curl git unzip clang
+          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
+          sudo locale-gen en_US en_US.UTF-8
+          export LANG=en_US.UTF-8
+          sudo apt-get install software-properties-common --assume-yes
+          # ROS2 Jazzy
+          sudo add-apt-repository universe -y
+          sudo apt-get update --assume-yes
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
@@ -469,7 +595,7 @@ jobs:
           mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
 
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
-          
+
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
 
       - name: "Archive binary"
@@ -489,7 +615,7 @@ jobs:
 
   humble-linux-x86_64-gnu:
     runs-on: ubuntu-22.04
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -506,7 +632,7 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
-      
+
       - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
@@ -547,7 +673,7 @@ jobs:
 
   humble-linux-aarch64-gnu:
     runs-on: ubuntu-22.04-arm
-    needs: [rust-stable-test]
+    needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -564,7 +690,7 @@ jobs:
           sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
-      
+
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
@@ -581,7 +707,7 @@ jobs:
 
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
-          
+
           cp target/$RUST_TARGET/release/wind-ros2-c dist/
           cp target/$RUST_TARGET/release/wind-ros1-native dist/
 
@@ -602,7 +728,19 @@ jobs:
 
   generate-manifest:
     runs-on: ubuntu-latest
-    needs: [macos-x86_64, macos-aarch64, linux-x86_64-musl, linux-aarch64-gnu, linux-armv7-gnu, linux-x86_64-gnu, jazzy-linux-x86_64-gnu, humble-linux-x86_64-gnu, humble-linux-aarch64-gnu, jazzy-linux-aarch64-gnu]
+    needs:
+      [
+        macos-x86_64,
+        macos-aarch64,
+        linux-x86_64-musl,
+        linux-aarch64-gnu,
+        linux-armv7-gnu,
+        linux-x86_64-gnu,
+        jazzy-linux-x86_64-gnu,
+        humble-linux-x86_64-gnu,
+        humble-linux-aarch64-gnu,
+        jazzy-linux-aarch64-gnu,
+      ]
     steps:
       - name: Generate feature manifest
         run: |

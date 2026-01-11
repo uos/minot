@@ -1,6 +1,33 @@
-Minot consists libraries and binaries, some with different compile flags for many use cases. A lot of ways to install various part of Minot are described on this page.
+Minot consists of libraries and binaries, some with different compile flags for many use cases.
 
-## Install Script (Recommended)
+## ROS2
+
+On Jazzy and Humble, you need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you something newer than 1.85, which is all we need.
+
+The Minot CLI integrates seamlessly with typical ROS tooling. Just clone the repository into the src folder of your ROS workspace.
+
+~~~bash
+cd ~/ros2_ws/src
+git clone https://github.com/uos/minot
+cd ..
+
+rosdep install --from-paths src -y --ignore-src
+
+colcon build --packages-select minot
+source install/local_setup.bash
+~~~
+
+Building will take a while.
+
+Now run as a usual ROS node.
+
+~~~bash
+ros2 run minot minot --help
+~~~
+
+Building from source will create huge incremental cache artifacts. To save time and space, we recommend the following alternatives.
+
+## Install Script
 
 For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
@@ -10,14 +37,25 @@ curl -sSLf https://uos.github.io/minot/install | sh
 
 For ROS support, make sure to have your ROS environment sourced before running the script.
 
-## Using Cargo
-
-Minot is on crates.io, so Rustaceans can just use Cargo as expected. This includes the `ratpub` crate as a library, but you will need a `minot-coord` running on the network for the ratpub nodes to communicate. The `minot-coord` binary is also installed with the following command.
+You can now run Minot.
 
 ~~~bash
-cargo install minot
+minot --help
 ~~~
 
+If the command could be found, add your local binary folder to your `$PATH`: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`.
+
+## Using Cargo
+
+Minot is on [crates.io](https://crates.io/crates/minot), so Rustaceans can just use Cargo as expected.
+
+This next line assumes ROS2 support and a sourced environment.
+
+~~~bash
+cargo install minot --locked --features embed-ros2-c
+~~~
+
+The binary helper `cargo-binstall` is not supported because it does not support feature flags.
 
 ## VS Code Extension
 
@@ -222,7 +260,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.3.0"
+mt_rat = "0.4.0"
 ~~~
 
 ## Ratpub
@@ -232,7 +270,7 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.3.0"
+ratpub = "0.4.0"
 tokio = { version = "1", features = ["full"] }
 ~~~
 

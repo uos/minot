@@ -9,21 +9,36 @@ Minot is a highly versatile toolset for debugging and verifying stateful robot p
 
 Visit the [Documentation](https://uos.github.io/minot) to find out more.
 
-## Quick Install
+## ROS2
 
-For most users, the easiest way to install Minot is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
+On Jazzy and Humble, you need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you something newer than 1.85, which is all we need.
+
+The Minot CLI integrates seamlessly with typical ROS tooling. Just clone the repository into the src folder of your ROS workspace.
 
 ~~~bash
-curl -sSLf https://uos.github.io/minot/install | sh
+cd ~/ros2_ws/src
+git clone https://github.com/uos/minot
+cd ..
+
+rosdep install --from-paths src -y --ignore-src
+
+colcon build --packages-select minot
+source install/local_setup.bash
 ~~~
 
-For ROS support, make sure to have your ROS environment sourced before running the script.
+Building will take a while.
 
-After your first steps with Minot, you may want to use its more advanced features. Check the detailed [install page](https://uos.github.io/minot/installation.html) for that.
+Now run as a usual ROS node.
+
+~~~bash
+ros2 run minot minot --help
+~~~
+
+Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://uos.github.io/minot/installation.html).
 
 ### VS Code Extension
 
-Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Maybe start by selecting some lines and run them with `Run Selection`. Minot will be run automatically in the background.
+Search for "Minot" in the extension marketplace an install. The plugin requires a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Maybe start by selecting some lines and run them with `Run Selection`. Minot will be started automatically for you in the background.
 
 More information about the extension can be found at the [Marketplace](https://marketplace.visualstudio.com/items?itemName=stelzo.minot).
 

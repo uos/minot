@@ -153,6 +153,7 @@ pub struct QosTime {
     pub nsec: u64,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
 pub enum SensorTypeMapped {
     Lidar(PointCloud2),
@@ -566,7 +567,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     // Helper function to sort VariableHuman vectors for consistent comparison
-    fn sort_variable_humans(humans: &mut Vec<VariableHuman>) {
+    fn sort_variable_humans(humans: &mut [VariableHuman]) {
         // Sort the outer vector based on ship and then strategy debug representation
         humans.sort_by(|a, b| {
             a.ship

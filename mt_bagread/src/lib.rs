@@ -194,6 +194,7 @@ pub struct BagReadResult {
     pub end_of_bag: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_until<T>(
     reader: &mut IndexedReader,
     file: &mut T,
@@ -202,11 +203,10 @@ fn collect_until<T>(
     start_time: &mut Option<SystemTime>,
     summary: &Summary,
     metadata: &Metadata,
-    send_sensor: &Vec<AnySensor>,
+    send_sensor: &[AnySensor],
     until_sensor: Option<(&Vec<AnySensor>, &PlayCount)>,
     until: Option<&PlayCount>,
 ) -> anyhow::Result<BagReadResult>
-// TODO should be an iterator to remove warning for a ros2 bag play implementation
 where
     T: Seek + Read,
 {
@@ -309,10 +309,10 @@ where
                 if let Some((until_sensors, pc)) = &until_sensor {
                     for us in *until_sensors {
                         let pass = match &us.id {
-                            SensorIdentification::Topic(topic) => topic.as_str() == &channel.topic,
+                            SensorIdentification::Topic(topic) => topic.as_str() == channel.topic,
                             SensorIdentification::Type(t) => t.is(channel.topic.as_str()),
                             SensorIdentification::TopicAndType { topic, msg_type: _ } => {
-                                topic.as_str() == &channel.topic
+                                topic.as_str() == channel.topic
                             }
                         };
 
@@ -349,11 +349,11 @@ where
                 for sensor in send_sensor.iter() {
                     let (n_pass, n_send_type) = match &sensor.id {
                         SensorIdentification::Topic(item) => {
-                            (item.as_str() == &channel.topic, SensorType::Any)
+                            (item.as_str() == channel.topic, SensorType::Any)
                         }
                         SensorIdentification::Type(t) => (t.is(channel.topic.as_str()), *t),
                         SensorIdentification::TopicAndType { topic, msg_type: t } => {
-                            (topic.as_str() == &channel.topic, *t)
+                            (topic.as_str() == channel.topic, *t)
                         }
                     };
 
@@ -435,12 +435,10 @@ where
                 }
                 if len_before != msgs.len() {
                     rel_since_begin += 1;
-                    if let Some(pc) = until {
-                        if let PlayCount::Amount(count) = pc {
-                            if rel_since_begin >= *count {
-                                reached_end_naturally = false;
-                                break;
-                            }
+                    if let Some(PlayCount::Amount(count)) = until {
+                        if rel_since_begin >= *count {
+                            reached_end_naturally = false;
+                            break;
                         }
                     }
                 }
@@ -935,7 +933,7 @@ mod tests {
         assert_eq!(v5_qos.liveliness, "automatic");
         assert_eq!(v5_qos.liveliness_lease_duration.sec, 9223372036);
         assert_eq!(v5_qos.liveliness_lease_duration.nsec, 854775807);
-        assert_eq!(v5_qos.avoid_ros_namespace_conventions, false);
+        assert!(!v5_qos.avoid_ros_namespace_conventions);
 
         // Check V9 QoS profile completeness
         let v9_imu = v9_metadata.get_topic_meta("/imu/data").unwrap();
@@ -952,7 +950,7 @@ mod tests {
         assert_eq!(v9_qos.liveliness, "automatic");
         assert_eq!(v9_qos.liveliness_lease_duration.sec, 9223372036);
         assert_eq!(v9_qos.liveliness_lease_duration.nsec, 854775807);
-        assert_eq!(v9_qos.avoid_ros_namespace_conventions, false);
+        assert!(!v9_qos.avoid_ros_namespace_conventions);
 
         // Verify both have identical normalized values for the same topic
         assert_eq!(v5_qos.history, v9_qos.history);

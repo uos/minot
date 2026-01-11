@@ -216,7 +216,7 @@ impl Tolerance {
             }
         }
 
-        self.pot_cursor = ndig as u8;
+        self.pot_cursor = ndig;
     }
 }
 
@@ -759,7 +759,7 @@ impl Default for WindCursor {
 impl Display for WindCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(section_name) = self.section_label.as_ref() {
-            f.write_str(&section_name).unwrap();
+            f.write_str(section_name).unwrap();
             f.write_str(" ").unwrap();
         }
         match self.mode {
@@ -2494,13 +2494,10 @@ impl App {
 
     pub fn wind_toggle_zen(&mut self) {
         if self.wind_mode() {
-            match self.mode {
-                Mode::Wind { hide_compare } => {
-                    self.mode = Mode::Wind {
-                        hide_compare: !hide_compare,
-                    }
+            if let Mode::Wind { hide_compare } = self.mode {
+                self.mode = Mode::Wind {
+                    hide_compare: !hide_compare,
                 }
-                _ => {}
             }
         }
     }
@@ -2516,7 +2513,7 @@ impl App {
 
     fn find_section_bounds(
         &self,
-        lines: &Vec<String>,
+        lines: &[String],
         start_marker_idx_0: usize,
     ) -> Option<((usize, usize), String)> {
         let start_marker_line = &lines[start_marker_idx_0];
@@ -2558,7 +2555,7 @@ impl App {
 
     fn find_next_section(
         &self,
-        lines: &Vec<String>,
+        lines: &[String],
         start_line_1based: usize,
     ) -> Option<((usize, usize), String)> {
         let search_from_index_0 = start_line_1based.saturating_sub(1);
@@ -2574,7 +2571,7 @@ impl App {
 
     fn find_previous_section(
         &self,
-        lines: &Vec<String>,
+        lines: &[String],
         start_line_1based: usize,
     ) -> Option<((usize, usize), String)> {
         let current_section_marker_idx_0 = start_line_1based.saturating_sub(2);
@@ -2641,7 +2638,7 @@ impl App {
             .rats_file
             .as_ref()
             .and_then(|path| Self::read_rl_file(path))
-            .and_then(|file| Some(file.lines().map(String::from).collect::<Vec<_>>()))
+            .map(|file| file.lines().map(String::from).collect::<Vec<_>>())
         else {
             return;
         };
@@ -2654,10 +2651,10 @@ impl App {
             (Some(_), Some(last)) => last + 1,
         };
 
-        let found = Self::find_next_section(&self, &file, start_line as usize);
+        let found = Self::find_next_section(self, &file, start_line as usize);
 
         let Some(((start_cursor, end_cursor), section_name)) =
-            found.or_else(|| Self::find_next_section(&self, &file, 1))
+            found.or_else(|| Self::find_next_section(self, &file, 1))
         else {
             return;
         };
@@ -2667,7 +2664,7 @@ impl App {
         cursor.section_label = Some(section_name);
     }
 
-    fn find_last_section(&self, lines: &Vec<String>) -> Option<((usize, usize), String)> {
+    fn find_last_section(&self, lines: &[String]) -> Option<((usize, usize), String)> {
         for i in (0..lines.len()).rev() {
             if START_MARKER_RE.is_match(&lines[i]) {
                 return self.find_section_bounds(lines, i);
@@ -2681,7 +2678,7 @@ impl App {
             .rats_file
             .as_ref()
             .and_then(|path| Self::read_rl_file(path))
-            .and_then(|file| Some(file.lines().map(String::from).collect::<Vec<_>>()))
+            .map(|file| file.lines().map(String::from).collect::<Vec<_>>())
         else {
             return;
         };
@@ -2693,10 +2690,10 @@ impl App {
             (Some(first), Some(_)) => first,
         };
 
-        let found = Self::find_previous_section(&self, &file, start_line as usize);
+        let found = Self::find_previous_section(self, &file, start_line as usize);
 
         let Some(((start_cursor, end_cursor), section_name)) =
-            found.or_else(|| Self::find_last_section(&self, &file))
+            found.or_else(|| Self::find_last_section(self, &file))
         else {
             return;
         };

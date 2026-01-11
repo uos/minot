@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tokio::spawn(async move {
-        while let Some(_) = useless_subber.next().await {
+        while useless_subber.next().await.is_some() {
             log::error!("ehh.. no?");
         }
     });

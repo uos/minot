@@ -4,7 +4,7 @@ members = ["minot", "ratpub", "mt_bagread", "mt_rat", "mt_mtc", "mt_sea", "mt_wi
 resolver = "3"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/uos/minot"
@@ -15,7 +15,7 @@ categories = [
 ]
 documentation = "https://uos.github.io/minot"
 homepage = "https://uos.github.io/minot"
-rust-version = "1.87"
+rust-version = "1.85"
 exclude = [
   "**/.github/**",
   "**/tests/**",
@@ -30,12 +30,12 @@ exclude = [
 ]
 
 [workspace.dependencies]
-mt_sea = { path = "mt_sea", version = "0.3.0" }
-ratpub = { path = "ratpub", version = "0.3.0" }
-mt_bagread = { path = "mt_bagread", version = "0.3.0" }
-mt_net = { path = "mt_net", version = "0.3.0" }
-mt_wind = { path = "mt_wind", version = "0.3.0" }
-mt_mtc = { path = "mt_mtc", version = "0.3.0" }
+mt_sea = { path = "mt_sea", version = "0.4.0" }
+ratpub = { path = "ratpub", version = "0.4.0" }
+mt_bagread = { path = "mt_bagread", version = "0.4.0" }
+mt_net = { path = "mt_net", version = "0.4.0" }
+mt_wind = { path = "mt_wind", version = "0.4.0" }
+mt_mtc = { path = "mt_mtc", version = "0.4.0" }
 
 anyhow = "1"
 r2r = "0.9.5"
@@ -43,10 +43,9 @@ async-trait = "0.1.86"
 rkyv = { version = "0.8.10" }
 env_logger = "0.11.6"
 log = "0.4.25"
-nalgebra = { version = "0.34" }
-ros_pointcloud2 = { version = "0.6.0", features = [
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+ros_pointcloud2 = { version = "1.0.0-rc.2", features = [
   "serde",
-  "ros2-interfaces-jazzy-serde",
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -75,3 +74,6 @@ codegen-units = 1   # Slower compile times but compiler sees all generated code 
 strip = "symbols"   # Significantly reduce binary size
 opt-level = "s"     # Optimize for size but keep some performance
 debug = 0
+
+[profile.colcon]
+inherits = "release"

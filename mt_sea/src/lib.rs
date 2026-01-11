@@ -69,16 +69,8 @@ pub fn get_strategies(
             // as other part of a rule
             let mut indirect = plans
                 .iter()
-                .filter_map(|plan| {
-                    if let Some(partner) = indirect_parent_rat {
-                        if plan.ship == partner {
-                            Some(plan)
-                        } else {
-                            None
-                        }
-                    } else {
-                        Some(plan)
-                    }
+                .filter(|plan| {
+                    indirect_parent_rat.is_some_and(|parent_rat| plan.ship == parent_rat)
                 })
                 .filter_map(|plan| match plan.strategy.as_ref()? {
                     ActionPlan::Sail => None,
@@ -173,7 +165,7 @@ where
 
 #[async_trait::async_trait]
 pub trait Cannon: Send + Sync + 'static {
-    /// Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
+    // Initialize a 1:1 connection to the target. Ports are shared using the sea network internally.
 
     /// Dump the data to the target.
     async fn shoot<'b, T: Sendable>(
