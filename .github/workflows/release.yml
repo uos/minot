@@ -322,63 +322,6 @@ jobs:
             *.tar.gz
             *.sha256
 
-  macos-x86_64:
-    runs-on: macos-latest
-    needs: [rust-stable]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build Variants
-        env:
-          RUST_TARGET: x86_64-apple-darwin
-        run: |
-          rustup target add $RUST_TARGET
-          CARGO_CMD="cargo build --target $RUST_TARGET --release"
-
-          $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
-
-          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
-
-          $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
-          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package mt_rat --lib 
-
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          cp target/$RUST_TARGET/release/wind-rat dist/
-          cp target/$RUST_TARGET/release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/release/librat.a dist/
-          cp target/$RUST_TARGET/release/librat.dylib dist/
-          cp mt_rat/rat.h dist/
-
-      - name: "Archive binary"
-        run: |
-          TARGET=x86_64-apple-darwin
-          mv dist minot-$TARGET
-          tar czvf minot-$TARGET.tar.gz minot-$TARGET
-          shasum -a 2
-              56 mindeb-humbl
-              -amd64, deb-humbl
-              -arm64, deb-jazzy
-              arm64, debamd64
-              arm64-$TARGrm64
-            ar.gz > minot-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
-        uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-x86_64-apple-darwin
-          path: |
-            *.tar.gz
-            *.sha256
-
   # -------------------------------------------------------------------------
   # ROS TARGETS (Jazzy / Humble)
   # Builds: minimal, coord, ratpub AND ros2, wind-ros2
@@ -744,7 +687,6 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       [
-        macos-x86_64,
         macos-aarch64,
         linux-x86_64-musl,
         linux-aarch64-gnu,
@@ -790,11 +732,6 @@ jobs:
                 "root_artifacts": ["minot-coord", "wind-rat", "librat.a", "librat.so", "rat.h"]
               },
               "minot-aarch64-apple-darwin": {
-                "subdirs": ["min", "co", "rat"],
-                "features": ["embed-coord", "embed-ratpub"],
-                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
-              },
-              "minot-x86_64-apple-darwin": {
                 "subdirs": ["min", "co", "rat"],
                 "features": ["embed-coord", "embed-ratpub"],
                 "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
