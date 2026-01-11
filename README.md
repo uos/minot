@@ -11,7 +11,7 @@ Visit the [Documentation](https://uos.github.io/minot) to find out more.
 
 ## ROS2
 
-On Jazzy and Humble, you need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you something newer than 1.85, which is all we need.
+On Jazzy and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
 
 The Minot CLI integrates seamlessly with typical ROS tooling. Just clone the repository into the src folder of your ROS workspace.
 
@@ -28,7 +28,7 @@ source install/local_setup.bash
 
 Building will take a while.
 
-Now run as a usual ROS node.
+Now run it like any ROS node.
 
 ~~~bash
 ros2 run minot minot --help
