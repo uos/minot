@@ -1,4 +1,3 @@
-pub use ros_pointcloud2::PointCloud2Msg;
 pub use ros2_interfaces_jazzy_rkyv::nav_msgs::msg::Odometry;
 pub use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};

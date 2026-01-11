@@ -12,7 +12,6 @@ use mt_mtc::{
     PlayKindUnitedPass3, SensorIdentification, SensorType,
 };
 use mt_net::{BagMsg, Odometry, Qos, QosProfile, SensorTypeMapped};
-pub use ros_pointcloud2::PointCloud2Msg;
 use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};

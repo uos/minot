@@ -23,7 +23,6 @@ tokio.workspace = true
 rkyv.workspace = true
 mt_net.workspace = true
 anyhow.workspace = true
-ros_pointcloud2.workspace = true
 async-trait.workspace = true
 
 roslibrust = { workspace = true, optional = true }

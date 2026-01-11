@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2049,7 +2049,6 @@ dependencies = [
  "once_cell",
  "ratatui",
  "regex",
- "ros_pointcloud2",
  "rosbag2-rs",
  "rust_decimal",
  "serde",
@@ -2127,7 +2126,7 @@ dependencies = [
 
 [[package]]
 name = "mt_bagread"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -2140,7 +2139,6 @@ dependencies = [
  "rkyv 0.8.13",
  "ros2-interfaces-jazzy-rkyv",
  "ros2-interfaces-jazzy-serde",
- "ros_pointcloud2",
  "serde",
  "serde_yml",
  "tokio",
@@ -2148,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "mt_mtc"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2161,18 +2159,17 @@ dependencies = [
 
 [[package]]
 name = "mt_net"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "rkyv 0.8.13",
  "ros2-interfaces-jazzy-rkyv",
- "ros_pointcloud2",
  "serde",
 ]
 
 [[package]]
 name = "mt_rat"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2187,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "mt_sea"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2199,14 +2196,13 @@ dependencies = [
  "pnet",
  "rand 0.8.5",
  "rkyv 0.8.13",
- "ros_pointcloud2",
  "socket2 0.5.10",
  "tokio",
 ]
 
 [[package]]
 name = "mt_wind"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2223,7 +2219,6 @@ dependencies = [
  "ros2-client",
  "ros2-interfaces-jazzy-rkyv",
  "ros2-interfaces-jazzy-serde",
- "ros_pointcloud2",
  "roslibrust",
  "tokio",
 ]
@@ -3063,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "ratpub"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3343,15 +3338,6 @@ dependencies = [
  "ros2-client",
  "serde",
  "serde_with",
-]
-
-[[package]]
-name = "ros_pointcloud2"
-version = "1.0.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b520c2b6ff1740651a586bad575d512fbb7c92d73b74a45635b982cea80d338"
-dependencies = [
- "serde",
 ]
 
 [[package]]

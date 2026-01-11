@@ -15,7 +15,6 @@ exclude.workspace = true
 
 [dependencies]
 rkyv.workspace = true
-ros_pointcloud2.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
 anyhow.workspace = true
 serde.workspace = true

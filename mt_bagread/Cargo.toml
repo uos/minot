@@ -24,7 +24,6 @@ rkyv.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_yml = "0.0.12"
-ros_pointcloud2.workspace = true
 nalgebra.workspace = true
 ros2-interfaces-jazzy-serde.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
