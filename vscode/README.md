@@ -57,6 +57,14 @@ Currently none. Will be added with future releases.
 
 ## Release Notes
 
+### 0.4.0
+
+- Switched to Minot version 0.4.1
+
+### 0.3.0
+
+- Switched to Minot version 0.3.0
+
 ### 0.2.0
 
 - Simpler Commands
