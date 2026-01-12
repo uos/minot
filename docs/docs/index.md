@@ -1,6 +1,6 @@
 # Introduction
 
-**Minot** [mai·not] is a Robot development toolset written in Rust and developed at the Computer Engineering Group at the Osnabrück University. It provides tools for developing and verifying robot perception software.
+**Minot** [mai·not] is a robot development toolset written in Rust and developed at the Computer Engineering Group at the Osnabrück University. It provides tools for developing and verifying robot perception software.
 
 The main feature is the ability to see ROS 2 MCAP Bagfiles as queryable timeseries data. Minot uses its [own simple language](./bagquery.md) for configuration and querying.
 
