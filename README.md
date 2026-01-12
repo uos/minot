@@ -9,7 +9,21 @@ Minot is a highly versatile toolset for debugging and verifying stateful robot p
 
 Visit the [Documentation](https://uos.github.io/minot) to find out more.
 
-## ROS2
+## ROS 2
+
+### Binary Release
+
+We precompile the CLI with coordinator and ROS 2 publisher for our PPA. After the [setup](https://uos.github.io/ppa/), you can simply run apt.
+
+~~~bash
+# humble
+sudo apt install ros-humble-minot
+
+# jazzy
+sudo apt install ros-jazzy-minot
+~~~
+
+### From Source
 
 On Jazzy and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
 

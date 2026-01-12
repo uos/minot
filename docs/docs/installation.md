@@ -1,6 +1,20 @@
 Minot consists of libraries and binaries, some with different compile flags for many use cases.
 
-## ROS2
+## ROS 2
+
+### Binary Release
+
+We precompile the CLI with coordinator and ROS 2 publisher for our PPA. After the [setup](https://uos.github.io/ppa/), you can simply run apt.
+
+~~~bash
+# humble
+sudo apt install ros-humble-minot
+
+# jazzy
+sudo apt install ros-jazzy-minot
+~~~
+
+### From Source
 
 On Jazzy and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
 
@@ -25,7 +39,7 @@ Now run it like any ROS node.
 ros2 run minot minot --help
 ~~~
 
-Building from source will create huge incremental cache artifacts. To save time and space, we recommend the following alternatives.
+Note that building from source will create huge incremental cache artifacts. To save time and space.
 
 ## Install Script
 
