@@ -57,7 +57,7 @@ You can now run Minot.
 minot --help
 ~~~
 
-If the command could be found, add your local binary folder to your `$PATH`: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`.
+If the command could not be found, add your local binary folder to your `$PATH`: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`.
 
 ## Using Cargo
 
@@ -73,7 +73,9 @@ The binary helper `cargo-binstall` is not supported because it does not support 
 
 ## VS Code Extension
 
-Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Select some lines and run them with `Run Selection`. Hover over the buttons to see their keybindings.
+Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer.
+
+Select some lines and run them with `Run Selection` or use the Command Palette <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> and type "minot" to also see their keybindings.
 
 ## Tree-sitter Support
 
@@ -81,7 +83,8 @@ Minot comes with support for Tree-sitter syntax highlighting outside of VS Code.
 
 ## Advanced
 
-You can also download and run the install script manually for more control.
+You can also download and run the install script manually to investigate its effects before running it on your system.
+
 Use `--help` to see all available configurations of Minot.
 
 ~~~bash
@@ -108,12 +111,10 @@ Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed 
 
 Use the `--embed` option to specify which components to embed when building from source:
 
-- `coord` - Embedded coordinator (default)
+- `coord` - Coordinator (default)
 - `ratpub` - Ratpub publisher
 - `ros1-native` - ROS1 publisher (native, no system dependencies)
 - `ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
-- `ros2-c` - Use the sourced rclc and build bindings around it. Needs to have ROS2 installed and sourced
-- `ros2-c-humble` - Use the sourced Humble rclc and build bindings around it. Needs to have ROS2 installed and sourced. Handles Humble specific QoS.
 
 **Common usage examples:**
 
@@ -212,11 +213,19 @@ Only the C version requires a ROS2 installation at compile time.
 
 Nodes in the Minot network that share data are called Rats ([here is why](./lore.md)). The functionality is shipped as a Rust and C library.
 
-### Debian-based Linux
+### Ubuntu
 
-There are prebuilt debian packages for the `rat` library.
+Our PPA provides `.deb` files for system-wide installation. After the [setup](https://uos.github.io/ppa/), you can simply run apt.
 
-~~~bash title="Download the .deb"
+~~~bash
+sudo apt install librat-dev
+~~~
+
+### Debian-based Distros
+
+The PPA mentioned above is specific to Ubuntu the package itself does not require any system dependencies. Therefore it can be installed manually on all debian-based distros.
+
+~~~bash title="Manual .deb Installation"
 curl -s https://api.github.com/repos/uos/minot/releases/latest \
 | grep "browser_download_url" \
 | grep ".deb" \
@@ -227,7 +236,7 @@ curl -s https://api.github.com/repos/uos/minot/releases/latest \
 sudo dpkg -i ./librat-dev_*.deb
 ~~~
 
-The package also installed a pkg-config file, which allows the following usage in CMake.
+The package also installs a pkg-config file, which allows the following usage in CMake.
 
 ~~~cmake title="Example CMake"
 find_package(PkgConfig REQUIRED)
@@ -288,7 +297,7 @@ ratpub = "0.4.1"
 tokio = { version = "1", features = ["full"] }
 ~~~
 
-Since you probably want to use existing ROS2 message definitions, you can also add the following crate which is auto-generated from the Jazzy release. It bundles all usual types and implements the required `rkyv` traits for sending them over the Minot network.
+Since you probably want to use existing ROS 2 message definitions, you can also add the following crate, which is auto-generated from the Jazzy release. It bundles all usual types and implements the required `rkyv` traits for sending them over the Minot network.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
@@ -302,4 +311,4 @@ Learn more on how to use it in your Code by visiting the [feature page](./pubsub
 
 ## Uninstall
 
-If you want to remove every file installed from the install script, you can run `minot-uninstall`. This executes a generated shell script that saved all added files and now removes them (including itself). You can also run `minot uninstall` to uninstall minot and minot-coord. Or `cargo uninstall wind` if you installed binaries with cargo. The debian packages can be uninstalled with `sudo apt remove librat-dev`.
+If you want to remove every file installed from the install script, you can run `minot-uninstall`. This executes a generated shell script that saved all added files and now removes them (including itself). You can also run `minot uninstall` to uninstall minot and minot-coord. Or `cargo uninstall minot` if you installed binaries with cargo. The debian packages can be uninstalled with `sudo apt remove librat-dev ros-jazzy-minot` etc.
