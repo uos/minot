@@ -82,10 +82,10 @@ function(r2r_cargo)
   string (REPLACE ";" ":" CMAKE_INCLUDE_DIRS_STR "${includeDirs}")
   set(ENV{CMAKE_INCLUDE_DIRS} ${CMAKE_INCLUDE_DIRS_STR})
 
-  set(FEATURES "embed-ros2-c")
+  set(FEATURES "embed-coord embed-ros2-c")
 
   if(DEFINED ENV{ROS_DISTRO} AND "$ENV{ROS_DISTRO}" STREQUAL "humble")
-      set(FEATURES "embed-ros2-c-humble embed-ros2-c")
+      set(FEATURES "embed-coord embed-ros2-c-humble embed-ros2-c")
   endif()
 
   string(JOIN "," FEATURES_STR ${FEATURES})
