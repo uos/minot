@@ -1,48 +1,28 @@
 # Introduction
 
-**Minot** [mai·not] provides a versatile toolset for developing and verifying robot perception software with in a single executable binary.
+**Minot** [mai·not] is a Robot development toolset written in Rust and developed at the Computer Engineering Group at the Osnabrück University. It provides tools for developing and verifying robot perception software.
 
-Its main features are built around Bagfiles from ROS2 that use MCAP for storage.
+The main feature is the ability to see ROS 2 MCAP Bagfiles as queryable timeseries data. Minot uses its [own simple language](./bagquery.md) for configuration and querying.
 
+~~~bash
+minot tui <yourquery.mt>
+~~~
 
-All the provided features are meant to be used at development time to give you full control over the incoming data. It gives you transparency for complex systems where thousands of small sensor data packets are processed each second. With Minot, you regain control and explainability over what's happening when developing and integrating your Robot.
+Minot also runs as a ROS node. In that case, just prefix the usual ROS CLI:
 
-## First Look
+~~~bash
+ros2 run minot minot tui <yourquery.mt>
+~~~
 
-The following example gives you a general idea of what Minot can do.
-
-![Debugging a LIO](./assets/lio_example.jpg){ width="1000" loading="lazy" }
-/// caption
-Click the image to explore it in more detail.
-!!! note
-        
-    This example just showcases just a selection of Minot's features, but it demonstrates a pipeline I've found particularly helpful and, I believe, will benefit others.
-///
-
-You are looking at a bugged Lidar Inertial Odometry (LIO) ROS2 node. For IMU initialisation, only the necessary frames are played from a Bagfile to the node. 
-
-We synchronise the Bagfile with our node using a unique approach: an empty variable in the LIO acts as a trigger for publishing a new batch of messages. This triggers the registration part in the LIO, which then triggers the variable again, creating an endless loop. Thanks to Minot's locking feature, the process doesn't need to run until the end of the Bagfile; we can press comma (`,`) on the keyboard to advance to the next registration, or stop it entirely to compare and visualize the state using debuggers, visualizers, or [logging to the TUI](./tui.md#variable-sharing-log-and-compare).
-
-*Notably, everything is running natively on a Macbook with no containers or ROS installation.*
-
-
-
-**How?**
-
-Minot is a collection of binaries and libraries. They can be used in your existing ROS1 or ROS2 nodes or completely separate from any system. This allows cross-ROS communication using its own networking layer without adding dependencies. With Minot, you can also write, test and debug ROS perception nodes without needing ROS on your system (currently Rust-only). This is especially useful for testing, where determinism is essential. When you are done, just comment out a few lines or change a compile flag and you are ready to run your node in ROS.
-
-There are 3 features. They can be used standalone but when combined, they enable superpowers.
-
-## Bagfile Querying
-
-With ROS you can record and play everything published to the ROS network. This enables reproducability for nodes and greatly improves the safety of developing real robots. Bagfiles are great! But the ROS tooling for playing the Bagfile is limited. It's still enough for most use cases but there are times where you need complete control over the data that is published to your subscribers. Minot packages a (kind of) query language for fine grained filtering and cursor control inside your Bagfile for fast iterations. This is Bagfile Querying in Minot.
-
-It introduces a small, embedded language and functions for maximal control over your node while keeping flexibility. For more information, visit the [feature page](bagquery.md).
-
+Refer to the [installation](./installation.md) for getting your Minot binaries.
 
 ### Quickstart
 
-~~~ bash title="Setup"
+To get started quickly, we will do a very short Minot *Hello World*. Minot will be installed in your home directory but everything gets cleaned afterwards.
+
+We require a ROS 2 Jazzy or Humble installation for this because we want to see our point clouds in RViz.
+
+~~~ bash title="ROS Example"
 sudo apt install curl unzip
 
 mkdir minot-bagfile-demo && cd minot-bagfile-demo
@@ -67,21 +47,36 @@ rviz2 -d demo.rviz
 ~~~
 
 Open a new terminal.
-~~~ bash title="Run Minot TUI"
+
+~~~ bash title="Minot TUI"
 source /opt/ros/$ROS_DISTRO/setup.bash
 
 # Run
 minot tui demo.mt
 
 # Press Space
-# You should see a 3D Pointcloud in rviz2 now.
+# You should see a 3D point cloud in rviz2 now.
 # Press j until you see "W3" in the bottom right.
 # Press Space again to evaluate line 3 of demo.mt and repeat how often you like.
 # Quit Minot with q
 
 # Clean up everything we created
-cd .. && rm -rf minot-bagfile-demo && minot uninstall
+cd .. && rm -rf minot-bagfile-demo && minot-uninstall
 ~~~
+
+All the provided features are meant to be used at development time to give you full control over the incoming data. It gives you transparency for complex systems where thousands of small sensor data packets are processed each second. With Minot, you regain control and explainability over what's happening when developing and integrating your Robot.
+
+**Independence**
+
+Minot is a collection of binaries and libraries. They can be used in your existing ROS1 or ROS2 nodes or completely separate from any system. This allows cross-ROS communication using its own networking layer without adding dependencies. With Minot, you can also write, test and debug ROS perception nodes without needing ROS on your system (currently Rust-only). This is especially useful for testing, where determinism is essential. When you are done, just comment out a few lines or change a compile flag and you are ready to run your node in ROS.
+
+There are 3 features. They can be used standalone but when combined, they enable superpowers.
+
+## Bagfile Querying
+
+With ROS you can record and play everything published to the ROS network. This enables reproducability for nodes and greatly improves the safety of developing real robots. Bagfiles are great! But the ROS tooling for playing the Bagfile is limited. It's still enough for most use cases but there are times where you need complete control over the data that is published to your subscribers. Minot packages its own language for fine grained filtering and cursor control inside your Bagfile for fast iterations. This is called *Bagfile Querying* in Minot.
+
+For more information, visit the [feature page](bagquery.md).
 
 ## Variable Sharing
 
@@ -99,7 +94,9 @@ Variable sharing is a powerful building block and it can easily be used outside 
 
 ### Quickstart
 
-Build and run the libraries and run the Coordinator.
+We will need [a modern Rust compiler](https://www.rust-lang.org/tools/install) for this example.
+
+Build and run the libraries and the Coordinator.
 
 ~~~bash
 git clone https://github.com/uos/minot && cd minot
@@ -108,12 +105,12 @@ cargo build
 ./target/debug/minot-coord mt/varshare_demo.mt
 ~~~
 
-Start a second terminal to run rat1 in Rust.
+Start a second terminal to run `rat1` in Rust.
 ~~~bash
 cargo run --example rat1
 ~~~
 
-Start a third terminal to build and run rat2 in C.
+Start a third terminal to build and run `rat2` in C.
 
 ~~~bash
 gcc rat/examples/rat2.c -o rat2 -L./target/release -l:librat.a -lm -Wl,-z,noexecstack
@@ -128,13 +125,17 @@ gcc rat/examples/rat2.c -o rat2 -L./target/release -l:librat.a -lm -Wl,-z,noexec
 cd .. && rm -rf minot
 ~~~
 
+Notably, this example does not even run the Minot binary but just a minimal subset for network communication.
+
 ## Native Publish/Subscribe
 
-The Pub/Sub model has proven itself among ROS developers. It's an intuitive way to exchange time series data. But sometimes adding the entire ROS stack with all its solutions for problems outside of the domain of the problem your node tries to solve seems like overkill.
+The Pub/Sub model has proven itself among ROS developers. It's an intuitive way to exchange time series data. But sometimes adding the entire ROS stack with all its solutions for problems outside of the domain of the problem your node tries to solve just seems like overkill.
 
-For these cases, the native publisher and subscriber Rust library *ratpub* can help. By building on the same concepts as Variable Sharing, it removes ROS from the dependency list at development time if you only use that API from ROS. Read more about it [here](pubsub.md).
+For these cases, the native Rust library *ratpub* can help. By building on the same concepts as Variable Sharing, it removes ROS from the dependency tree at development time if you only use the pub/sub API from ROS. Read more about it [here](./pubsub.md).
 
-~~~bash title="Quickstart"
+### Quickstart
+
+~~~bash title="Pub/Sub without ROS"
 # Clone the example nodes
 git clone https://github.com/stelzo/ratpub-demo && cd ratpub-demo
 
@@ -156,11 +157,15 @@ Start a third terminal another one.
 cargo run --bin node2
 ~~~
 
-Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r ratpub-demo && minot uninstall`.
+Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r ratpub-demo && minot-uninstall`.
 
 Find out how this nodes works and how to write them [here](./pubsub.md).
 
-!!! question "The Pain Leading to Minot"
+---
+
+Minot was developed out of frustration. Maybe you can feel the pain as well:
+
+!!! question "The Pain"
 
     === "Message Timing"
 

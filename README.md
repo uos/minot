@@ -45,7 +45,7 @@ Building will take a while.
 Now run it like any ROS node.
 
 ~~~bash
-ros2 run minot minot --help
+ros2 run minot minot tui <file.mt>
 ~~~
 
 Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://uos.github.io/minot/installation.html).
