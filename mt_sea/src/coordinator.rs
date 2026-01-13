@@ -161,7 +161,7 @@ impl CoordinatorImpl {
                     id: *id,
                 }
             }
-            crate::ActionPlan::Catch { source, id } => {
+            ActionPlan::Catch { source, id } => {
                 let rat = self.rat_qs.read().await;
                 let client_info = rat.get(source).ok_or_else(|| anyhow!("Unknown client."))?;
                 crate::Action::Catch {
