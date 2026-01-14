@@ -505,7 +505,18 @@ impl Client {
     pub fn get_active_interfaces() -> Vec<NetworkInterface> {
         datalink::interfaces()
             .into_iter()
-            .filter(|i| i.is_running())
+            .filter(|i| {
+                #[cfg(unix)]
+                {
+                    i.is_running()
+                }
+
+                #[cfg(not(unix))]
+                {
+                    // On Windows (and other non-Unix), just keep the interface
+                    true
+                }
+            })
             .filter(|i| i.is_up())
             .collect::<Vec<_>>()
     }
