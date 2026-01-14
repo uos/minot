@@ -513,6 +513,8 @@ impl Client {
 
                 #[cfg(not(unix))]
                 {
+                    #[allow(unused_variables)]
+                    let _ = i.index;
                     // On Windows (and other non-Unix), just keep the interface
                     true
                 }

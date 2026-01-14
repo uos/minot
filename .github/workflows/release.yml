@@ -137,15 +137,6 @@ jobs:
           tar czvf minot-$TARGET.tar.gz minot-$TARGET
           shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
-      - name: "Upload binary"
-        uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-x86_64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
-            *.deb
-
       - name: Push to PPA
         env:
           PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
@@ -170,6 +161,16 @@ jobs:
           git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
           git push origin main
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+          cd ..
+
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-x86_64-unknown-linux-gnu
+          path: |
+            *.tar.gz
+            *.sha256
+            *.deb
 
   # Note: Repeating logic for other architectures (arm, aarch64) without ROS
   # To save space, I'm assuming you want these patterns applied to the linux-aarch64-gnu
@@ -1020,6 +1021,12 @@ jobs:
             target: x86
     steps:
       - uses: actions/checkout@v4
+      - name: Install Npcap SDK
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri https://npcap.com/dist/npcap-sdk-1.16.zip -OutFile npcap-sdk.zip
+          Expand-Archive -Path npcap-sdk.zip -DestinationPath C:\npcap-sdk
+          echo "LIB=$env:LIB;C:\npcap-sdk\Lib\x64" >> $env:GITHUB_ENV
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
