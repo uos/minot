@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2126,7 +2126,7 @@ dependencies = [
 
 [[package]]
 name = "mt_bagread"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "camino",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "mt_mtc"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "mt_net"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "rkyv 0.8.13",
@@ -2169,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "mt_rat"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "mt_sea"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "mt_wind"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3058,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "ratpub"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -949,6 +949,24 @@ jobs:
           name: manifest
           path: manifest.json
 
+    pypi-publish:
+      name: Upload to PyPI
+      runs-on: ubuntu-latest
+      environment:
+        name: release
+      permissions:
+        # For PyPI's trusted publishing.
+        id-token: write
+      steps:
+        - name: "Install uv"
+          uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+          with:
+            pattern: wheels-*
+            path: wheels
+            merge-multiple: true
+        - name: Publish to PyPi
+          run: uv publish -v wheels/*
   create-release:
     runs-on: ubuntu-latest
     needs:

@@ -69,9 +69,7 @@ pub fn get_strategies(
             // as other part of a rule
             let mut indirect = plans
                 .iter()
-                .filter(|plan| {
-                    indirect_parent_rat.is_some_and(|parent_rat| plan.ship == parent_rat)
-                })
+                .filter(|plan| indirect_parent_rat.is_none_or(|parent_rat| plan.ship == parent_rat))
                 .filter_map(|plan| match plan.strategy.as_ref()? {
                     ActionPlan::Sail => None,
                     ActionPlan::Shoot { target, id } => target

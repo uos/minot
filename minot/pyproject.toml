@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "minot-cli"
+description = "Minot with embedded Coordinator and Ratpub. A versatile toolset for debugging and verifying stateful robot perception software."
+dynamic = ["version"]
+requires-python = ">=3.8"
+license = {text = "MIT OR Apache-2.0"}
+keywords = ["robotics", "tools"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Robotics",
+]
+
+[tool.maturin]
+bindings = "bin"
+features = ["embed-ratpub"]
