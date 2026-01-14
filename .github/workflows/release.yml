@@ -146,32 +146,6 @@ jobs:
             *.sha256
             *.deb
 
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "noble jammy"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
-
   linux-aarch64-gnu:
     runs-on: ubuntu-latest
     needs: [rust-stable]
@@ -228,32 +202,6 @@ jobs:
             *.tar.gz
             *.sha256
             *.deb
-
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "noble jammy"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
 
   linux-armv7-gnu:
     runs-on: ubuntu-latest
@@ -313,32 +261,6 @@ jobs:
             *.tar.gz
             *.sha256
             *.deb
-
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "noble jammy"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
 
   # -------------------------------------------------------------------------
   # MACOS TARGETS
@@ -489,32 +411,6 @@ jobs:
           path: |
             *.deb
 
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "noble"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
-
   deb-jazzy-arm64:
     runs-on: ubuntu-24.04-arm
     needs: [rust-stable]
@@ -549,32 +445,6 @@ jobs:
           name: artifacts-deb-jazzy-arm
           path: |
             *.deb
-
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "noble"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
 
   deb-humble-amd64:
     runs-on: ubuntu-22.04
@@ -611,32 +481,6 @@ jobs:
           path: |
             *.deb
 
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "jammy"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
-
   deb-humble-arm64:
     runs-on: ubuntu-22.04-arm
     needs: [rust-stable]
@@ -671,32 +515,6 @@ jobs:
           name: artifacts-deb-humble-arm64
           path: |
             *.deb
-
-      - name: Push to PPA
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "jammy"
-          DEB_PATH: "*.deb"
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
-          git push origin main
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
 
   jazzy-linux-aarch64-gnu:
     runs-on: ubuntu-24.04-arm
@@ -1017,8 +835,6 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: macos-13
-            target: x86_64
           - runner: macos-14
             target: aarch64
     steps:
@@ -1101,3 +917,118 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
+
+  humble-release-uos-ppa:
+    runs-on: ubuntu-latest
+    needs: [create-release, deb-humble-arm64, deb-humble-amd64]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: "artifacts-deb-humble-*"
+          merge-multiple: true
+      - name: Push to PPA
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
+          SERIES: "jammy"
+          DEB_PATH: "*.deb"
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          git config --global user.email $(git log -1 --pretty=format:'%ae')
+          git config --global user.name $(git log -1 --pretty=format:'%an')
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
+          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
+          cd ppa
+          git sparse-checkout init --cone
+          for s in $SERIES; do
+            git sparse-checkout set "ubuntu/pool/main/$s"
+            mkdir -p "ubuntu/pool/main/$s"
+            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
+            git add "ubuntu/pool/main/$s/"*.deb || true
+          done
+          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
+          git push origin main
+          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+          cd ..
+
+  jazzy-release-uos-ppa:
+    runs-on: ubuntu-latest
+    needs:
+      [create-release, deb-jazzy-arm64, deb-jazzy-amd64, humble-release-uos-ppa]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: "artifacts-deb-jazzy-*"
+          merge-multiple: true
+      - name: Push to PPA
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
+          SERIES: "noble"
+          DEB_PATH: "*.deb"
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          git config --global user.email $(git log -1 --pretty=format:'%ae')
+          git config --global user.name $(git log -1 --pretty=format:'%an')
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
+          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
+          cd ppa
+          git sparse-checkout init --cone
+          for s in $SERIES; do
+            git sparse-checkout set "ubuntu/pool/main/$s"
+            mkdir -p "ubuntu/pool/main/$s"
+            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
+            git add "ubuntu/pool/main/$s/"*.deb || true
+          done
+          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
+          git push origin main
+          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+          cd ..
+
+  rat-release-uos-ppa:
+    runs-on: ubuntu-latest
+    needs: [create-release, jazzy-release-uos-ppa]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: "artifacts-*-unknown-linux-gnu*"
+          merge-multiple: true
+      - name: Push to PPA
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
+          SERIES: "jammy noble"
+          DEB_PATH: "*.deb"
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          git config --global user.email $(git log -1 --pretty=format:'%ae')
+          git config --global user.name $(git log -1 --pretty=format:'%an')
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
+          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
+          cd ppa
+          git sparse-checkout init --cone
+          for s in $SERIES; do
+            git sparse-checkout set "ubuntu/pool/main/$s"
+            mkdir -p "ubuntu/pool/main/$s"
+            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
+            git add "ubuntu/pool/main/$s/"*.deb || true
+          done
+          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
+          git push origin main
+          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+          cd ..
