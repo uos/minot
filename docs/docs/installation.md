@@ -4,7 +4,7 @@ Minot consists of libraries and binaries, some with different compile flags for 
 
 ### Binary Release
 
-We precompile the CLI with coordinator and ROS 2 publisher for our PPA. After the [setup](https://uos.github.io/ppa/), you can simply run apt.
+We precompile the CLI with coordinator and ROS 2 publisher for our PPA. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
 
 ~~~bash
 # humble
@@ -215,7 +215,7 @@ Nodes in the Minot network that share data are called Rats ([here is why](./lore
 
 ### Ubuntu
 
-Our PPA provides `.deb` files for system-wide installation. After the [setup](https://uos.github.io/ppa/), you can simply run apt.
+Our PPA provides `.deb` files for system-wide installation. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
 
 ~~~bash
 sudo apt install librat-dev
