@@ -140,7 +140,7 @@ For these cases, the native Rust library *ratpub* can help. By building on the s
 git clone https://github.com/stelzo/ratpub-demo && cd ratpub-demo
 
 # Install the Coordinator
-curl -sSLf https://uos.github.io/minot/install | sh
+pip install minot-cli
 
 # Run it
 minot-coord
@@ -157,7 +157,7 @@ Start a third terminal another one.
 cargo run --bin node2
 ~~~
 
-Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r ratpub-demo && minot-uninstall`.
+Exit everything with Ctrl+C. Then cleanup everything we created: `cd .. && rm -r ratpub-demo && pip uninstall minot-cli -y`.
 
 Find out how this nodes works and how to write them [here](./pubsub.md).
 
