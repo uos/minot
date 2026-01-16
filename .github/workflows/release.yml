@@ -938,9 +938,9 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
+          git clone --depth 1 --filter=blob:none --sparse git@codeberg.org/uos-robotics/ppa.git ppa
           cd ppa
           git sparse-checkout init --cone
           for s in $SERIES; do
@@ -977,9 +977,9 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
+          git clone --depth 1 --filter=blob:none --sparse git@codeberg.org/uos-robotics/ppa.git ppa
           cd ppa
           git sparse-checkout init --cone
           for s in $SERIES; do
@@ -1015,9 +1015,9 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse git@github.com:uos/ppa.git ppa
+          git clone --depth 1 --filter=blob:none --sparse git@codeberg.org/uos-robotics/ppa.git ppa
           cd ppa
           git sparse-checkout init --cone
           for s in $SERIES; do
