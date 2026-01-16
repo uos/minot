@@ -39,7 +39,7 @@ Now run it like any ROS node.
 ros2 run minot minot tui <file.mt>
 ~~~
 
-Note that building from source will create huge incremental cache artifacts. To save time and space.
+Note that building from source will create huge incremental cache artifacts.
 
 ## Install Script
 
@@ -63,7 +63,7 @@ If the command could not be found, add your local binary folder to your `$PATH`:
 
 Minot is on [crates.io](https://crates.io/crates/minot), so Rustaceans can just use Cargo as expected.
 
-This next line assumes ROS2 support and a sourced environment.
+This next line assumes ROS2 is installed and sourced.
 
 ~~~bash
 cargo install minot --locked --features embed-ros2-c
@@ -77,9 +77,9 @@ Search for "Minot" in your editor an install the package. Running it will requir
 
 Select some lines and run them with `Run Selection` or use the Command Palette <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> and type "minot" to also see their keybindings.
 
-## Tree-sitter Support
+## Tree-sitter
 
-Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
+Minot comes with Tree-sitter syntax for highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
 
 ## Advanced
 
@@ -183,6 +183,18 @@ cargo install minot --locked --features embed-ros1-native,embed-ros2-native
 
 Running `cargo install` as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
 
+Alternatively, a non-ROS Minot version is built for PyPI, which also bundles the Coordinator. Install the binary with pip.
+
+~~~sh
+pip install minot-cli
+~~~
+
+Then just run it.
+
+~~~sh
+minot-coord
+~~~
+
 ## Bagfile Publishers
 
 !!! tip
@@ -215,7 +227,7 @@ Nodes in the Minot network that share data are called Rats ([here is why](./lore
 
 ### Ubuntu
 
-Our PPA provides `.deb` files for system-wide installation. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
+Our PPA provides `.deb` files for a system-wide installation. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
 
 ~~~bash
 sudo apt install librat-dev
@@ -252,7 +264,7 @@ target_include_directories(my_app PRIVATE ${RAT_INCLUDE_DIRS})
 target_link_libraries(my_app PRIVATE ${RAT_LIBRARIES})
 ~~~
 
-### From source
+### From Source
 
 Building from source generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
 
@@ -283,7 +295,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.4.1"
+mt_rat = "0.4.2"
 ~~~
 
 ## Ratpub
@@ -293,7 +305,7 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.4.1"
+ratpub = "0.4.2"
 tokio = { version = "1", features = ["full"] }
 ~~~
 

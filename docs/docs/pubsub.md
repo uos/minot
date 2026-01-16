@@ -10,17 +10,32 @@ While [Bagfile Query](./bagquery.md) and [Variable Sharing](./varshare.md) are t
 
 When used in static and simple environments (no lifecycle node, assuming stable network and more), it is stable enough for replacing the ROS2 Publish/Subscribe API. But it is absolutely not on par with ROS features.
 
-After adding the library to your [Cargo.toml](./installation.md#ratpub-native-publishsubscribe), you can create a publisher and a subscriber. Like in ROS1, the communication needs a *Master*. In this case it is our Coordinator, which we can run [standalone](./installation.md#standalone-coordinator) without any arguments.
 
-## Domain ID for Network Isolation
+!!! info "Domain ID for Network Isolation"
+    
+    To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
 
-To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
+## Coordinator
 
-~~~sh title="Start the Coordinator in your Shell"
+Like in ROS1, the communication needs a *Master*. In this case it is our Coordinator, which we can run without any arguments.
+
+Since we do not rely on ROS here, we can simply use the pip version of Minot, which is built with Ratpub and already ships with with the coordinator.
+
+~~~sh
+pip install minot-cli
+~~~
+
+Start the Coordinator in your terminal.
+
+~~~sh
 minot-coord
 ~~~
 
-The example uses pre-generated messages that ship with ROS2 Jazzy to already give you the types you typically use in your Node. If that is not enough, you can add your own types that implement `Serialize`, `Deserialize` and `Archive` from `rkyv`.
+!!! info
+
+    The example uses pre-generated messages that ship with ROS2 Jazzy to already give you the types you typically use in your Node. If that is not enough, you can add your own types that implement `Serialize`, `Deserialize` and `Archive` from `rkyv`.
+
+After adding the library to your [Cargo.toml](./installation.md#ratpub-native-publishsubscribe), you can create a publisher and a subscriber.
 
 ~~~rust title="publisher.rs"
 use ratpub::Node;
@@ -93,3 +108,4 @@ Mind that we don't need to `spin_once` here thanks to async like in other Rust R
     - Nodes are always talking to the Coordinator, which is a good feature for reconfigurable topics but also adds latency. The plan is to add static and dynamic topics, where both have the same features but both have better latency for their respective use case.
 
 
+Now just run your publisher, the subscriber and the Coordinator at the same time and observe the logs.
