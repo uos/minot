@@ -106,7 +106,8 @@ lint:
       - librat.a
     expire_in: 1 week
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
 
@@ -132,7 +133,8 @@ snapshot:linux:x86_64-musl:
     RUST_TARGET: x86_64-unknown-linux-musl
     TRIPLE: x86_64-linux-musl
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
 
@@ -186,7 +188,8 @@ snapshot:linux:riscv64-musl:
     RUST_TARGET: riscv64gc-unknown-linux-musl
     TRIPLE: riscv64gc-linux-musl
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
 
@@ -206,6 +209,7 @@ jazzy-deb-amd64:
       - "*.deb"
     expire_in: 1 week
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
