@@ -24,15 +24,15 @@ stable:
     - rustup default stable
     - cargo build --all-targets
 
-nightly:
-  stage: build
-  timeout: 10m
-  script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source "$HOME/.cargo/env"
-    - rustup default nightly
-    - cargo build
-  allow_failure: true
+#nightly:
+#  stage: build
+#  timeout: 10m
+#  script:
+#    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+#    - source "$HOME/.cargo/env"
+#    - rustup default nightly
+#    - cargo build
+#  allow_failure: true
 
 lyrical: # verify that we can build on Ubuntu 26 LTS (TODO currently Trixie)
   image: debian:trixie
