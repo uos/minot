@@ -195,14 +195,14 @@ impl Client {
                     Ok((stream, partner)) => {
                         // each tcp packet from outside logic must go through the coord_tx, so we can have a heartbeat in between. The results are sent to the raw
                         let (coord_send_tx_inner, mut coord_send_rx_inner) =
-                            tokio::sync::mpsc::channel::<Packet>(10);
+                            tokio::sync::mpsc::channel::<Packet>(256);
 
                         // the raw sender is used by the socket.
                         let (coord_raw_send_tx_inner, coord_raw_send_rx_inner) =
-                            tokio::sync::mpsc::channel::<Packet>(10);
+                            tokio::sync::mpsc::channel::<Packet>(256);
 
                         // receiver for communication as broadcast. subscribe to receive from outside
-                        let (coord_raw_receive_tx_inner, _) = tokio::sync::broadcast::channel(10);
+                        let (coord_raw_receive_tx_inner, _) = tokio::sync::broadcast::channel(256);
 
                         let socket = socket2::Socket::from(stream.into_std().unwrap());
                         socket.set_keepalive(true).unwrap();

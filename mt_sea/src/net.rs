@@ -177,9 +177,10 @@ impl Sea {
         external_ip: Option<[u8; 4]>,
         clients_wait_for_ack: std::sync::Arc<std::sync::RwLock<bool>>,
     ) -> Self {
-        let (rejoin_req_tx, mut rejoin_req_rx) = tokio::sync::mpsc::channel::<(String, Packet)>(10);
+        let (rejoin_req_tx, mut rejoin_req_rx) =
+            tokio::sync::mpsc::channel::<(String, Packet)>(128);
 
-        let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(10);
+        let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(64);
 
         let (dissolve_network_tx, mut dissolve_network_rx) =
             tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(10);
@@ -383,11 +384,11 @@ impl Sea {
                                 let (tx, _) = tokio::sync::broadcast::channel::<(
                                     Packet,
                                     Option<SocketAddr>,
-                                )>(10);
+                                )>(256);
                                 let tx_out = tx.clone();
 
                                 let (client_sender_tx, client_sender_rx) =
-                                    tokio::sync::mpsc::channel::<Packet>(10);
+                                    tokio::sync::mpsc::channel::<Packet>(256);
 
                                 // reading stream from client
                                 let current_ship = ship_kind.clone();

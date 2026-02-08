@@ -181,7 +181,7 @@ impl CoordinatorImpl {
         let sea = crate::net::Sea::init(external_ip, clients_wait_for_ack).await;
 
         let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let (new_rat_note, _) = tokio::sync::broadcast::channel::<String>(10);
+        let (new_rat_note, _) = tokio::sync::broadcast::channel::<String>(128);
         let mut incoming_clients = sea.network_clients_chan.subscribe();
         let inner_client_rat_queues = rat_queues.clone();
         // let new_rat_note_tx = new_rat_note.clone();
@@ -189,11 +189,16 @@ impl CoordinatorImpl {
             let inner_client_loop_rat_queues = inner_client_rat_queues.clone();
             loop {
                 match incoming_clients.recv().await {
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        log::warn!("Coordinator missed {} client events due to channel lag", n);
+                        // Continue processing - we may have missed some events but can recover
+                        continue;
+                    }
                     Err(e) => {
                         error!("Coordinator missed clients: {e}");
                     }
                     Ok(client) => {
-                        let (rat_queue_tx, _) = tokio::sync::broadcast::channel(10);
+                        let (rat_queue_tx, _) = tokio::sync::broadcast::channel(256);
                         let client_info = ClientInfo {
                             id: client.ship,
                             queue: rat_queue_tx.clone(), // TODO not used anymore, rm

@@ -25,7 +25,7 @@ pub type ShipName = i128;
 #[derive(Debug, Clone, Serialize, Deserialize, Archive, PartialEq, Eq)]
 pub struct NetworkShipAddress {
     ip: [u8; 4],
-    port: u16,
+    pub port: u16,
     ship: ShipName,
     pub kind: ShipKind,
 }

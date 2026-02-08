@@ -1884,12 +1884,30 @@ impl App {
                                     wind_data.push((diff, msg));
                                 }
 
+                                // Check for empty data conditions
+                                if wind_data.is_empty() {
+                                    if bagmsgs.end_of_bag {
+                                        // Truly no more data in bagfile - abort remaining actions
+                                        info!(
+                                            "reached end of bagfile with no more matching messages"
+                                        );
+                                        return;
+                                    } else {
+                                        // No matching messages at current position, but bagfile has more data
+                                        // Skip this pf! and continue with next action
+                                        warn!(
+                                            "pf! query returned empty data (no matching messages at current position), skipping to next action"
+                                        );
+                                        continue;
+                                    }
+                                }
+
+                                // Log if we got data but also reached the end
                                 if bagmsgs.end_of_bag {
-                                    info!("reached end of bagfile");
-                                    return;
-                                } else if wind_data.is_empty() {
-                                    warn!("query returned empty data");
-                                    return;
+                                    info!(
+                                        "processing final {} message(s) from bagfile",
+                                        wind_data.len()
+                                    );
                                 }
 
                                 let trigger = match &kind {

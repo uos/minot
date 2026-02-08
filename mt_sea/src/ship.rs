@@ -214,22 +214,31 @@ impl crate::Ship for NetworkShipImpl {
                                 lock_until_ack,
                             } = packet.data
                             {
-                                tx.send(Ok((action, lock_until_ack))).await.unwrap();
+                                let _ = tx.send(Ok((action, lock_until_ack))).await;
                                 return;
                             }
                         }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!(
+                                "ask_for_action receiver lagged by {} messages, continuing",
+                                n
+                            );
+                            continue;
+                        }
                         Err(e) => {
-                            tx.send(Err(anyhow!(
-                                        "Could not receive answer for variable question from coordinator: {e}"
-                                    )))
-                                        .await
-                                        .unwrap();
+                            let _ = tx.send(Err(anyhow!(
+                                "Could not receive answer for variable question from coordinator: {e}"
+                            ))).await;
+                            return;
                         }
                     }
                 }
             });
             sender.send(action_request).await?;
-            return rx.recv().await.unwrap();
+            return rx
+                .recv()
+                .await
+                .ok_or_else(|| anyhow!("Response channel closed"))?;
         } else {
             drop(client);
             tokio::task::yield_now().await;
@@ -246,27 +255,41 @@ impl crate::Ship for NetworkShipImpl {
         let coord_receive = { client.coordinator_receive.read().unwrap().clone() };
         if let Some(receiver) = coord_receive {
             let mut sub = receiver.subscribe();
-            while let Ok((packet, _)) = sub.recv().await {
-                if let PacketKind::Wind(bwd) = packet.data {
-                    // send ack to coordinator
-                    let sender = {
-                        let coord_read = client.coordinator_send.read().unwrap();
-                        coord_read.as_ref().unwrap().clone()
-                    };
-                    sender
-                        .send(crate::net::Packet {
-                            header: crate::net::Header::default(),
-                            data: PacketKind::Acknowledge,
-                        })
-                        .await
-                        .unwrap();
-                    return Ok(bwd.into_iter().map(|wa| wa.data).collect::<Vec<_>>());
+            loop {
+                match sub.recv().await {
+                    Ok((packet, _)) => {
+                        if let PacketKind::Wind(bwd) = packet.data {
+                            // send ack to coordinator
+                            let sender = {
+                                let coord_read = client.coordinator_send.read().unwrap();
+                                coord_read.as_ref().unwrap().clone()
+                            };
+                            sender
+                                .send(crate::net::Packet {
+                                    header: crate::net::Header::default(),
+                                    data: PacketKind::Acknowledge,
+                                })
+                                .await
+                                .unwrap();
+                            return Ok(bwd.into_iter().map(|wa| wa.data).collect::<Vec<_>>());
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        log::warn!(
+                            "wait_for_wind receiver lagged by {} messages, continuing",
+                            n
+                        );
+                        continue;
+                    }
+                    Err(_) => {
+                        return Err(anyhow!(
+                            "Could not receive wind while Channel was subscribed."
+                        ));
+                    }
                 }
             }
-            return Err(anyhow!(
-                "Could not receive wind while Channel was subscribed."
-            ));
         } else {
+            drop(client);
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             return self.wait_for_wind().await;
         }
