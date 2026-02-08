@@ -19,5 +19,5 @@ log.workspace = true
 anyhow.workspace = true
 mt_net.workspace = true
 logos = "0.15.0"
-chumsky = "0.10.0"
+chumsky = { version = "0.12", default-features = false, features = ["std"] }
 ariadne = "0.4"

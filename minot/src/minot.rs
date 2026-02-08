@@ -1,5 +1,6 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 mod runner;
+use clap_complete::Shell;
 use log::{error, info, warn};
 use mt_mtc::{Rhs, Val};
 use mt_net::COMPARE_NODE_NAME;
@@ -82,6 +83,14 @@ pub(crate) enum Commands {
     },
     // Uninstall minot and minot-coord from the system
     Uninstall,
+
+    /// Generate shell completions
+    /// Example usage: `minot completions bash > minot_completions.sh`
+    Completions {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -1352,5 +1361,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Features { feature } => features_command(feature),
         Commands::Uninstall => uninstall(),
+        Commands::Completions { shell } => {
+            let mut cmd = Args::command();
+            let bin_name = cmd.get_name().to_string();
+            clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+            Ok(())
+        }
     }
 }
