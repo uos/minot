@@ -1765,7 +1765,9 @@ impl App {
 
                                 match bag_blocking.write().unwrap().reset(Some(abs_path)) {
                                     Err(e) => {
-                                        warn!("Could not reset bagfile path {path:?}: {e}, skipping to next action");
+                                        warn!(
+                                            "Could not reset bagfile path {path:?}: {e}, skipping to next action"
+                                        );
                                         continue;
                                     }
                                     Ok(_) => {
@@ -1829,7 +1831,9 @@ impl App {
                                         match send {
                                             Ok(_) => {}
                                             Err(e) => {
-                                                warn!("Could not send WindDynamic to coordinator: {e}, skipping to next action");
+                                                warn!(
+                                                    "Could not send WindDynamic to coordinator: {e}, skipping to next action"
+                                                );
                                             }
                                         }
                                         continue; // early exit from fn so dynamic vars do not iterate in bagfile
@@ -1853,7 +1857,9 @@ impl App {
                                 let bagmsgs = match res_rx.await {
                                     Ok(Ok(msgs)) => msgs,
                                     Err(e) => {
-                                        warn!("pf! query channel error: {e}, skipping to next action");
+                                        warn!(
+                                            "pf! query channel error: {e}, skipping to next action"
+                                        );
                                         continue;
                                     }
                                     Ok(Err(e)) => {
@@ -2020,7 +2026,9 @@ impl App {
                                         match send {
                                             Ok(_) => {}
                                             Err(e) => {
-                                                warn!("Could not send Wind to coordinator: {e}, skipping to next action");
+                                                warn!(
+                                                    "Could not send Wind to coordinator: {e}, skipping to next action"
+                                                );
                                             }
                                         }
                                     }
@@ -2051,7 +2059,9 @@ impl App {
                                         match send {
                                             Ok(_) => {}
                                             Err(e) => {
-                                                warn!("Could not send Wind to coordinator: {e}, skipping to next action");
+                                                warn!(
+                                                    "Could not send Wind to coordinator: {e}, skipping to next action"
+                                                );
                                             }
                                         }
                                     }
