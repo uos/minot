@@ -9,7 +9,7 @@ keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/uos/minot"
 edition = "2024"
-authors = ["Christopher Sieh <csieh@uos.de>"]
+authors = ["Christopher Sieh <stelzo@steado.de>"]
 categories = [
   "science::robotics",
 ]
