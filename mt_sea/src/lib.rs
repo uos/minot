@@ -4,6 +4,19 @@ pub mod net;
 pub mod ship;
 
 use mt_net::{ActionPlan, BagMsg, Rules, VariableHuman};
+
+/// Initialize logging with zenoh logs filtered to warn level regardless of RUST_LOG setting.
+/// Uses RUST_LOG env var for other crates, defaulting to `info` if not set.
+pub fn init_logging() {
+    use env_logger::Env;
+    let env = Env::new().filter_or("RUST_LOG", "info");
+    env_logger::Builder::from_env(env)
+        .filter_module("zenoh", log::LevelFilter::Warn)
+        .filter_module("zenoh_transport", log::LevelFilter::Warn)
+        .filter_module("zenoh_link", log::LevelFilter::Warn)
+        .filter_module("zenoh_protocol", log::LevelFilter::Warn)
+        .init();
+}
 use rkyv::{
     Archive, Deserialize, Serialize,
     api::high::{HighSerializer, HighValidator},
@@ -215,6 +228,7 @@ pub trait Coordinator: Send + Sync + 'static {
     async fn rat_action_send(
         &self,
         ship: String,
+        variable: String,
         action: ActionPlan,
         lock_until_ack: bool,
     ) -> anyhow::Result<()>;

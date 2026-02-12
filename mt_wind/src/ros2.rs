@@ -29,8 +29,6 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::Wi
         }
     });
 
-    tokio::task::yield_now().await;
-
     Ok(rx)
 }
 

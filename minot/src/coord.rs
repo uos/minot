@@ -47,6 +47,7 @@ enum MinotTask {
     RulesClear,
     SendRatAction {
         ship_name: String,
+        var_name: String,
         data: ActionPlan,
     },
     SendWind {
@@ -75,30 +76,7 @@ struct WindTask {
 }
 
 pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rules) {
-    {
-        use std::net::UdpSocket;
-        let port = net::CLIENT_LISTEN_PORT;
-        let addr = format!("0.0.0.0:{}", port);
-        match UdpSocket::bind(&addr) {
-            Ok(socket) => {
-                drop(socket);
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::AddrInUse {
-                    println!(
-                        "Another Minot coordinator is running. Please terminate it before starting a new instance."
-                    );
-                    std::process::exit(1);
-                } else {
-                    println!(
-                        "Failed to bind coordinator UDP port {} ({}). Aborting startup.",
-                        port, e
-                    );
-                    std::process::exit(1);
-                }
-            }
-        }
-    }
+    // Zenoh handles coordinator discovery and port management
     let clients_wait_for_ack = std::sync::Arc::new(std::sync::RwLock::new(!clients.is_empty()));
     let rules = std::sync::Arc::new(std::sync::RwLock::new(rules));
     let rules_changer = std::sync::Arc::clone(&rules);
@@ -120,11 +98,16 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
 
         // unlock clients to send us stuff when all our expected clients are connected
         let total_clients_check_rats = std::sync::Arc::clone(&coordinator.rat_qs);
+        let new_client_notify = coordinator.new_client_notify.clone();
         let (clients_collected_tx, mut clients_collected_rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
             debug!("waiting for all clients to be connected");
-            CoordinatorImpl::ensure_clients_connected(total_clients_check_rats.clone(), clients)
-                .await;
+            CoordinatorImpl::ensure_clients_connected(
+                total_clients_check_rats.clone(),
+                clients,
+                new_client_notify,
+            )
+            .await;
             debug!("all clients connected, sending ack to clients.");
             clients_collected_tx.send(()).await.unwrap();
             let clients = total_clients_check_rats.read().await;
@@ -326,6 +309,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                     MinotTask::SendRatAction {
                                                                         ship_name: minot_compare_name
                                                                             .clone(),
+                                                                        var_name: variable.clone(),
                                                                         data: action,
                                                                     },
                                                                 )
@@ -347,6 +331,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                                                 for action in my_actions {
                                                                     rat_coord_tx.send(MinotTask::SendRatAction {
                                                                         ship_name: inner_name.clone(),
+                                                                        var_name: variable.clone(),
                                                                         data: action,
                                                                     })
                                                                     .unwrap();
@@ -487,8 +472,11 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                                 });
                                 let inner_name = name.clone();
                                 let wind_coord_tx = coord_tx_new_client.clone();
+                                // Subscribe BEFORE spawning to avoid race condition
+                                // If we subscribe inside the spawn, we might miss wind data
+                                // sent between the spawn and the subscribe
+                                let mut sub = wind_tx_inner.subscribe();
                                 tokio::spawn(async move {
-                                    let mut sub = wind_tx_inner.subscribe();
                                     info!("Started wind forwarding for turbine: {}", &inner_name);
                                     while let Ok(data) = sub.recv().await {
                                         wind_coord_tx
@@ -585,6 +573,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                 }
                 MinotTask::SendRatAction {
                     ship_name,
+                    var_name,
                     mut data,
                 } => {
                     {
@@ -624,7 +613,7 @@ pub fn run_coordinator(locked_start: bool, clients: HashSet<String>, rules: Rule
                     let lock_next = lock_next && ship_name != COMPARE_NODE_NAME;
 
                     if let Err(e) = coordinator
-                        .rat_action_send(ship_name.clone(), data, lock_next)
+                        .rat_action_send(ship_name.clone(), var_name, data, lock_next)
                         .await
                     {
                         error!("Error while sending action to Rat {}: {}", ship_name, e);
@@ -709,8 +698,7 @@ pub fn get_clients(eval: &Evaluated) -> anyhow::Result<HashSet<String>> {
 
 #[tokio::main(flavor = "multi_thread")]
 pub async fn main() -> anyhow::Result<()> {
-    let env = env_logger::Env::new().filter_or("RUST_LOG", "info");
-    env_logger::Builder::from_env(env).init();
+    mt_sea::init_logging();
 
     let filepath = Args::parse().file;
 

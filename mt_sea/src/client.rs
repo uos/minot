@@ -1,828 +1,539 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr, TcpStream},
-    time::Duration,
-};
+use std::collections::HashMap;
 
 use anyhow::anyhow;
-use deadpool::managed::{Manager, Object, RecycleError};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use mt_net::COMPARE_NODE_NAME;
-use pnet::datalink::{self, NetworkInterface};
-use rkyv::{api::low::from_bytes, to_bytes, util::AlignedVec};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{
-        UdpSocket,
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-    },
+use rkyv::{api::high::from_bytes, to_bytes, util::AlignedVec};
+use zenoh::Wait;
+
+#[cfg(feature = "shm")]
+use zenoh::shm::{
+    BlockOn, GarbageCollect, PosixShmProviderBackend, ShmProvider, ShmProviderBuilder,
 };
 
 use crate::{
     ShipKind, ShipName, VariableType,
-    net::{
-        CLIENT_LISTEN_PORT, CLIENT_REGISTER_TIMEOUT, CLIENT_REJOIN_POLL_INTERVAL,
-        CONTROLLER_CLIENT_ID, PROTO_IDENTIFIER, Packet, PacketKind, Sea, get_domain_id,
-    },
+    net::{CONTROLLER_CLIENT_ID, Packet, PacketKind, Sea, get_domain_id, sanitize_key},
 };
-const COMM_HEADER_BYTES_N: usize = 1 + std::mem::size_of::<u32>();
-
-#[derive(Debug)]
-pub struct TcpManager {
-    pub addr: String,
-}
-
-impl Manager for TcpManager {
-    type Type = tokio::net::TcpStream;
-    type Error = anyhow::Error;
-
-    fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
-        let addr = self.addr.clone();
-        Box::pin(async move {
-            tokio::net::TcpStream::connect(addr.clone())
-                .await
-                .map_err(|e| anyhow!("Failed to connect to {}: {}", addr, e))
-        })
-    }
-
-    /// Corrected recycle logic.
-    /// We simply assume the connection is healthy. If it's not, the next
-    /// operation on it will fail, and deadpool will discard it correctly.
-    fn recycle(
-        &self,
-        _conn: &mut Self::Type,
-        _metrics: &deadpool::managed::Metrics,
-    ) -> impl Future<Output = Result<(), RecycleError<Self::Error>>> + Send {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-type TcpPool = deadpool::managed::Pool<TcpManager>;
 
 pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>;
 pub type RecvBuffer = HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>;
 
-#[derive(Debug)]
+#[cfg(feature = "shm")]
+/// SHM buffer pool size (64 MB)
+const SHM_BUFFER_SIZE: usize = 64 * 1024 * 1024;
+
+#[cfg(feature = "shm")]
+/// Messages larger than this use SHM, smaller use network (8 KB threshold)
+const SHM_SIZE_THRESHOLD: usize = 8 * 1024;
+
+/// Copy bytes into an aligned buffer for rkyv deserialization
+fn align_bytes(bytes: &[u8]) -> AlignedVec {
+    let mut aligned = AlignedVec::with_capacity(bytes.len());
+    aligned.extend_from_slice(bytes);
+    aligned
+}
+
 pub struct Client {
     pub coordinator_receive: std::sync::Arc<std::sync::RwLock<Option<CoordSender>>>,
-    tcp_port: u16,
     pub coordinator_send:
         std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<Packet>>>>,
-    ip: [u8; 4],
-    pub other_client_entrance: u16, // tcp port for 1:1 connections
     pub kind: ShipKind,
-    connected: tokio::sync::mpsc::Receiver<bool>,
     rm_rules_on_disconnect: bool,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
     pub raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
-    pools: std::sync::Arc<tokio::sync::Mutex<HashMap<String, TcpPool>>>,
+    /// Dedicated channel for wind packets - uses MPSC to avoid race conditions.
+    /// Wind packets are forwarded here from the coordinator receiver and buffered until consumed.
+    pub wind_receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Packet>>>,
+    wind_sender: tokio::sync::mpsc::Sender<Packet>,
+    session: std::sync::Arc<zenoh::Session>,
+    domain_id: u16,
+    #[cfg(feature = "shm")]
+    shm_provider: std::sync::Arc<ShmProvider<PosixShmProviderBackend>>,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("kind", &self.kind)
+            .field("domain_id", &self.domain_id)
+            .field("rm_rules_on_disconnect", &self.rm_rules_on_disconnect)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Client {
-    pub async fn get_udp_socket(external_ip: Option<[u8; 4]>, port: Option<u16>) -> UdpSocket {
-        let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let bind_address = format!(
-            "{}.{}.{}.{}:{}",
-            ip[0],
-            ip[1],
-            ip[2],
-            ip[3],
-            port.unwrap_or(0)
-        );
-        let udp_socket = match UdpSocket::bind(&bind_address).await {
-            Ok(s) => s,
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::AddrInUse {
-                    if port.is_some() {
-                        error!(
-                            "Another Minot coordinator instance is likely running. Terminate the other instance before starting a new one."
-                        );
-                    } else {
-                        error!(
-                            "Dynamic UDP port already in use ({}). Terminate the other instance if it is still running.",
-                            bind_address
-                        );
-                    }
-                    std::process::exit(1);
-                } else {
-                    error!("Failed to bind UDP socket at {}: {}", bind_address, e);
-                    std::process::exit(1);
-                }
-            }
-        };
-        udp_socket
-            .set_broadcast(true)
-            .expect("could not set broadcast");
-        udp_socket
-            .writable()
-            .await
-            .expect("udp socket not writable");
-        udp_socket
-    }
-
-    async fn get_pool(&self, addr: &String) -> TcpPool {
-        let mut pools = self.pools.lock().await;
-        if let Some(pool) = pools.get(addr) {
-            return pool.clone();
+    pub async fn init(ship_kind: ShipKind, rm_rules_on_disconnect: bool) -> Self {
+        let domain_id = get_domain_id();
+        if domain_id > 0 {
+            info!("Client using domain ID {}", domain_id);
         }
-        let manager = TcpManager { addr: addr.clone() };
-        let pool = deadpool::managed::Pool::builder(manager)
-            .max_size(1)
-            .build()
-            .unwrap();
-        pools.insert(addr.clone(), pool.clone());
-        pool
-    }
 
-    pub async fn init(
-        ship_kind: ShipKind,
-        external_ip: Option<[u8; 4]>,
-        rm_rules_on_disconnect: bool,
-    ) -> Self {
-        let ip = external_ip.unwrap_or([0, 0, 0, 0]);
-        let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0);
-        // TCP socket for Coordinator communication
-        let tcp_listener = tokio::net::TcpListener::bind(&bind_address)
-            .await
-            .expect("could not bind tcp socket");
+        // Initialize Zenoh session
+        let config = zenoh::Config::default();
+        let session = zenoh::open(config)
+            .wait()
+            .expect("Failed to open Zenoh session");
+        let session = std::sync::Arc::new(session);
 
-        let tcp_port = tcp_listener
-            .local_addr()
-            .expect("could not get tcp listener adress")
-            .port();
+        #[cfg(feature = "shm")]
+        let shm_provider = {
+            let provider = ShmProviderBuilder::default_backend(SHM_BUFFER_SIZE)
+                .wait()
+                .expect("Failed to create SHM provider");
+            std::sync::Arc::new(provider)
+        };
 
-        let bind_address = format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], 0); // always find this dynamically
-        let client_listener = tokio::net::TcpListener::bind(&bind_address)
-            .await
-            .expect("could not bind tcp socket");
-        let client_listener_port = client_listener
-            .local_addr()
-            .expect("could not get client listener adress")
-            .port();
-
-        let (connected_tx, connected_rx) = tokio::sync::mpsc::channel(1);
-
-        type PacketSender = tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>;
-
-        let coord_raw_send_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
-        let coord_raw_receive_tx: std::sync::Arc<std::sync::RwLock<Option<PacketSender>>> =
-            std::sync::Arc::new(std::sync::RwLock::new(None));
-        let coord_raw_send_tx_l = coord_raw_send_tx.clone();
-        let coord_raw_receive_tx_l = coord_raw_receive_tx.clone();
         let (updated_raw_recv, _) = tokio::sync::broadcast::channel(100);
-        let raw_recv_buff = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>> =
+            std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
 
-        let inner_updated_raw_recv = updated_raw_recv.clone();
-        let inner_raw_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
+        // Wind channel - use MPSC to buffer wind packets and avoid race conditions
+        let (wind_sender, wind_receiver) = tokio::sync::mpsc::channel::<Packet>(100);
+        let wind_receiver = std::sync::Arc::new(tokio::sync::Mutex::new(wind_receiver));
 
-        // receiving packets from other clients
+        let coord_send_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
+        let coord_receive_tx: std::sync::Arc<std::sync::RwLock<Option<CoordSender>>> =
+            std::sync::Arc::new(std::sync::RwLock::new(None));
+
+        let ship_name_str = match &ship_kind {
+            ShipKind::Rat(name) => name.clone(),
+            ShipKind::Wind(name) => name.clone(),
+        };
+        let ship_name_key = sanitize_key(&ship_name_str);
+
+        let data_key = format!("minot/{}/data/{}", domain_id, ship_name_key);
+        let updated_raw_recv_clone = updated_raw_recv.clone();
+        let raw_recv_buff_clone = std::sync::Arc::clone(&raw_recv_buff);
+
+        let queryable = session
+            .declare_queryable(&data_key)
+            .wait()
+            .expect("Failed to create data queryable");
+
+        debug!(
+            "Client {} queryable declared on {}",
+            ship_name_str, data_key
+        );
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+
         tokio::spawn(async move {
-            Self::recv_raw_from_other_client(
-                client_listener,
-                inner_updated_raw_recv,
-                inner_raw_recv_buff,
-            )
-            .await;
-        });
+            let _ = ready_tx.send(());
 
-        tokio::spawn(async move {
             loop {
-                match tcp_listener.accept().await {
-                    Err(e) => {
-                        error!("failed to accept tcp connection: {e}");
-                    }
-
-                    Ok((stream, partner)) => {
-                        // each tcp packet from outside logic must go through the coord_tx, so we can have a heartbeat in between. The results are sent to the raw
-                        let (coord_send_tx_inner, mut coord_send_rx_inner) =
-                            tokio::sync::mpsc::channel::<Packet>(256);
-
-                        // the raw sender is used by the socket.
-                        let (coord_raw_send_tx_inner, coord_raw_send_rx_inner) =
-                            tokio::sync::mpsc::channel::<Packet>(256);
-
-                        // receiver for communication as broadcast. subscribe to receive from outside
-                        let (coord_raw_receive_tx_inner, _) = tokio::sync::broadcast::channel(256);
-
-                        let socket = socket2::Socket::from(stream.into_std().unwrap());
-                        socket.set_keepalive(true).unwrap();
-                        // socket
-                        //     .set_tcp_keepalive(
-                        //         &socket2::TcpKeepalive::new()
-                        //             .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
-                        //             .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
-                        //     )
-                        //     .unwrap();
-                        socket
-                            .set_linger(Some(std::time::Duration::from_secs(30)))
-                            .unwrap();
-                        let stream: TcpStream = socket.into();
-                        let stream = tokio::net::TcpStream::from_std(stream).unwrap();
-                        if let Err(e) = stream.readable().await {
-                            error!("TCP Listener stream not readable: {e}");
-                            continue;
-                        };
-
-                        let (rh, wh) = stream.into_split();
-
-                        // sending packets to coordinator through the TCP socket
-                        tokio::spawn(async move {
-                            Self::send_to_socket(coord_raw_send_rx_inner, wh).await;
-                        });
-
-                        // receiving packets from coordinator through the TCP socket
-                        let coord_raw_rx_tx = coord_raw_receive_tx_inner.clone();
-                        tokio::spawn(async move {
-                            Self::receive_from_socket(rh, coord_raw_rx_tx, Some(partner)).await;
-                        });
-
-                        let mut coord_heartbeat_sub = coord_raw_receive_tx_inner.subscribe();
-                        // tokio::task::yield_now().await; // not receiving welcome packet in lower spawn when not yielding here
-
-                        let coord_raw_sender = coord_raw_send_tx_inner.clone();
-                        let connected_tx_inner = connected_tx.clone();
-                        let coord_raw_receive = coord_raw_receive_tx_l.clone();
-                        let coord_raw_send = coord_raw_send_tx_l.clone();
-                        // wait for the welcome packet and when received, start heartbeat for as long as the write channel is open
-                        while let Ok((packet, _partner)) = coord_heartbeat_sub.recv().await {
-                            if let PacketKind::Welcome { addr, wait_for_ack } = packet.data {
-                                // TODO maybe send the coord_send_tx_inner directly if someone wants to use it
-                                connected_tx_inner.send(wait_for_ack).await.unwrap();
+                match queryable.recv_async().await {
+                    Ok(query) => {
+                        // Get payload bytes, with SHM support when feature is enabled
+                        let payload_bytes = match query.payload() {
+                            Some(p) => {
+                                #[cfg(feature = "shm")]
                                 {
-                                    // connection accepted here, so we can replace the sender channel
-                                    coord_raw_send
-                                        .write()
-                                        .unwrap()
-                                        .replace(coord_send_tx_inner.clone());
-                                    // ... and the receiver as well
-                                    coord_raw_receive
-                                        .write()
-                                        .unwrap()
-                                        .replace(coord_raw_receive_tx_inner.clone());
-                                }
-
-                                // setting up heartbeats
-                                loop {
-                                    let timeout = tokio::time::timeout(
-                                        CLIENT_REJOIN_POLL_INTERVAL,
-                                        coord_send_rx_inner.recv(),
-                                    )
-                                    .await;
-                                    match timeout {
-                                        Ok(Some(mut packet)) => {
-                                            packet.header.source = addr.ship; // overwrite source with our id
-                                            packet.header.target = CONTROLLER_CLIENT_ID; // overwrite target with controller id
-                                            if let Err(e) = coord_raw_sender.send(packet).await {
-                                                error!("could not forward coordinator packet: {e}");
-                                            }
-                                        }
-                                        Err(_e) => {
-                                            let packet = Packet {
-                                                header: crate::net::Header {
-                                                    source: addr.ship,
-                                                    target: CONTROLLER_CLIENT_ID,
-                                                },
-                                                data: PacketKind::Heartbeat,
-                                            };
-                                            match coord_raw_sender.send(packet).await {
-                                                Err(e) => {
-                                                    error!(
-                                                        "could not send heartbeat to coordinator: {e}"
-                                                    );
-                                                    return; // channel closed
-                                                }
-                                                Ok(_) => {
-                                                    // debug!("sending heartbeat");
-                                                }
-                                            };
-                                        }
-                                        _ => {}
+                                    // Check if payload is SHM
+                                    if let Some(shm_buf) = p.as_shm() {
+                                        debug!("Received SHM payload");
+                                        shm_buf.to_vec()
+                                    } else {
+                                        p.to_bytes().to_vec()
                                     }
                                 }
+                                #[cfg(not(feature = "shm"))]
+                                {
+                                    p.to_bytes().to_vec()
+                                }
                             }
+                            None => {
+                                error!("Query has no payload");
+                                if let Err(e) = query.reply_err("no payload").wait() {
+                                    error!("Failed to send error reply: {}", e);
+                                }
+                                continue;
+                            }
+                        };
+
+                        // Parse header: id (4 bytes) + variable_type (1 byte) + name (64 bytes) + data
+                        if payload_bytes.len() < 69 {
+                            error!("Data payload too short");
+                            if let Err(e) = query.reply_err("payload too short").wait() {
+                                error!("Failed to send error reply: {}", e);
+                            }
+                            continue;
                         }
+
+                        let id_bytes = [
+                            payload_bytes[0],
+                            payload_bytes[1],
+                            payload_bytes[2],
+                            payload_bytes[3],
+                        ];
+                        let msg_id = u32::from_be_bytes(id_bytes);
+                        let variable_type = VariableType::from(payload_bytes[4]);
+
+                        let name_bytes = &payload_bytes[5..69];
+                        let var_name = String::from_utf8_lossy(
+                            name_bytes.split(|&b| b == 0).next().unwrap_or_default(),
+                        )
+                        .to_string();
+
+                        let data = payload_bytes[69..].to_vec();
+
+                        {
+                            let mut lock = raw_recv_buff_clone.write().unwrap();
+                            lock.entry(msg_id)
+                                .or_default()
+                                .push((data, variable_type, var_name));
+                        }
+
+                        if updated_raw_recv_clone.send(msg_id).is_err() {
+                            debug!("Data for id {} ready, but no consumers listening", msg_id);
+                        }
+
+                        // Reply with ACK to confirm receipt
+                        let key_expr = query.key_expr().clone();
+                        if let Err(e) = query.reply(key_expr, &[0u8; 1]).wait() {
+                            error!("Failed to send ACK reply: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error receiving data query: {}", e);
+                        break;
                     }
                 }
             }
         });
+
+        // Wait for the queryable handler to be running
+        let _ = ready_rx.await;
+        debug!("Client {} queryable handler ready", ship_name_str);
 
         Self {
             kind: ship_kind,
-            other_client_entrance: client_listener_port,
-            coordinator_send: coord_raw_send_tx,
-            coordinator_receive: coord_raw_receive_tx,
-            connected: connected_rx,
-            tcp_port,
-            ip,
+            coordinator_send: coord_send_tx,
+            coordinator_receive: coord_receive_tx,
             rm_rules_on_disconnect,
             updated_raw_recv,
             raw_recv_buff,
-            pools: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            wind_receiver,
+            wind_sender,
+            session,
+            domain_id,
+            #[cfg(feature = "shm")]
+            shm_provider,
         }
     }
 
-    pub async fn send_to_socket(
-        mut channel: tokio::sync::mpsc::Receiver<Packet>,
-        mut wh: OwnedWriteHalf,
-    ) {
-        while let Some(packet) = channel.recv().await {
-            let packet_bytes = match to_bytes::<rkyv::rancor::Error>(&packet) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    error!("Failed to serialize packet: {e}");
-                    // Log the error and skip sending this specific packet.
-                    // A serialization error doesn't necessarily mean the connection is broken.
-                    continue;
-                }
-            };
+    /// Register the client to the network
+    pub async fn register(&mut self) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
+        let ship_name = match &self.kind {
+            ShipKind::Rat(name) => name.clone(),
+            ShipKind::Wind(name) => name.clone(),
+        };
+        let ship_name_key = sanitize_key(&ship_name);
 
-            let packet_size = packet_bytes.len();
+        // Key for coordinator -> client messages
+        let coord_to_client_key =
+            format!("minot/{}/coord/clients/{}", self.domain_id, ship_name_key);
+        // Key for client -> coordinator messages
+        let client_to_coord_key =
+            format!("minot/{}/clients/{}/coord", self.domain_id, ship_name_key);
+        let join_key = format!("minot/{}/coord/join", self.domain_id);
 
-            // Check if the packet size fits into a u32
-            if packet_size > u32::MAX as usize {
-                error!(
-                    "Packet size ({}) exceeds maximum allowed {} bytes for size header. Dropping packet.",
-                    packet_size,
-                    u32::MAX
-                );
-                continue; // Cannot send packets this large with this protocol
-            }
+        let coord_subscriber = self
+            .session
+            .declare_subscriber(&coord_to_client_key)
+            .wait()
+            .expect("Failed to create coordinator subscriber");
 
-            let packet_size_u32 = packet_size as u32;
-            let packet_size_buffer = packet_size_u32.to_be_bytes();
-            let mut buffer = Vec::with_capacity(COMM_HEADER_BYTES_N + packet_size);
-            buffer.push(PROTO_IDENTIFIER);
-            buffer.extend_from_slice(&packet_size_buffer);
-            buffer.extend_from_slice(&packet_bytes);
+        debug!("Client {} listening on {}", ship_name, coord_to_client_key);
 
-            debug!(
-                "Attempting to send {} bytes (Packet size: {}).",
-                buffer.len(),
-                packet_size
-            );
+        let (send_tx, mut send_rx) = tokio::sync::mpsc::channel::<Packet>(256);
+        let (recv_tx, _) =
+            tokio::sync::broadcast::channel::<(Packet, Option<std::net::SocketAddr>)>(256);
 
-            if let Err(e) = wh.write_all(&buffer).await {
-                error!("Failed to send data to TCP socket: {e}");
-                channel.close();
-                return;
-            }
-            debug!("Sent buffer through socket");
+        {
+            self.coordinator_send.write().unwrap().replace(send_tx);
+            self.coordinator_receive
+                .write()
+                .unwrap()
+                .replace(recv_tx.clone());
         }
-        info!("Send channel closed, send_to_socket task exiting.");
-    }
 
-    pub async fn receive_from_socket(
-        mut rh: OwnedReadHalf,
-        channel: tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>,
-        partner: Option<SocketAddr>,
-    ) {
-        let mut received_data: Vec<u8> = Vec::new();
-        let mut temp_buffer = [0; 4096];
+        // Task to send to coordinator
+        let session_for_send = std::sync::Arc::clone(&self.session);
+        let client_to_coord_key_owned = client_to_coord_key.clone();
+        tokio::spawn(async move {
+            let coord_publisher = session_for_send
+                .declare_publisher(client_to_coord_key_owned)
+                .congestion_control(zenoh::qos::CongestionControl::Block)
+                .reliability(zenoh::qos::Reliability::Reliable)
+                .wait()
+                .expect("Failed to create coordinator publisher");
 
-        loop {
-            let n = match rh.read(&mut temp_buffer).await {
-                Ok(0) => {
-                    // Connection closed by peer
-                    debug!("TCP connection closed by peer.");
-                    return;
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    error!("Failed to read from TCP stream: {}", e);
-                    return;
-                }
-            };
-
-            debug!("Read {} bytes from socket for partner {:?}.", n, partner);
-
-            received_data.extend_from_slice(&temp_buffer[..n]);
-
-            // --- Packet Framing and Processing ---
-            // Process the accumulated data buffer. We loop because a single read() might
-            // contain multiple complete packets or the end of one packet and the start of another.
-            while received_data.len() >= COMM_HEADER_BYTES_N {
-                let identifier = received_data[0];
-                if identifier != PROTO_IDENTIFIER {
-                    error!(
-                        "Protocol identifier mismatch. Expected {}, got {}. Disconnecting.",
-                        PROTO_IDENTIFIER, identifier
-                    );
-                    // TODO maybe just drop the packet
-                    return;
-                }
-
-                let size_bytes: [u8; 4] = match received_data[1..COMM_HEADER_BYTES_N].try_into() {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        error!(
-                            "Buffer too short to extract size bytes. Length: {}. Expected at least {}. Disconnecting.",
-                            received_data.len(),
-                            COMM_HEADER_BYTES_N
-                        );
-                        return;
-                    }
-                };
-                let msg_size = u32::from_be_bytes(size_bytes) as usize;
-
-                debug!(
-                    "Found header for packet of size {} for partner {:?}. Total needed: {}.",
-                    msg_size,
-                    partner,
-                    COMM_HEADER_BYTES_N + msg_size
-                );
-
-                // Check if the accumulation buffer contains the complete packet (header + data)
-                let total_packet_size = COMM_HEADER_BYTES_N + msg_size;
-                if received_data.len() >= total_packet_size {
-                    // We have enough data for a complete packet!
-
-                    // Extract the packet data (excluding the header)
-                    let packet_bytes =
-                        received_data[COMM_HEADER_BYTES_N..total_packet_size].to_vec();
-                    debug!(
-                        "Extracted packet bytes ({} bytes) for partner {:?}.",
-                        packet_bytes.len(),
-                        partner
-                    );
-
-                    let packet: Packet = match from_bytes::<Packet, rkyv::rancor::Error>(
-                        &packet_bytes,
-                    ) {
-                        Ok(packet) => packet,
-                        Err(e) => {
-                            error!(
-                                "Failed to deserialize packet for partner {:?}: {}. Discarding this packet.",
-                                partner, e
-                            );
-                            // Discard the bytes for the corrupted packet from the buffer
-                            received_data.drain(..total_packet_size);
-                            // Continue processing the *rest* of the buffer
-                            continue;
-                        }
-                    };
-
-                    debug!("Packet details: {:?}", packet);
-
-                    if let Err(e) = channel.send((packet, partner)) {
-                        error!(
-                            "Could not send packet to internal broadcast channel for partner {:?}: {}",
-                            partner, e
-                        );
-                        // The channel is likely closed or has no active receivers.
-                        return;
-                    }
-                    debug!(
-                        "Sent packet to broadcast channel for partner {:?}.",
-                        partner
-                    );
-
-                    // Remove the processed packet (header + data) from the beginning of the buffer.
-                    received_data.drain(..total_packet_size);
-                    debug!(
-                        "Drained {} bytes from buffer. Remaining buffer size: {}.",
-                        total_packet_size,
-                        received_data.len(),
-                    );
-
-                    // Loop back to check if the next bytes in the buffer form another complete packet
-                } else {
-                    debug!(
-                        "Buffer incomplete for next packet. Needed: {}, Available: {}. Waiting for more data.",
-                        total_packet_size,
-                        received_data.len()
-                    );
+            while let Some(packet) = send_rx.recv().await {
+                let bytes =
+                    to_bytes::<rkyv::rancor::Error>(&packet).expect("Failed to serialize packet");
+                if let Err(e) = coord_publisher.put(&*bytes).wait() {
+                    error!("Failed to send to coordinator: {}", e);
                     break;
                 }
             }
+        });
 
-            // If the inner loop finished, we either processed all available complete packets
-            // or the remaining data in the buffer is less than the size of a header, or
-            // less than the size of the *next* expected packet.
-            // The outer loop continues to wait for more data from the socket.
-        }
-    }
-
-    pub fn get_active_interfaces() -> Vec<NetworkInterface> {
-        datalink::interfaces()
-            .into_iter()
-            .filter(|i| {
-                #[cfg(unix)]
-                {
-                    i.is_running()
+        let recv_tx_clone = recv_tx.clone();
+        let ship_kind_clone = self.kind.clone();
+        let wind_sender_clone = self.wind_sender.clone();
+        tokio::spawn(async move {
+            loop {
+                match coord_subscriber.recv_async().await {
+                    Ok(sample) => {
+                        let payload = sample.payload().to_bytes();
+                        let aligned = align_bytes(&payload);
+                        match from_bytes::<Packet, rkyv::rancor::Error>(&aligned) {
+                            Ok(packet) => {
+                                // Forward wind packets to dedicated channel (buffered, no race)
+                                if matches!(packet.data, PacketKind::Wind(_)) {
+                                    if let Err(e) = wind_sender_clone.send(packet.clone()).await {
+                                        debug!("Failed to forward wind packet: {}", e);
+                                    }
+                                }
+                                // Also forward to broadcast for other consumers
+                                if let Err(e) = recv_tx_clone.send((packet, None)) {
+                                    debug!("Failed to forward coordinator packet: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to deserialize coordinator packet: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Coordinator connection lost for {:?}: {}",
+                            ship_kind_clone, e
+                        );
+                        break;
+                    }
                 }
+            }
+        });
 
-                #[cfg(not(unix))]
-                {
-                    #[allow(unused_variables)]
-                    let _ = i.index;
-                    // On Windows (and other non-Unix), just keep the interface
-                    true
-                }
-            })
-            .filter(|i| i.is_up())
-            .collect::<Vec<_>>()
-    }
-
-    /// Register the client to the network and return a oneshot receiver to wait for the disconnect.
-    /// The function will run until a network is established or an error occurs but the error won't be that no network could be found.
-    pub async fn register(&mut self) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-        self.coordinator_receive.write().unwrap().take();
-        self.coordinator_send.write().unwrap().take();
-
-        let client_domain_id = get_domain_id();
-        if client_domain_id > 0 {
-            info!("Client using domain ID {}", client_domain_id);
-        }
-
+        // Now send the join request
         let network_register_packet = Packet {
             header: crate::net::Header {
                 source: ShipName::MAX,
                 target: CONTROLLER_CLIENT_ID,
             },
             data: PacketKind::JoinRequest {
-                tcp_port: self.tcp_port,
-                other_client_entrance: self.other_client_entrance,
                 kind: Sea::pad_ship_kind_name(&self.kind),
                 remove_rules_on_disconnect: self.rm_rules_on_disconnect,
-                domain_id: client_domain_id,
+                domain_id: self.domain_id,
             },
         };
 
-        debug!(
-            "register with client_entrance port: {}",
-            self.other_client_entrance
-        );
+        let bytes = to_bytes::<rkyv::rancor::Error>(&network_register_packet)
+            .expect("Failed to serialize join request");
 
-        let udp_socket = Self::get_udp_socket(Some(self.ip), None).await;
+        // Publisher for join requests
+        let publisher = self
+            .session
+            .declare_publisher(&join_key)
+            .congestion_control(zenoh::qos::CongestionControl::Block)
+            .reliability(zenoh::qos::Reliability::Reliable)
+            .wait()
+            .expect("Failed to create join publisher");
 
-        let wait_for_ack = loop {
-            Self::send_packet_broadcast(&network_register_packet, &udp_socket).await?;
+        debug!("Sending join request to {}", join_key);
 
-            let tim = tokio::time::timeout(CLIENT_REGISTER_TIMEOUT, self.connected.recv()).await;
+        let mut welcome_sub = recv_tx.subscribe();
 
-            match tim {
+        // Keep sending join requests until we get a welcome
+        loop {
+            publisher
+                .put(&*bytes)
+                .wait()
+                .map_err(|e| anyhow!("Failed to send join request: {}", e))?;
+
+            // Wait for welcome - use a timeout to retry join requests
+            // This is acceptable as it's just for retrying discovery, not for correctness
+            let timeout =
+                tokio::time::timeout(std::time::Duration::from_millis(500), welcome_sub.recv())
+                    .await;
+
+            match timeout {
+                Ok(Ok((packet, _))) => {
+                    if let PacketKind::Welcome {
+                        addr: _,
+                        wait_for_ack,
+                    } = packet.data
+                    {
+                        debug!("Received welcome from coordinator");
+
+                        // For non-compare nodes, wait for coordinator ready signal
+                        let is_non_compare = match &self.kind {
+                            ShipKind::Rat(name) => name != COMPARE_NODE_NAME,
+                            _ => true,
+                        };
+                        if is_non_compare && wait_for_ack {
+                            info!("{:?}: waiting for coordinator ready signal", self.kind);
+                            Self::wait_for_ack(welcome_sub).await?;
+                        }
+
+                        let (_disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                        return Ok(disconnect_rx);
+                    }
+                    // Not a welcome packet, keep waiting
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                    warn!("Register receiver lagged by {} messages", n);
+                }
+                Ok(Err(e)) => {
+                    return Err(anyhow!("Channel error during registration: {}", e));
+                }
                 Err(_) => {
-                    debug!("JoinRequest timed out..");
-                    continue;
-                }
-                Ok(None) => {
-                    return Err(anyhow!("TCP channel closed"));
-                }
-                Ok(Some(wait_for_ack)) => {
-                    break wait_for_ack;
+                    debug!("Join request timeout, retrying...");
                 }
             }
-        };
+        }
+    }
 
-        let (_disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-
-        // only make non minot tui nodes wait for the coordinate since they ask for variables
-        if match &self.kind {
-            ShipKind::Rat(name) => name != COMPARE_NODE_NAME,
-            _ => true,
-        } {
-            // TODO disconnect not implemented yet, must send to disconnect_tx
-            if wait_for_ack {
-                info!("{:?}: waiting for coord ready signal.", self.kind);
-                // Wait for coordinator to send us Ack to signal that every expected client is connected
-                let mut coord_sub = self
-                    .coordinator_receive
-                    .read()
-                    .unwrap()
-                    .as_ref()
-                    .expect("TCP Socket does not exist")
-                    .subscribe();
-                loop {
-                    match coord_sub.recv().await {
-                        Err(e) => {
-                            error!("Could not receive updates from coordinator: {}", e);
-                        }
-                        Ok((packet, _)) => {
-                            if matches!(packet.data, PacketKind::Acknowledge) {
-                                debug!("received ack, so all are connected!");
-                                break;
-                            }
-                        }
+    async fn wait_for_ack(
+        mut coord_sub: tokio::sync::broadcast::Receiver<(Packet, Option<std::net::SocketAddr>)>,
+    ) -> anyhow::Result<()> {
+        loop {
+            match coord_sub.recv().await {
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("Receiver lagged by {} messages", n);
+                    continue;
+                }
+                Err(e) => {
+                    return Err(anyhow!("Could not receive from coordinator: {}", e));
+                }
+                Ok((packet, _)) => {
+                    if matches!(packet.data, PacketKind::Acknowledge) {
+                        debug!("Received ack, all clients connected!");
+                        return Ok(());
                     }
                 }
             }
         }
-
-        Ok(disconnect_rx)
     }
 
+    /// Send raw data to another client via Zenoh query (request-reply).
     pub async fn send_raw_to_other_client(
         &self,
-        address: &IpAddr,
         id: u32,
-        port: u16,
-        data: AlignedVec,
+        data: rkyv::util::AlignedVec,
         variable_type: VariableType,
         variable_name: &str,
+        target_ship_name: &str,
     ) -> anyhow::Result<()> {
-        let addr = format!("{}:{}", address, port);
-        let pool = self.get_pool(&addr).await;
+        let target_key = sanitize_key(target_ship_name);
+        let data_key = format!("minot/{}/data/{}", self.domain_id, target_key);
 
-        // A small retry loop for getting a connection or handling a write error
-        const MAX_RETRIES: u32 = 2;
-        for attempt in 0..MAX_RETRIES {
-            let mut stream = match pool.get().await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(
-                        "Attempt {}: Failed to get connection from pool: {}",
-                        attempt + 1,
-                        e
-                    );
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    continue;
-                }
-            };
+        // Build header: id (4 bytes) + variable_type (1 byte) + name (64 bytes) + data
+        let total_len = 69 + data.len();
 
-            // --- Frame the message once ---
-            let mut padded_name = [0u8; 64];
-            let name_bytes = variable_name.as_bytes();
-            let len = name_bytes.len().min(64);
-            padded_name[..len].copy_from_slice(&name_bytes[..len]);
+        let id_bytes = id.to_be_bytes();
+        let mut padded_name = [0u8; 64];
+        let name_bytes = variable_name.as_bytes();
+        let len = name_bytes.len().min(64);
+        padded_name[..len].copy_from_slice(&name_bytes[..len]);
 
-            let packet_size = data.len() as u32;
-            let packet_size_buffer = packet_size.to_be_bytes();
-            let id_buffer = id.to_be_bytes();
+        #[cfg(feature = "shm")]
+        if total_len >= SHM_SIZE_THRESHOLD {
+            // Try to allocate SHM buffer for zero-copy transfer
+            let shm_result = self
+                .shm_provider
+                .alloc(total_len)
+                .with_policy::<BlockOn<GarbageCollect>>()
+                .await;
 
-            let mut header = vec![
-                PROTO_IDENTIFIER,      // 1 byte
-                packet_size_buffer[0], // 4 bytes for size
-                packet_size_buffer[1],
-                packet_size_buffer[2],
-                packet_size_buffer[3],
-                variable_type.into(), // 1 byte
-                id_buffer[0],         // 4 bytes for ID
-                id_buffer[1],
-                id_buffer[2],
-                id_buffer[3],
-            ];
-            header.extend_from_slice(&padded_name); // 64 bytes for name
+            if let Ok(mut shm_buf) = shm_result {
+                // Copy data into SHM buffer
+                shm_buf[0..4].copy_from_slice(&id_bytes);
+                shm_buf[4] = variable_type.into();
+                shm_buf[5..69].copy_from_slice(&padded_name);
+                shm_buf[69..total_len].copy_from_slice(&data);
 
-            match stream.write_all(&header).await {
-                Ok(_) => (),
-                Err(e) => {
-                    error!(
-                        "Attempt {}: Failed to write header: {}. Invalidating connection.",
-                        attempt + 1,
-                        e
-                    );
-                    let _ = Object::take(stream); // Purge bad connection
-                    continue; // Retry
-                }
-            }
+                // Convert to immutable SHM buffer (can be cloned for retries)
+                let shm_immut: zenoh::shm::ZShm = shm_buf.into();
 
-            match stream.write_all(&data).await {
-                Ok(_) => {
-                    debug!("Successfully wrote data for id {} to stream.", id);
-                    return Ok(());
-                }
-                Err(e) => {
-                    error!(
-                        "Attempt {}: Failed to write data: {}. Invalidating connection.",
-                        attempt + 1,
-                        e
-                    );
-                    let _ = Object::take(stream); // Purge bad connection
-                    continue; // Retry
-                }
-            }
-        }
+                debug!("Sending {} bytes via SHM to {}", total_len, data_key);
 
-        Err(anyhow!("Failed to send data after {} retries", MAX_RETRIES))
-    }
-
-    /// A task to distribute received messages from other clients via 1 to 1 TCP connections
-    pub async fn recv_raw_from_other_client(
-        tcp_port: tokio::net::TcpListener,
-        updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
-        raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
-    ) -> ! {
-        const HEADER_SIZE: usize = 1 + 4 + 1 + 4 + 64; // PROTO(1) + SIZE(4) + TYPE(1) + ID(4) + NAME(64)
-        loop {
-            let (mut stream, addr) = match tcp_port.accept().await {
-                Ok(res) => res,
-                Err(e) => {
-                    error!("Failed to accept connection: {e}");
-                    continue;
-                }
-            };
-            debug!("Accepted new connection from {}", addr);
-
-            let task_update_chan = updated_raw_recv.clone();
-            let task_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
-
-            tokio::spawn(async move {
-                let mut header_buf = [0u8; HEADER_SIZE];
-
+                // Use query with SHM payload
                 loop {
-                    match stream.read_exact(&mut header_buf).await {
-                        Ok(_) => (),
-                        Err(e) => {
-                            // "early eof" is normal when the client disconnects cleanly.
-                            if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                                error!(
-                                    "Could not read message header from {}: {}. Closing connection.",
-                                    addr, e
+                    let replies = self
+                        .session
+                        .get(&data_key)
+                        .payload(shm_immut.clone())
+                        .wait()
+                        .map_err(|e| anyhow!("Failed to send data query: {}", e))?;
+
+                    match replies.recv_async().await {
+                        Ok(reply) => match reply.result() {
+                            Ok(_sample) => {
+                                debug!(
+                                    "Sent data id {} to {} via SHM (ACK received)",
+                                    id, data_key
                                 );
-                            } else {
-                                debug!("Connection closed by {}.", addr);
+                                return Ok(());
                             }
-                            break;
+                            Err(err) => {
+                                let err_payload = err.payload().to_bytes();
+                                let err_msg = String::from_utf8_lossy(&err_payload);
+                                warn!("Receiver error for id {}: {}", id, err_msg);
+                                tokio::task::yield_now().await;
+                                continue;
+                            }
+                        },
+                        Err(_) => {
+                            tokio::task::yield_now().await;
+                            continue;
                         }
-                    };
-
-                    if header_buf[0] != PROTO_IDENTIFIER {
-                        error!(
-                            "Invalid protocol identifier from {}. Closing connection.",
-                            addr
-                        );
-                        break;
-                    }
-
-                    let size_bytes = [header_buf[1], header_buf[2], header_buf[3], header_buf[4]];
-                    let msg_size = u32::from_be_bytes(size_bytes);
-
-                    let variable_type = VariableType::from(header_buf[5]);
-
-                    let id_bytes = [header_buf[6], header_buf[7], header_buf[8], header_buf[9]];
-                    let msg_id = u32::from_be_bytes(id_bytes);
-
-                    let name_bytes = &header_buf[10..];
-                    let var_name = String::from_utf8_lossy(
-                        name_bytes.split(|&b| b == 0).next().unwrap_or_default(),
-                    )
-                    .to_string();
-
-                    let mut payload_buf = vec![0; msg_size as usize];
-                    if let Err(e) = stream.read_exact(&mut payload_buf).await {
-                        error!(
-                            "Failed to read payload of size {} for id {}: {}. Closing connection.",
-                            msg_size, msg_id, e
-                        );
-                        break;
-                    }
-
-                    let response_data = (payload_buf, variable_type, var_name);
-
-                    {
-                        let mut lock = task_recv_buff.write().unwrap();
-                        lock.entry(msg_id).or_default().push(response_data);
-                    }
-
-                    if task_update_chan.send(msg_id).is_err() {
-                        debug!(
-                            "Data for id {} is ready, but no consumers are listening.",
-                            msg_id
-                        );
-                    }
-                }
-            });
-        }
-    }
-
-    // --- end send/recv ---
-
-    fn calculate_broadcast(ipv4_addr: std::net::Ipv4Addr, prefix_len: u8) -> std::net::Ipv4Addr {
-        let mask = !0u32 >> prefix_len;
-        let bcast_addr = u32::from(ipv4_addr) | mask;
-        std::net::Ipv4Addr::from(bcast_addr)
-    }
-
-    async fn send_packet_broadcast(packet: &Packet, udp_socket: &UdpSocket) -> anyhow::Result<()> {
-        let raw = to_bytes::<rkyv::rancor::Error>(packet).expect("packet not serializable");
-        let mut data = vec![PROTO_IDENTIFIER];
-        data.extend_from_slice(&raw);
-        for interface in Self::get_active_interfaces().iter() {
-            for ip_network in &interface.ips {
-                if let IpAddr::V4(ipv4_addr) = ip_network.ip() {
-                    // let addr = if ipv4_addr.is_loopback() {
-                    // Self::calculate_broadcast(ipv4_addr, ip_network.prefix())
-                    // } else {
-                    let addr = Self::calculate_broadcast(ipv4_addr, ip_network.prefix());
-                    // };
-
-                    let target_str = format!(
-                        "{}.{}.{}.{}:{}",
-                        addr.octets()[0],
-                        addr.octets()[1],
-                        addr.octets()[2],
-                        addr.octets()[3],
-                        CLIENT_LISTEN_PORT
-                    );
-
-                    let sent = udp_socket.send_to(&data, &target_str).await?;
-                    if sent != data.len() {
-                        return Err(anyhow!("data len mismatch with actual send bytes"));
                     }
                 }
             }
+            // Fall through to network transfer if SHM alloc failed
+            debug!(
+                "SHM allocation failed, falling back to network for {} bytes",
+                total_len
+            );
         }
 
-        Ok(())
+        // Network transfer (small messages, SHM disabled, or SHM fallback)
+        let mut payload = Vec::with_capacity(total_len);
+        payload.extend_from_slice(&id_bytes);
+        payload.push(variable_type.into());
+        payload.extend_from_slice(&padded_name);
+        payload.extend_from_slice(&data);
+
+        loop {
+            let replies = self
+                .session
+                .get(&data_key)
+                .payload(&payload)
+                .wait()
+                .map_err(|e| anyhow!("Failed to send data query: {}", e))?;
+
+            match replies.recv_async().await {
+                Ok(reply) => match reply.result() {
+                    Ok(_sample) => {
+                        debug!("Sent data id {} to {} (ACK received)", id, data_key);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        let err_payload = err.payload().to_bytes();
+                        let err_msg = String::from_utf8_lossy(&err_payload);
+                        warn!("Receiver error for id {}: {}", id, err_msg);
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+            }
+        }
     }
 }

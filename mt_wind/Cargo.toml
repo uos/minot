@@ -30,11 +30,12 @@ r2r = { workspace = true, optional = true }
 ros2-client = { workspace = true, optional = true }
 ros2-interfaces-jazzy-serde = { workspace = true, optional = true }
 ros2-interfaces-jazzy-rkyv.workspace = true
-cdr-encoding = { version = "0.10" }
+cdr-encoding.workspace = true
 ratpub = { workspace = true, optional = true }
 
 [features]
-default = ["ratpub"]
+default = ["ratpub", "shared-memory"]
+shared-memory = ["mt_sea/shm", "ratpub?/shared-memory"]
 humble = ["mt_bagread/humble"]
 ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy-serde"]
 ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]

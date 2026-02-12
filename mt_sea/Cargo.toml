@@ -13,17 +13,18 @@ homepage.workspace = true
 rust-version.workspace = true
 exclude.workspace = true
 
+[features]
+default = ["shm"]
+shm = ["zenoh/shared-memory"]
 
 [dependencies]
 nalgebra.workspace = true
 log.workspace = true
 mt_net.workspace = true
 env_logger.workspace = true
-rand = "0.8.5"
+rand.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 rkyv.workspace = true
-pnet = "0.35.0"
-socket2 = "0.5.8"
-deadpool.workspace = true
 async-trait.workspace = true
+zenoh.workspace = true

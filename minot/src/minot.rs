@@ -287,12 +287,9 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     let rules = eval.rules;
     println!("Looking for coordinator...");
-    let comparer = mt_sea::ship::NetworkShipImpl::init(
-        ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
-        None,
-        false,
-    )
-    .await?;
+    let comparer =
+        mt_sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), false)
+            .await?;
 
     // remove searching feedback
     print!("\x1b[1A");
@@ -388,6 +385,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     mt_sea::net::PacketKind::RatAction {
+                        variable: _,
                         action: crate::Action::Catch { source, id },
                         lock_until_ack: _,
                     } => match comparer.get_cannon().catch_dyn(id).await {
@@ -991,7 +989,6 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         info!("Looking for coordinator...");
                         let comparer = mt_sea::ship::NetworkShipImpl::init(
                             ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
-                            None,
                             false,
                         )
                         .await?;
@@ -1088,6 +1085,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                             }
                                         }
                                         mt_sea::net::PacketKind::RatAction {
+                                            variable: _,
                                             action: crate::Action::Catch { source, id },
                                             lock_until_ack: _,
                                         } => match comparer.get_cannon().catch_dyn(id).await {

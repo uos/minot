@@ -14,20 +14,20 @@ rust-version.workspace = true
 exclude.workspace = true
 
 [dependencies]
-mcap = "0.17.0"
+mcap.workspace = true
 log.workspace = true
 anyhow.workspace = true
 mt_mtc.workspace = true
 mt_net.workspace = true
-camino = "1.0"
+camino.workspace = true
 rkyv.workspace = true
 tokio.workspace = true
 serde.workspace = true
-serde_yml = "0.0.12"
+serde_yml.workspace = true
 nalgebra.workspace = true
 ros2-interfaces-jazzy-serde.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
-cdr = "0.2.4"
+cdr.workspace = true
 
 [features]
 humble = []

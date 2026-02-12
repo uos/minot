@@ -3,7 +3,7 @@ use ros2_interfaces_jazzy_rkyv::std_msgs::msg;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    mt_sea::init_logging();
 
     let node = Node::create("node1".to_owned()).await?;
     let pubber = node

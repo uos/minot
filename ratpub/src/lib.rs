@@ -92,19 +92,33 @@ impl Node {
             (coord_tx, coord_rx)
         };
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            while !coord_rx
-                .recv()
-                .await
-                .map(|(packet, _)| matches!(packet.data, net::PacketKind::Acknowledge))
-                .unwrap()
-            {}
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-            tx.send(()).unwrap();
+        tokio::spawn(async move {
+            // Signal that we're ready to receive BEFORE entering the receive loop
+            let _ = ready_tx.send(());
+
+            loop {
+                match coord_rx.recv().await {
+                    Ok((packet, _)) => {
+                        if matches!(packet.data, net::PacketKind::Acknowledge) {
+                            let _ = result_tx.send(());
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                }
+            }
         });
 
-        // // Request
+        // Wait for the receiver task to be ready before sending the request
+        ready_rx
+            .await
+            .map_err(|_| anyhow!("Receiver task failed to start"))?;
+
+        // Request
         coord_tx
             .send(Packet {
                 header: mt_sea::net::Header::default(),
@@ -117,7 +131,7 @@ impl Node {
             .await?;
 
         // Response
-        rx.await?;
+        result_rx.await?;
 
         Ok(Publisher {
             topic,
@@ -154,17 +168,31 @@ impl Node {
                 .subscribe()
         };
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            while !coord_rx
-                .recv()
-                .await
-                .map(|(packet, _)| matches!(packet.data, net::PacketKind::Acknowledge))
-                .unwrap()
-            {}
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-            tx.send(()).unwrap();
+        tokio::spawn(async move {
+            // Signal that we're ready to receive BEFORE entering the receive loop
+            let _ = ready_tx.send(());
+
+            loop {
+                match coord_rx.recv().await {
+                    Ok((packet, _)) => {
+                        if matches!(packet.data, net::PacketKind::Acknowledge) {
+                            let _ = result_tx.send(());
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                }
+            }
         });
+
+        // Wait for the receiver task to be ready before sending the request
+        ready_rx
+            .await
+            .map_err(|_| anyhow!("Receiver task failed to start"))?;
 
         // Request
         coord_tx
@@ -179,7 +207,7 @@ impl Node {
             .await?;
 
         // Response
-        rx.await?;
+        result_rx.await?;
 
         let rat_ship = Arc::clone(&self.ship);
         let (tx, rx) = tokio::sync::mpsc::channel(queue_size);
@@ -234,7 +262,7 @@ impl Node {
 
     pub async fn create(name: String) -> anyhow::Result<Self> {
         let ship =
-            mt_sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_owned()), None, true).await?;
+            mt_sea::ship::NetworkShipImpl::init(ShipKind::Rat(name.to_owned()), true).await?;
 
         Ok(Self {
             name,

@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
+    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -31,8 +31,6 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::Wi
             }
         }
     });
-
-    tokio::task::yield_now().await;
 
     Ok(rx)
 }
@@ -284,7 +282,7 @@ pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
 #[tokio::main]
 #[allow(dead_code)]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    mt_sea::init_logging();
 
     let wind_name = get_env_or_default("wind_name", "turbine_ros1")?;
     let master_uri = get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;

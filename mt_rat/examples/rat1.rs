@@ -1,5 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    mt_sea::init_logging();
     let mut var1 = rat::rtrue();
     let mut var2 = rat::rfalse();
     let mut var3 = rat::rtrue();
