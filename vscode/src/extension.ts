@@ -213,7 +213,7 @@ function isCompatibleVersion(
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Minot');
-  outputChannel.show(true);
+  // outputChannel.show(true);
   
   try {
     loadRequiredMinotVersion(context.extensionPath);

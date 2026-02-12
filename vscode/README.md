@@ -57,6 +57,11 @@ Currently none. Will be added with future releases.
 
 ## Release Notes
 
+### 0.5.0
+
+- Switched to Minot version 0.5.0
+- Do not show output window automatically
+
 ### 0.4.0
 
 - Switched to Minot version 0.4.1
