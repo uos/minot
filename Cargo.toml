@@ -4,7 +4,7 @@ members = ["minot", "ratpub", "mt_bagread", "mt_rat", "mt_mtc", "mt_sea", "mt_wi
 resolver = "3"
 
 [workspace.package]
-version = "0.4.4"
+version = "0.5.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://codeberg.org/stelzo/minot"
@@ -30,12 +30,12 @@ exclude = [
 ]
 
 [workspace.dependencies]
-mt_sea = { path = "mt_sea", version = "0.4.4", default-features = false }
-ratpub = { path = "ratpub", version = "0.4.4" }
-mt_bagread = { path = "mt_bagread", version = "0.4.4" }
-mt_net = { path = "mt_net", version = "0.4.4" }
-mt_wind = { path = "mt_wind", version = "0.4.4" }
-mt_mtc = { path = "mt_mtc", version = "0.4.4" }
+mt_sea = { path = "mt_sea", version = "0.5.0", default-features = false }
+ratpub = { path = "ratpub", version = "0.5.0" }
+mt_bagread = { path = "mt_bagread", version = "0.5.0" }
+mt_net = { path = "mt_net", version = "0.5.0" }
+mt_wind = { path = "mt_wind", version = "0.5.0" }
+mt_mtc = { path = "mt_mtc", version = "0.5.0" }
 
 # Tools
 anyhow = "1.0"
