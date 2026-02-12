@@ -97,15 +97,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Mind that we don't need to `spin_once` here thanks to async like in other Rust ROS libraries.
 
-!!! warning "Unstable Networks"
-
-    In the current state, `ratpub` should only be used in stable networks. There are still use cases that break your expectations. These problems are planned to get fixed though.
-
-    Examples
-
-    - If a publisher dies or disconnects in an existing Pub/Sub connection the subscriber will never get messages on this topic again, even when the publisher comes back or other ones still publish on that topic.
-    - Loosing connections to the Coordinator at runtime will result in an error. `ratpub` is therefore not really reliable in unrealiable networks like Wi-Fi.
-    - Nodes are always talking to the Coordinator, which is a good feature for reconfigurable topics but also adds latency. The plan is to add static and dynamic topics, where both have the same features but both have better latency for their respective use case.
-
-
 Now just run your publisher, the subscriber and the Coordinator at the same time and observe the logs.

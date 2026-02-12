@@ -295,7 +295,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.4.3"
+mt_rat = "0.4.4"
 ~~~
 
 ## Ratpub
@@ -305,8 +305,8 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.4.3"
-tokio = { version = "1", features = ["full"] }
+ratpub = "0.4.4"
+tokio = { version = "1.49", features = ["full"] }
 ~~~
 
 Since you probably want to use existing ROS 2 message definitions, you can also add the following crate, which is auto-generated from the Jazzy release. It bundles all usual types and implements the required `rkyv` traits for sending them over the Minot network.

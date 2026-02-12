@@ -11,8 +11,8 @@ Part of the [minot](https://github.com/uos/minot) family of crates.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.4.3"
-tokio = { version = "1", features = ["full"] }
+ratpub = "0.4.4"
+tokio = { version = "1.49", features = ["full"] }
 ~~~
 
 Since you probably want to use existing ROS2 message definitions, you can also add the following crate which is auto-generated from the Jazzy release.
