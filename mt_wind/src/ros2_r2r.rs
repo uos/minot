@@ -26,7 +26,7 @@ use r2r::sensor_msgs::msg::{Imu, PointCloud2};
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), None, false).await?;
+    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), false).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -44,8 +44,6 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::Wi
             }
         }
     });
-
-    tokio::task::yield_now().await;
 
     Ok(rx)
 }

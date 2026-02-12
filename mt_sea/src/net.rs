@@ -1,28 +1,28 @@
-use std::{
-    collections::{HashMap, HashSet},
-    net::{Ipv4Addr, SocketAddr, TcpStream},
-    str::FromStr,
-};
+use std::collections::HashSet;
 
 use log::{debug, error, info, warn};
 use nalgebra::DMatrix;
 
-use rkyv::{Archive, Deserialize, Serialize, api::low::from_bytes, rancor};
+use rkyv::{Archive, Deserialize, Serialize, api::high::from_bytes, rancor, util::AlignedVec};
+use zenoh::Wait;
 
-use crate::{Action, ShipKind, ShipName, VariableHuman, WindData, client::Client};
+use crate::{Action, ShipKind, ShipName, VariableHuman, WindData};
 
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
-pub const CLIENT_REGISTER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
-pub const CLIENT_LISTEN_PORT: u16 = 6594;
-pub const CLIENT_REJOIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-pub const CLIENT_HEARTBEAT_TCP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-pub const CLIENT_HEARTBEAT_TCP_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(200);
-pub const SERVER_DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
-pub const CLIENT_TO_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::MAX; // TODO can be deleted in that case
-pub const CLIENT_TO_CLIENT_INIT_RETRY_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(50);
+
+/// Copy bytes into an aligned buffer for rkyv deserialization
+fn align_bytes(bytes: &[u8]) -> AlignedVec {
+    let mut aligned = AlignedVec::with_capacity(bytes.len());
+    aligned.extend_from_slice(bytes);
+    aligned
+}
+
+/// Sanitize a ship name for use in Zenoh key expressions.
+/// Zenoh forbids `#` and `?` characters in key expressions.
+pub fn sanitize_key(name: &str) -> String {
+    name.replace('#', "_hash_").replace('?', "_qmark_")
+}
 
 pub fn get_domain_id() -> u16 {
     let val = std::env::var("MINOT_DOMAIN_ID")
@@ -84,8 +84,6 @@ pub enum PacketKind {
     Retry,
     RequestVarSend(String),
     JoinRequest {
-        tcp_port: u16,
-        other_client_entrance: u16,
         kind: ShipKind,
         remove_rules_on_disconnect: bool,
         domain_id: u16,
@@ -93,7 +91,7 @@ pub enum PacketKind {
     Welcome {
         addr: crate::NetworkShipAddress,
         wait_for_ack: bool,
-    }, // the id of the rat so the coordinator can differentiate them and the tcp port for 1:1 and heartbeat
+    },
     Heartbeat,
     Disconnect,
     RuleAppend {
@@ -111,6 +109,7 @@ pub enum PacketKind {
     RawDatau8(NetArray<u8>),
     VariableTaskRequest(String),
     RatAction {
+        variable: String,
         action: Action,
         lock_until_ack: bool,
     },
@@ -122,19 +121,6 @@ pub enum PacketKind {
         kind: RatPubRegisterKind,
     },
 }
-
-// unsafe impl Send for PacketKind {}
-
-// With a join request, the client sends a joinrequest with udp to all
-// available broadcast addresses. The UDP port is not important here.
-// The target port is the fixed udp port of the server.
-// Since we only have one fixed port on a device, the coordinator,
-// the clients need to use dynamic ports everywhere else.
-//
-// The coordinator listens to these requests on the fixed port.
-// The join request includes the tcp listener port of the client.
-// The coordinator must save this port. It now always uses that when communicating with it and it also sends to it other clients if they need
-// to have a connection.
 
 #[derive(Archive, Serialize, Deserialize, Copy, Clone, Debug, Default)]
 pub struct Header {
@@ -148,328 +134,258 @@ pub struct Packet {
     pub data: PacketKind,
 }
 
-// unsafe impl Send for Packet {}
-
 #[derive(Clone, Debug)]
 pub struct ShipHandle {
     pub name: ShipKind,
     pub addr_from_coord: crate::NetworkShipAddress,
     pub ship: ShipName,
-    // Send here to disconnect the tcp listener
     pub disconnect: tokio::sync::broadcast::Sender<bool>,
-    // get requests from the client
-    pub recv: tokio::sync::broadcast::Sender<(Packet, Option<SocketAddr>)>,
-    // send to this client
+    pub recv: tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>,
     pub send: tokio::sync::mpsc::Sender<Packet>,
-    pub other_client_port: u16,
     pub remove_rules_on_disconnect: bool,
 }
 
+/// Zenoh-based Sea coordinator
 #[derive(Debug)]
 pub struct Sea {
     pub network_clients_chan: tokio::sync::broadcast::Sender<ShipHandle>,
-    dissolve_network: tokio::sync::mpsc::Sender<tokio::sync::mpsc::Sender<()>>,
+    #[allow(dead_code)]
+    session: std::sync::Arc<zenoh::Session>,
+    #[allow(dead_code)]
+    domain_id: u16,
 }
 
-/// Server handling the Sea network
 impl Sea {
     pub async fn init(
-        external_ip: Option<[u8; 4]>,
+        _external_ip: Option<[u8; 4]>,
         clients_wait_for_ack: std::sync::Arc<std::sync::RwLock<bool>>,
     ) -> Self {
-        let (rejoin_req_tx, mut rejoin_req_rx) =
-            tokio::sync::mpsc::channel::<(String, Packet)>(128);
+        let domain_id = get_domain_id();
+        if domain_id > 0 {
+            info!("Coordinator using domain ID {}", domain_id);
+        }
 
-        let (clients_tx, mut clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(64);
+        // Initialize Zenoh session
+        let config = zenoh::Config::default();
+        let session = zenoh::open(config)
+            .wait()
+            .expect("Failed to open Zenoh session");
+        let session = std::sync::Arc::new(session);
 
-        let (dissolve_network_tx, mut dissolve_network_rx) =
-            tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(10);
+        let (clients_tx, _clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(64);
+        let clients_tx_inner = clients_tx.clone();
 
-        // task to disconnect all clients i.e. dissolve
+        // Key expression for join requests
+        let join_key = format!("minot/{}/coord/join", domain_id);
+
+        // Subscribe to join requests from clients
+        let session_clone = std::sync::Arc::clone(&session);
+        let clwa = std::sync::Arc::clone(&clients_wait_for_ack);
+        let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+
         tokio::spawn(async move {
-            let mut clients: Vec<tokio::sync::broadcast::Sender<bool>> = Vec::new();
-            loop {
-                tokio::select! {
-                    answer = dissolve_network_rx.recv() => {
-                        match answer {
-                            None => {
-                                // channel closed
-                                return;
-                            }
-                            Some(answer) => {
-                                for c in clients.iter() {
-                                    c.send(true).unwrap();
-                                }
-                                // notify that we are finished
-                                answer.send(()).await.unwrap();
-                                return;
-                            }
-                        }
-                    }
-                    newclient = clients_rx.recv() => {
-                        match newclient {
-                            Err(e) => {
-                                error!("Error receiving new client in dissolve handler: {e}");
-                            }
-                            Ok(client) => {
-                                clients.push(client.disconnect);
-                            }
-                        }
-                    }
-                }
-            }
-        });
+            let subscriber = session_clone
+                .declare_subscriber(join_key.clone())
+                .wait()
+                .expect("Failed to create join subscriber");
 
-        // task to handle join requests on udp socket
-        tokio::spawn(async move {
-            let coordinator_domain_id = get_domain_id();
-            if coordinator_domain_id > 0 {
-                info!("Coordinator using domain ID {}", coordinator_domain_id);
-            }
-            let udp_listener = Client::get_udp_socket(external_ip, Some(CLIENT_LISTEN_PORT)).await;
-            let rejoin_request = Packet {
-                header: Header {
-                    source: ShipName::MAX,
-                    target: CONTROLLER_CLIENT_ID,
-                },
-                // dummy. names are padded with maximal length 64 chars
-                data: PacketKind::JoinRequest {
-                    tcp_port: 0,
-                    other_client_entrance: 0,
-                    kind: Sea::pad_ship_kind_name(&ShipKind::Rat("".to_string())),
-                    remove_rules_on_disconnect: false,
-                    domain_id: 0,
-                },
-            };
-            let bytes_rejoin_request = rkyv::api::high::to_bytes::<rancor::Error>(&rejoin_request)
-                .expect("could not serialize rejoin request");
-            let expected_n_bytes_for_rejoin_request = bytes_rejoin_request.len();
-            let mut new_clients_without_response = HashMap::<String, (usize, Vec<u8>)>::new();
-
-            info!("Listening {:?}", udp_listener.local_addr().unwrap());
-            debug!(
-                "Expecting {} bytes for JoinRequest including PROTO_IDENTIFIER",
-                expected_n_bytes_for_rejoin_request + 1
-            );
+            info!("Sea coordinator listening on {}", join_key);
 
             loop {
-                let mut buf = [0; 256]; // JoinRequest normally 115 bytes
-                let (n, addr) = udp_listener.recv_from(&mut buf).await.unwrap();
-                let id = format!("{}:{}", addr.ip(), addr.port());
-                debug!("Receiving {} bytes from {} via UDP", n, id);
-
-                match new_clients_without_response.get_mut(&id) {
-                    Some((kum, buffer)) => {
-                        *kum += n;
-                        buffer.extend_from_slice(&buf[..n]);
+                let sample = subscriber.recv_async().await;
+                let sample = match sample {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Error receiving join request: {}", e);
+                        continue;
                     }
-                    None => {
-                        let mut buffer = Vec::with_capacity(1024);
-                        if buf[0] != PROTO_IDENTIFIER {
-                            continue; // not meant for us
-                        } else {
-                            buffer.extend_from_slice(&buf[1..n]);
-                        }
-                        new_clients_without_response.insert(id, (buffer.len(), buffer));
-                    }
-                }
+                };
 
-                let mut to_delete = Vec::<String>::new();
-                for (id, (kum, buffer)) in new_clients_without_response.iter_mut() {
-                    if *kum != expected_n_bytes_for_rejoin_request {
+                let payload = sample.payload().to_bytes();
+                let aligned = align_bytes(&payload);
+                let packet: Packet = match from_bytes::<Packet, rancor::Error>(&aligned) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("Failed to deserialize join request: {}", e);
+                        continue;
+                    }
+                };
+
+                if let PacketKind::JoinRequest {
+                    kind: ship_kind,
+                    remove_rules_on_disconnect,
+                    domain_id: client_domain_id,
+                } = packet.data
+                {
+                    if client_domain_id != domain_id {
+                        debug!(
+                            "Rejecting join request from domain {} (coordinator is domain {})",
+                            client_domain_id, domain_id
+                        );
                         continue;
                     }
 
-                    let packet: Packet = match from_bytes::<Packet, rancor::Error>(buffer) {
-                        Err(e) => {
-                            error!("Received package is broken: {e}");
-                            continue;
+                    let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
+                    debug!("Received JoinRequest: {:?}", ship_kind);
+
+                    {
+                        let mut lock = rat_lock.lock().unwrap();
+                        if lock.get(&ship_kind).is_some() {
+                            // Client is reconnecting - allow it by removing old entry
+                            // The old Zenoh subscriber task will eventually exit when it
+                            // detects no more messages or errors
+                            info!("Client {:?} reconnecting, allowing rejoin", ship_kind);
+                            lock.remove(&ship_kind);
                         }
-                        Ok(packet) => packet,
-                    };
-
-                    match rejoin_req_tx.send((id.clone(), packet)).await {
-                        Err(e) => {
-                            error!("Could not send rejoin request to internal channel: {e}");
-                        }
-                        Ok(_) => {
-                            to_delete.push(id.clone());
-                        }
-                    };
-                }
-
-                for id in to_delete {
-                    new_clients_without_response.remove(&id);
-                }
-
-                tokio::task::yield_now().await; // needed to yield to receiver, else the thread is sometimes blocking
-            }
-        });
-
-        // task to wait for each new join request
-        let clients_tx_inner = clients_tx.clone();
-        tokio::spawn(async move {
-            let coordinator_domain_id = get_domain_id();
-            let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
-            // let rat_lock_unlock = Arc::clone(&rat_lock); // currently we only allow unique names, so no unlock needed.
-            loop {
-                let receive = rejoin_req_rx.recv().await;
-                if let Some((addr, packet)) = receive {
-                    match packet.data {
-                        PacketKind::JoinRequest {
-                            tcp_port: client_tcp_port,
-                            other_client_entrance: other_client_port,
-                            kind: ship_kind,
-                            remove_rules_on_disconnect,
-                            domain_id: client_domain_id,
-                        } => {
-                            // Filter by domain ID
-                            if client_domain_id != coordinator_domain_id {
-                                debug!(
-                                    "Rejecting join request from domain {} (coordinator is domain {})",
-                                    client_domain_id, coordinator_domain_id
-                                );
-                                continue;
-                            }
-
-                            let ship_kind = Sea::unpad_ship_kind_name(&ship_kind);
-                            debug!("Received RejoinRequest: {:?} from {:?}", ship_kind, addr);
-                            {
-                                let mut lock = rat_lock.lock().unwrap();
-                                if lock.get(&ship_kind).is_some() {
-                                    debug!(
-                                        "requested client already exists or is in the progress of joining the network"
-                                    );
-                                    continue;
-                                }
-                                lock.insert(ship_kind.clone());
-                            }
-                            let generated_id = rand::random::<ShipName>().abs();
-                            let (disconnect_tx, _disconnect_rx) =
-                                tokio::sync::broadcast::channel::<bool>(1);
-
-                            // task to handle tcp connection to this client
-                            let curr_client_create_sender = clients_tx_inner.clone();
-                            let ships_lock_for_disconnect = std::sync::Arc::clone(&rat_lock);
-                            let clwa = std::sync::Arc::clone(&clients_wait_for_ack);
-                            tokio::spawn(async move {
-                                let ip = addr.split(':').next().unwrap();
-                                let client_stream = tokio::net::TcpStream::connect(format!(
-                                    "{}:{}",
-                                    ip, client_tcp_port
-                                ))
-                                .await
-                                .expect("could not connect to client");
-
-                                let socket =
-                                    socket2::Socket::from(client_stream.into_std().unwrap());
-                                socket.set_keepalive(true).unwrap();
-
-                                // socket
-                                //     .set_tcp_keepalive(
-                                //         &socket2::TcpKeepalive::new()
-                                //             .with_time(CLIENT_HEARTBEAT_TCP_TIMEOUT)
-                                //             .with_interval(CLIENT_HEARTBEAT_TCP_INTERVAL),
-                                //     )
-                                //     .unwrap();
-                                socket
-                                    .set_linger(Some(std::time::Duration::from_secs(30)))
-                                    .unwrap();
-                                let stream: TcpStream = socket.into();
-                                let client_stream =
-                                    tokio::net::TcpStream::from_std(stream).unwrap();
-
-                                let (rh, wh) = client_stream.into_split();
-
-                                let (tx, _) = tokio::sync::broadcast::channel::<(
-                                    Packet,
-                                    Option<SocketAddr>,
-                                )>(256);
-                                let tx_out = tx.clone();
-
-                                let (client_sender_tx, client_sender_rx) =
-                                    tokio::sync::mpsc::channel::<Packet>(256);
-
-                                // reading stream from client
-                                let current_ship = ship_kind.clone();
-
-                                let ship_kind_for_disconnect = ship_kind.clone();
-                                tokio::spawn(async move {
-                                    Client::receive_from_socket(rh, tx, None).await;
-                                    warn!("Client {:?} disconnected.", current_ship);
-                                    {
-                                        let mut lock = ships_lock_for_disconnect.lock().unwrap();
-                                        lock.remove(&ship_kind_for_disconnect);
-                                    }
-                                    // TODO when here, the client is disconnected, so stop all processing (block or send wait signal) until the clients are back
-                                });
-
-                                // writing stream to client
-                                tokio::spawn(async move {
-                                    Client::send_to_socket(client_sender_rx, wh).await;
-                                });
-
-                                let ip_parsed = Ipv4Addr::from_str(ip).expect("Strange ip format");
-
-                                let client_addr = crate::NetworkShipAddress {
-                                    ip: ip_parsed.octets(),
-                                    port: client_tcp_port,
-                                    ship: generated_id,
-                                    kind: ship_kind.clone(),
-                                };
-
-                                let current_clients_wait_for_ack = { *clwa.read().unwrap() };
-                                let welcome_packet = Packet {
-                                    header: Header {
-                                        source: CONTROLLER_CLIENT_ID,
-                                        target: generated_id,
-                                    },
-                                    data: PacketKind::Welcome {
-                                        addr: client_addr.clone(),
-                                        wait_for_ack: current_clients_wait_for_ack,
-                                    },
-                                };
-
-                                match client_sender_tx.send(welcome_packet).await {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        error!("Could not send welcome packet to channel: {e}");
-                                    }
-                                }
-
-                                let ship_handle = ShipHandle {
-                                    ship: generated_id,
-                                    disconnect: disconnect_tx,
-                                    recv: tx_out,
-                                    send: client_sender_tx,
-                                    name: ship_kind,
-                                    addr_from_coord: client_addr,
-                                    other_client_port,
-                                    remove_rules_on_disconnect,
-                                };
-                                curr_client_create_sender.send(ship_handle).unwrap();
-                                debug!("ShipHandle created and sent");
-                            });
-                        }
-                        _ => {
-                            warn!("Received unexpected packet: {packet:?}");
-                        }
+                        lock.insert(ship_kind.clone());
                     }
-                } else {
-                    error!("Channel closed, could not receive rejoin requests in channel.");
+
+                    let generated_id = rand::random::<ShipName>().abs();
+                    let (disconnect_tx, _disconnect_rx) =
+                        tokio::sync::broadcast::channel::<bool>(1);
+
+                    let ship_name_str = match &ship_kind {
+                        ShipKind::Rat(name) => name.clone(),
+                        ShipKind::Wind(name) => name.clone(),
+                    };
+                    let ship_name_key = sanitize_key(&ship_name_str);
+
+                    // Create channels for communication with this client
+                    let (recv_tx, _) = tokio::sync::broadcast::channel::<(
+                        Packet,
+                        Option<std::net::SocketAddr>,
+                    )>(256);
+                    let (send_tx, mut send_rx) = tokio::sync::mpsc::channel::<Packet>(256);
+
+                    let client_addr = crate::NetworkShipAddress {
+                        ip: [0, 0, 0, 0],
+                        port: 0,
+                        ship: generated_id,
+                        kind: ship_kind.clone(),
+                    };
+
+                    // Key for coordinator -> client messages
+                    let coord_to_client_key =
+                        format!("minot/{}/coord/clients/{}", domain_id, ship_name_key);
+                    // Key for client -> coordinator messages
+                    let client_to_coord_key =
+                        format!("minot/{}/clients/{}/coord", domain_id, ship_name_key);
+
+                    // Subscriber for receiving from client
+                    let client_subscriber = session_clone
+                        .declare_subscriber(client_to_coord_key)
+                        .wait()
+                        .expect("Failed to create subscriber for client");
+
+                    let recv_tx_clone = recv_tx.clone();
+                    let ships_lock = std::sync::Arc::clone(&rat_lock);
+                    let ship_kind_for_disconnect = ship_kind.clone();
+
+                    // Task to receive from client
+                    tokio::spawn(async move {
+                        loop {
+                            match client_subscriber.recv_async().await {
+                                Ok(sample) => {
+                                    let payload = sample.payload().to_bytes();
+                                    let aligned = align_bytes(&payload);
+                                    match from_bytes::<Packet, rancor::Error>(&aligned) {
+                                        Ok(packet) => {
+                                            if let Err(e) = recv_tx_clone.send((packet, None)) {
+                                                debug!("Failed to forward client packet: {}", e);
+                                                break;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to deserialize client packet: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Client {:?} disconnected: {}",
+                                        ship_kind_for_disconnect, e
+                                    );
+                                    let mut lock = ships_lock.lock().unwrap();
+                                    lock.remove(&ship_kind_for_disconnect);
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    // Create publisher synchronously BEFORE spawning send task
+                    // This ensures publisher is ready before we send the welcome
+                    debug!("Creating coordinator publisher for {}", coord_to_client_key);
+                    let coord_to_client_key_owned = coord_to_client_key.clone();
+                    let publisher = session_clone
+                        .declare_publisher(coord_to_client_key_owned)
+                        .congestion_control(zenoh::qos::CongestionControl::Block)
+                        .reliability(zenoh::qos::Reliability::Reliable)
+                        .wait()
+                        .expect("Failed to create publisher for client");
+
+                    // Send welcome packet directly using the publisher
+                    let current_wait_for_ack = { *clwa.read().unwrap() };
+                    let welcome_packet = Packet {
+                        header: Header {
+                            source: CONTROLLER_CLIENT_ID,
+                            target: generated_id,
+                        },
+                        data: PacketKind::Welcome {
+                            addr: client_addr.clone(),
+                            wait_for_ack: current_wait_for_ack,
+                        },
+                    };
+
+                    let bytes = rkyv::api::high::to_bytes::<rancor::Error>(&welcome_packet)
+                        .expect("Failed to serialize welcome packet");
+                    if let Err(e) = publisher.put(&*bytes).wait() {
+                        error!("Failed to send welcome packet: {}", e);
+                        continue;
+                    }
+
+                    debug!("Welcome packet sent to {}", coord_to_client_key);
+
+                    // Task to send subsequent packets to client
+                    tokio::spawn(async move {
+                        while let Some(packet) = send_rx.recv().await {
+                            let bytes = rkyv::api::high::to_bytes::<rancor::Error>(&packet)
+                                .expect("Failed to serialize packet");
+                            if let Err(e) = publisher.put(&*bytes).wait() {
+                                error!("Failed to send to client: {}", e);
+                                break;
+                            }
+                        }
+                    });
+
+                    let ship_handle = ShipHandle {
+                        ship: generated_id,
+                        disconnect: disconnect_tx,
+                        recv: recv_tx,
+                        send: send_tx,
+                        name: ship_kind,
+                        addr_from_coord: client_addr,
+                        remove_rules_on_disconnect,
+                    };
+
+                    if let Err(e) = clients_tx_inner.send(ship_handle) {
+                        error!("Failed to broadcast new client: {}", e);
+                    }
+                    debug!("ShipHandle created and sent");
                 }
             }
         });
 
         Self {
             network_clients_chan: clients_tx,
-            dissolve_network: dissolve_network_tx,
+            session,
+            domain_id,
         }
     }
 
     pub fn pad_string(input: &str) -> String {
         if input.len() >= 64 {
-            return input.to_string(); // Return the string if it's already 64 or longer
+            return input.to_string();
         }
         let padding_count = 64 - input.len();
         let padding = "#".repeat(padding_count);
@@ -495,61 +411,8 @@ impl Sea {
         }
     }
 
-    // TODO never worked
     pub async fn cleanup(&mut self) {
-        let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
-        if let Err(e) = self.dissolve_network.send(answer_tx).await {
-            error!("Error while droppping network: {e}");
-        }
-
-        let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());
-        // tokio::task::yield_now().await;
-        match answer_timeout.await {
-            Err(e) => {
-                error!("Dropping network timeout, discarding waiting for completion: {e}");
-            }
-            Ok(None) => {
-                warn!("Sender already closed in dissolving answer");
-            }
-            _ => {}
-        }
+        // Zenoh session cleanup is handled automatically when dropped
+        info!("Sea coordinator shutting down");
     }
 }
-
-// TODO block_in_place blocks the current thread. So when the dissolve_network receivers are running on the same thread, is this a deadlock since we are blocking the thread?
-// impl Drop for Sea {
-//     fn drop(&mut self) {
-//         tokio::task::block_in_place(move || {
-//             let rt = tokio::runtime::Handle::current();
-//             rt.block_on(self.cleanup());
-//         });
-//     }
-// }
-
-// impl std::future::AsyncDrop for Sea {
-//     type Dropper<'a> = impl std::future::Future<Output = ()>;
-
-//     fn async_drop(self: std::pin::Pin<&mut Self>) -> Self::Dropper<'_> {
-//         println!("calling async drop");
-//         async move {
-//             let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
-//             match self.dissolve_network.send(answer_tx).await {
-//                 Err(e) => {
-//                     error!("Error while droppping network: {e}");
-//                 }
-//                 Ok(_) => {}
-//             }
-
-//             let answer_timeout = tokio::time::timeout(SERVER_DROP_TIMEOUT, answer_rx.recv());
-//             match answer_timeout.await {
-//                 Err(e) => {
-//                     error!("Dropping network timeout, discarding waiting for completion: {e}");
-//                 }
-//                 Ok(None) => {
-//                     error!("Sender already closed in dissolving answer");
-//                 }
-//                 _ => {}
-//             }
-//         }
-//     }
-// }

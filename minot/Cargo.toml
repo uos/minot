@@ -14,6 +14,7 @@ rust-version.workspace = true
 exclude.workspace = true
 
 [dependencies]
+mt_wind = { optional = true, workspace = true }
 mt_sea.workspace = true
 env_logger.workspace = true
 log.workspace = true
@@ -25,19 +26,17 @@ mt_net.workspace = true
 mt_mtc.workspace = true
 mt_bagread.workspace = true
 anyhow.workspace = true
-crossterm = { version = "0.28.1", features = ["event-stream"] }
-futures = "0.3.31"
-ratatui = "0.29.0"
-rosbag2-rs = "0.2.1"
-chrono = "0.4.40"
-tui-logger = "0.16.0" # out of date but needed for 1.85 compatibility
+crossterm.workspace = true
+futures.workspace = true
+ratatui.workspace = true
+rosbag2-rs.workspace = true
+chrono.workspace = true
+tui-logger.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-regex = "1"
-once_cell = "1"
-
-mt_wind = { optional = true, workspace = true }
-rust_decimal = "1.37.1"
+regex.workspace = true
+once_cell.workspace = true
+rust_decimal.workspace = true
 
 [[bin]]
 name = "minot"
@@ -49,7 +48,10 @@ path = "src/coord.rs"
 
 # Note: All following features only embed existing nodes that can be built and run separately through the network.
 [features]
-default = ["embed-coord"]
+default = ["embed-coord", "shared-memory"]
+
+# Enable shared memory for zero-copy transfer of large messages (same-machine only)
+shared-memory = ["mt_sea/shm", "mt_wind?/shared-memory"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
 embed-ros2-c = ["embed-ros2-c-turbine"]

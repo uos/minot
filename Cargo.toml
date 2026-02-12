@@ -4,7 +4,7 @@ members = ["minot", "ratpub", "mt_bagread", "mt_rat", "mt_mtc", "mt_sea", "mt_wi
 resolver = "3"
 
 [workspace.package]
-version = "0.4.3"
+version = "0.4.4"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://codeberg.org/stelzo/minot"
@@ -30,24 +30,55 @@ exclude = [
 ]
 
 [workspace.dependencies]
-mt_sea = { path = "mt_sea", version = "0.4.3" }
-ratpub = { path = "ratpub", version = "0.4.3" }
-mt_bagread = { path = "mt_bagread", version = "0.4.3" }
-mt_net = { path = "mt_net", version = "0.4.3" }
-mt_wind = { path = "mt_wind", version = "0.4.3" }
-mt_mtc = { path = "mt_mtc", version = "0.4.3" }
+mt_sea = { path = "mt_sea", version = "0.4.4", default-features = false }
+ratpub = { path = "ratpub", version = "0.4.4" }
+mt_bagread = { path = "mt_bagread", version = "0.4.4" }
+mt_net = { path = "mt_net", version = "0.4.4" }
+mt_wind = { path = "mt_wind", version = "0.4.4" }
+mt_mtc = { path = "mt_mtc", version = "0.4.4" }
 
+# Tools
 anyhow = "1.0"
-r2r = "0.9.5"
+serde_json = "1.0"
 async-trait = "0.1.86"
-rkyv = { version = "0.8.10" }
 env_logger = "0.11.6"
 log = "0.4.25"
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+
+crossterm = { version = "0.28.1", features = ["event-stream"] }
+futures = "0.3.31"
+ratatui = "0.29.0"
+rosbag2-rs = "0.2.1"
+chrono = "0.4.40"
+tui-logger = "0.16.0" # out of date but needed for 1.85 compatibility
+regex = "1.12"
+once_cell = "1.21"
+rust_decimal = "1.37.1"
+logos = "0.15.0"
+chumsky = { version = "0.12", default-features = false, features = ["std"] }
+ariadne = "0.4"
+mcap = "0.17.0"
+camino = "1.0"
+serde_yml = "0.0.12"
+cdr = "0.2.4"
+rand = "0.8"
+cdr-encoding = "0.10"
+
+# IO
+futures-lite = "2.6"
+tokio = { version = "1.49", features = ["signal", "process"] }
+zenoh = { version = "1.7", features = [
+  "transport_multilink",
+  "transport_tcp",
+  "unstable",
+] }
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+rkyv = { version = "0.8.10" }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.49", features = ["full"] }
-deadpool = { version = "0.12", features = ["managed"] }
+
+# ROS
+r2r = "0.9.5"
 ros2-client = { version = "0.8.2" }
 ros2-interfaces-jazzy-serde = { version = "0.0.4", features = [
   "std_msgs",
@@ -64,8 +95,6 @@ ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
   "builtin_interfaces",
 ] }
 roslibrust = { version = "0.18", features = ["ros1", "macro"] }
-clap_complete = "4.5.65"
-clap = { version = "4.5.28", features = ["derive"] }
 
 [profile.release]
 lto = "fat"         # Link Time Optimization

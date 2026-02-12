@@ -24,9 +24,11 @@ rkyv.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
-futures-lite = { version = "2", optional = true }
+futures-lite = { workspace = true, optional = true }
 
 [features]
+default = ["shared-memory"]
+shared-memory = ["mt_sea/shm"]
 smol = ["dep:futures-lite"]
 
 [[example]]
