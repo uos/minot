@@ -789,6 +789,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          # Manually define ARM architecture for ring 0.17+ on older GCC
+          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path minot/Cargo.toml
