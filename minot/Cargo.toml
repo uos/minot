@@ -47,11 +47,10 @@ path = "src/minot.rs"
 name = "minot-coord"
 path = "src/coord.rs"
 
-# Note: All following features only embed existing nodes that can be built and run separately through the network.
 [features]
-default = ["embed-coord", "shm"]
+default = ["embed-coord"]
 
-# Enable shared memory for zero-copy transfer of large messages (same-machine only)
+# Experimental: Enable shared memory for zero-copy transfer of large messages (same-machine only)
 shm = ["mt_sea/shm", "mt_wind?/shm"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
@@ -77,7 +76,14 @@ embed-ros1-turbine = ["dep:mt_wind", "mt_wind/ros1-native"]
 embed-ratpub-turbine = ["dep:mt_wind", "mt_wind/ratpub"]
 
 [package.metadata.docs.rs]
-features = ["embed-coord", "embed-ratpub", "embed-ros1-native", "embed-ros2-c", "embed-ros2-c-humble", "embed-ros2-native"]
+features = [
+  "embed-coord",
+  "embed-ratpub",
+  "embed-ros1-native",
+  "embed-ros2-c",
+  "embed-ros2-c-humble",
+  "embed-ros2-native",
+]
 default-target = "x86_64-unknown-linux-gnu"
 rustdoc-args = ["--cfg", "docsrs"]
 
@@ -86,7 +92,14 @@ name = "minot"
 section = "science"
 priority = "optional"
 assets = [
-    ["target/release/minot", "usr/bin/minot", "755"],
-    ["target/release/minot-coord", "usr/bin/minot-coord", "755"],
+  [
+    "target/release/minot",
+    "usr/bin/minot",
+    "755",
+  ],
+  [
+    "target/release/minot-coord",
+    "usr/bin/minot-coord",
+    "755",
+  ],
 ]
-

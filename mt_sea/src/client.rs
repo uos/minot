@@ -261,6 +261,7 @@ impl Client {
     /// - Some(Err(e)) if there was an error during sending
     /// - None if SHM is unavailable and caller should fall back to network
     #[cfg(feature = "shm")]
+    #[allow(clippy::too_many_arguments)]
     async fn try_shm_send(
         &self,
         total_len: usize,

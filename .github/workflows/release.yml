@@ -979,7 +979,7 @@ jobs:
           SERIES: "noble"
           DEB_PATH: "*.deb"
         run: |
-          sleep 60 # ensure previous PPA pushes are processed before and CI did run
+          sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
@@ -1002,6 +1002,22 @@ jobs:
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
           cd ..
 
+  aur-publish:
+    runs-on: ubuntu-latest
+    needs: [create-release, jazzy-release-uos-ppa]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish AUR package
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: minot
+          pkgbuild: ./packaging/arch/PKGBUILD
+          commit_username: stelzo
+          commit_email: stelzo@steado.de
+          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
+          commit_message: Update AUR package
+          ssh_keyscan_types: rsa,ecdsa,ed25519
+
   minot-rat-release-uos-ppa:
     runs-on: ubuntu-latest
     needs: [create-release, jazzy-release-uos-ppa]
@@ -1018,7 +1034,7 @@ jobs:
           SERIES: "jammy noble"
           DEB_PATH: "*.deb"
         run: |
-          sleep 60 # ensure previous PPA pushes are processed before and CI did run
+          sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key

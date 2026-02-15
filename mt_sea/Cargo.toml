@@ -14,7 +14,7 @@ rust-version.workspace = true
 exclude.workspace = true
 
 [features]
-default = ["shm"]
+default = []
 shm = ["zenoh/shared-memory"]
 
 [dependencies]
