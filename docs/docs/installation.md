@@ -295,7 +295,7 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.5.1"
+mt_rat = "0.5.2"
 ~~~
 
 ## Ratpub
@@ -305,7 +305,7 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.5.1"
+ratpub = "0.5.2"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 
