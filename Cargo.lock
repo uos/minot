@@ -528,6 +528,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytesize"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bd91ee7b2422bcb158d90ef4d14f75ef67f340943fc4149891dcce8f8b972a3"
+
+[[package]]
 name = "camino"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2487,9 +2493,10 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
+ "bytesize",
  "chrono",
  "clap",
  "clap_complete",
@@ -2583,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "mt_bagread"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -2603,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "mt_mtc"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2616,7 +2623,7 @@ dependencies = [
 
 [[package]]
 name = "mt_net"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "rkyv 0.8.15",
@@ -2626,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "mt_rat"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2641,7 +2648,7 @@ dependencies = [
 
 [[package]]
 name = "mt_sea"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2657,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "mt_wind"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3781,7 +3788,7 @@ dependencies = [
 
 [[package]]
 name = "ratpub"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",

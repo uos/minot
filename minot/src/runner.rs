@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use log::{info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -7,6 +7,36 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 type BoxError = Box<dyn std::error::Error>;
+
+/// Initialize a stderr logger for the runner process with a minimal format
+/// that pelorus can parse: `[LEVEL] target: message`
+fn init_runner_logger() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,zenoh=warn"))
+        .format(|buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "[{}] {}: {}",
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
+        .target(env_logger::Target::Stderr)
+        .init();
+}
+
+/// Re-emit a log record received from serve's JSON protocol at the correct level.
+fn forward_serve_log(level: &str, target: &str, message: &str) {
+    match level {
+        "ERROR" => error!(target: target, "{}", message),
+        "WARN" => warn!(target: target, "{}", message),
+        "INFO" => info!(target: target, "{}", message),
+        "DEBUG" => debug!(target: target, "{}", message),
+        "TRACE" => log::trace!(target: target, "{}", message),
+        _ => info!(target: target, "{}", message),
+    }
+}
 
 #[derive(Serialize, Debug)]
 #[serde(tag = "type")]
@@ -58,6 +88,8 @@ struct ServerResponse {
 }
 
 pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<(), BoxError> {
+    init_runner_logger();
+
     let file_content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read file {:?}: {}", file_path, e))?;
 
@@ -172,17 +204,17 @@ pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<
                     message,
                     target,
                 } => {
-                    println!("[{}] {}: {}", level, target, message);
+                    forward_serve_log(&level, &target, &message);
                 }
                 ServerMessage::CommandResponse(resp) => {
-                    info!("Received command response: {:?}", resp);
+                    debug!("Received command response: {:?}", resp);
                 }
                 ServerMessage::ServerReady => {
                     warn!("Received unexpected ServerReady");
                 }
             }
         } else {
-            print!("{}", line);
+            eprint!("{}", line);
         }
     }
 
@@ -222,18 +254,18 @@ where
                     message,
                     target,
                 } => {
-                    println!("[{}] {}: {}", level, target, message);
+                    forward_serve_log(level, target, message);
                 }
                 _ => {
                     if predicate(&msg) {
                         return Ok(msg);
                     } else {
-                        warn!("Ignored unexpected message while waiting: {:?}", msg);
+                        debug!("Ignored unexpected message while waiting: {:?}", msg);
                     }
                 }
             }
         } else {
-            print!("{}", line);
+            eprint!("{}", line);
         }
     }
 }

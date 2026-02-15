@@ -1892,7 +1892,7 @@ impl App {
                                 if wind_data.is_empty() {
                                     if bagmsgs.end_of_bag {
                                         // Truly no more data in bagfile - abort remaining actions
-                                        info!(
+                                        warn!(
                                             "reached end of bagfile with no more matching messages"
                                         );
                                         return;

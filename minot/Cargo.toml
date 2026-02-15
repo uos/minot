@@ -37,6 +37,7 @@ clap_complete.workspace = true
 regex.workspace = true
 once_cell.workspace = true
 rust_decimal.workspace = true
+bytesize.workspace = true
 
 [[bin]]
 name = "minot"
@@ -48,10 +49,10 @@ path = "src/coord.rs"
 
 # Note: All following features only embed existing nodes that can be built and run separately through the network.
 [features]
-default = ["embed-coord", "shared-memory"]
+default = ["embed-coord", "shm"]
 
 # Enable shared memory for zero-copy transfer of large messages (same-machine only)
-shared-memory = ["mt_sea/shm", "mt_wind?/shared-memory"]
+shm = ["mt_sea/shm", "mt_wind?/shm"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
 embed-ros2-c = ["embed-ros2-c-turbine"]
@@ -79,3 +80,12 @@ embed-ratpub-turbine = ["dep:mt_wind", "mt_wind/ratpub"]
 features = ["embed-coord", "embed-ratpub", "embed-ros1-native", "embed-ros2-c", "embed-ros2-c-humble", "embed-ros2-native"]
 default-target = "x86_64-unknown-linux-gnu"
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.deb]
+name = "minot"
+section = "science"
+priority = "optional"
+assets = [
+    ["target/release/minot", "usr/bin/minot", "755"],
+]
+

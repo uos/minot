@@ -39,12 +39,32 @@ const EMBED_RATPUB_TURBINE_NAME: &'static str = "embedded_ratpub_turbine";
 #[derive(Debug, Clone, Subcommand)]
 pub enum ServeCommand {}
 
+#[cfg(feature = "shm")]
+use bytesize::ByteSize;
+
 #[derive(Parser, Debug)]
 #[command(version, about, author, long_about = None)]
 /// Minot — A versatile toolset for debugging and verifying stateful robot perception software.
 pub(crate) struct Args {
     #[command(subcommand)]
     pub command: Commands,
+
+    /// Disable POSIX shared memory for zero-copy transfer.
+    /// SHM is enabled by default for better performance with large messages.
+    #[cfg(feature = "shm")]
+    #[arg(long, global = true)]
+    pub no_shm: bool,
+
+    /// Size of the shared memory buffer pool (e.g., "7mb", "64MiB", "1gb").
+    /// Default is 7MB which is within typical Linux /dev/shm limits.
+    #[cfg(feature = "shm")]
+    #[arg(long, global = true, default_value = "7mb", value_parser = parse_bytesize)]
+    pub shm_size: ByteSize,
+}
+
+#[cfg(feature = "shm")]
+fn parse_bytesize(s: &str) -> Result<ByteSize, String> {
+    s.parse::<ByteSize>().map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -115,8 +135,11 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         Ok(log::LevelFilter::Info)
     }?;
     tui_logger::init_logger(log_level).unwrap();
-    // tui_logger::set_env_filter_from_string(&log_level);
     tui_logger::set_default_level(log_level);
+    tui_logger::set_level_for_target("zenoh", log::LevelFilter::Warn);
+    tui_logger::set_level_for_target("zenoh_transport", log::LevelFilter::Warn);
+    tui_logger::set_level_for_target("zenoh_link", log::LevelFilter::Warn);
+    tui_logger::set_level_for_target("zenoh_protocol", log::LevelFilter::Warn);
 
     #[cfg(feature = "embed-coord")]
     {
@@ -671,9 +694,11 @@ struct StdioLogger {
 
 impl log::Log for StdioLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        // We can filter levels here, but it's easier
-        // to just set the global `log::set_max_level`.
-        // This logger will respect that global level.
+        // Filter out verbose zenoh logs (only show warnings and errors)
+        let target = metadata.target();
+        if target.starts_with("zenoh") && metadata.level() > log::Level::Warn {
+            return false;
+        }
         metadata.level() <= log::max_level()
     }
 
@@ -704,7 +729,12 @@ fn init_stdio_logger(
 ) -> Result<(), log::SetLoggerError> {
     let logger = StdioLogger { sender };
     log::set_boxed_logger(Box::new(logger))?;
-    log::set_max_level(level);
+    // Respect RUST_LOG if set, otherwise use the provided default
+    let effective_level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(level);
+    log::set_max_level(effective_level);
     Ok(())
 }
 
@@ -1345,6 +1375,17 @@ fn start_logging_thread(rx: std::sync::mpsc::Receiver<String>) {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // Set SHM environment variables for mt_sea to read
+    // SHM is enabled by default, --no-shm disables it
+    // SAFETY: We're setting env vars at the start of main before spawning any threads
+    #[cfg(feature = "shm")]
+    unsafe {
+        if args.no_shm {
+            std::env::set_var("MINOT_SHM_DISABLED", "1");
+        }
+        std::env::set_var("MINOT_SHM_SIZE", args.shm_size.as_u64().to_string());
+    }
 
     match args.command {
         Commands::Tui(tui_args) => tui(tui_args.file).await,

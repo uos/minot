@@ -700,7 +700,8 @@ pub fn get_clients(eval: &Evaluated) -> anyhow::Result<HashSet<String>> {
 pub async fn main() -> anyhow::Result<()> {
     mt_sea::init_logging();
 
-    let filepath = Args::parse().file;
+    let args = Args::parse();
+    let filepath = args.file;
 
     let eval = if let Some(fp) = filepath {
         let rules_file = std::fs::canonicalize(&fp)?;

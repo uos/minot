@@ -7,6 +7,8 @@ use rkyv::{api::high::from_bytes, to_bytes, util::AlignedVec};
 use zenoh::Wait;
 
 #[cfg(feature = "shm")]
+use std::sync::RwLock as StdRwLock;
+#[cfg(feature = "shm")]
 use zenoh::shm::{
     BlockOn, GarbageCollect, PosixShmProviderBackend, ShmProvider, ShmProviderBuilder,
 };
@@ -20,18 +22,40 @@ pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::
 pub type RecvBuffer = HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>;
 
 #[cfg(feature = "shm")]
-/// SHM buffer pool size (64 MB)
-const SHM_BUFFER_SIZE: usize = 64 * 1024 * 1024;
+/// Within typical Linux /dev/shm limits
+const DEFAULT_SHM_BUFFER_SIZE: usize = 7 * 1024 * 1024;
 
 #[cfg(feature = "shm")]
-/// Messages larger than this use SHM, smaller use network (8 KB threshold)
 const SHM_SIZE_THRESHOLD: usize = 8 * 1024;
+
+#[cfg(feature = "shm")]
+fn is_shm_enabled() -> bool {
+    !std::env::var("MINOT_SHM_DISABLED")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
+/// Get SHM buffer size from environment variable, falling back to default
+#[cfg(feature = "shm")]
+fn get_shm_buffer_size() -> usize {
+    std::env::var("MINOT_SHM_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_SHM_BUFFER_SIZE)
+}
 
 /// Copy bytes into an aligned buffer for rkyv deserialization
 fn align_bytes(bytes: &[u8]) -> AlignedVec {
     let mut aligned = AlignedVec::with_capacity(bytes.len());
     aligned.extend_from_slice(bytes);
     aligned
+}
+
+/// SHM state with dynamic resizing capability
+#[cfg(feature = "shm")]
+struct ShmState {
+    provider: std::sync::Arc<ShmProvider<PosixShmProviderBackend>>,
+    capacity: usize,
 }
 
 pub struct Client {
@@ -42,14 +66,14 @@ pub struct Client {
     rm_rules_on_disconnect: bool,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
     pub raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
-    /// Dedicated channel for wind packets - uses MPSC to avoid race conditions.
-    /// Wind packets are forwarded here from the coordinator receiver and buffered until consumed.
     pub wind_receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Packet>>>,
     wind_sender: tokio::sync::mpsc::Sender<Packet>,
     session: std::sync::Arc<zenoh::Session>,
     domain_id: u16,
     #[cfg(feature = "shm")]
-    shm_provider: std::sync::Arc<ShmProvider<PosixShmProviderBackend>>,
+    shm_state: StdRwLock<Option<ShmState>>,
+    #[cfg(feature = "shm")]
+    shm_initialized: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for Client {
@@ -62,7 +86,278 @@ impl std::fmt::Debug for Client {
     }
 }
 
+#[cfg(feature = "shm")]
+fn create_shm_provider(size: usize) -> Result<ShmState, String> {
+    match ShmProviderBuilder::default_backend(size).wait() {
+        Ok(provider) => Ok(ShmState {
+            provider: std::sync::Arc::new(provider),
+            capacity: size,
+        }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[cfg(feature = "shm")]
+fn format_shm_error(err_str: &str, requested_size: usize) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let shm_mb = requested_size / (1024 * 1024);
+        if err_str.contains("ENOMEM")
+            || err_str.contains("Cannot allocate")
+            || err_str.contains("No space")
+        {
+            format!(
+                "Insufficient shared memory. Requested {} bytes.\n\
+                Possible fixes:\n\
+                - Increase /dev/shm size: `sudo mount -o remount,size={}M /dev/shm`\n\
+                - Or set ulimit: `ulimit -l unlimited` (may require root)\n\
+                - Or add to /etc/fstab: `tmpfs /dev/shm tmpfs defaults,size={}M 0 0`\n\
+                - Or disable SHM: `--no-shm` or `MINOT_SHM_DISABLED=1`",
+                requested_size,
+                shm_mb.max(16),
+                shm_mb.max(16)
+            )
+        } else if err_str.contains("EACCES") || err_str.contains("Permission denied") {
+            "Permission denied.\n\
+            Possible fixes:\n\
+            - Check /dev/shm permissions: `ls -la /dev/shm`\n\
+            - Ensure user has write access to /dev/shm\n\
+            - Or disable SHM: `--no-shm` or `MINOT_SHM_DISABLED=1`"
+                .to_string()
+        } else {
+            format!(
+                "Error: {}\nTo disable SHM: `--no-shm` or `MINOT_SHM_DISABLED=1`",
+                err_str
+            )
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if err_str.contains("ENOMEM")
+            || err_str.contains("Cannot allocate")
+            || err_str.contains("No space")
+        {
+            format!(
+                "Insufficient shared memory. Requested {} bytes.\n\
+                Possible fixes:\n\
+                - Increase shmmax: `sudo sysctl -w kern.sysv.shmmax={}`\n\
+                - Increase shmall: `sudo sysctl -w kern.sysv.shmall={}`\n\
+                - Or disable SHM: `--no-shm` or `MINOT_SHM_DISABLED=1`\n\
+                Note: macOS has stricter SHM limits than Linux.",
+                requested_size,
+                requested_size,
+                requested_size / 4096
+            )
+        } else if err_str.contains("EACCES") || err_str.contains("Permission denied") {
+            "Permission denied.\n\
+            Possible fixes:\n\
+            - Check System Preferences > Security & Privacy settings\n\
+            - Or disable SHM: `--no-shm` or `MINOT_SHM_DISABLED=1`"
+                .to_string()
+        } else {
+            format!(
+                "Error: {}\nTo disable SHM: `--no-shm` or `MINOT_SHM_DISABLED=1`",
+                err_str
+            )
+        }
+    }
+}
+
 impl Client {
+    /// Get or create SHM provider, initializing on first call
+    #[cfg(feature = "shm")]
+    fn get_or_init_shm(&self) -> Option<std::sync::Arc<ShmProvider<PosixShmProviderBackend>>> {
+        if !is_shm_enabled() {
+            return None;
+        }
+
+        // Fast path: already initialized
+        if self
+            .shm_initialized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return self
+                .shm_state
+                .read()
+                .ok()?
+                .as_ref()
+                .map(|s| s.provider.clone());
+        }
+
+        // Slow path: initialize
+        let mut state = self.shm_state.write().ok()?;
+        if state.is_none() {
+            let initial_size = get_shm_buffer_size();
+            match create_shm_provider(initial_size) {
+                Ok(shm_state) => {
+                    info!(
+                        "SHM enabled with initial buffer size: {} bytes",
+                        initial_size
+                    );
+                    *state = Some(shm_state);
+                    self.shm_initialized
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to create SHM provider: {}\nFalling back to network transport.",
+                        format_shm_error(&e, initial_size)
+                    );
+                    return None;
+                }
+            }
+        }
+        state.as_ref().map(|s| s.provider.clone())
+    }
+
+    /// Try to grow the SHM pool to accommodate a larger message
+    #[cfg(feature = "shm")]
+    fn try_grow_shm(
+        &self,
+        required_size: usize,
+    ) -> Option<std::sync::Arc<ShmProvider<PosixShmProviderBackend>>> {
+        let mut state = self.shm_state.write().ok()?;
+
+        let current_capacity = state.as_ref().map(|s| s.capacity).unwrap_or(0);
+
+        // Double the required size (like Vec growth strategy)
+        let new_capacity = (required_size * 2).max(current_capacity * 2);
+
+        debug!(
+            "Growing SHM pool from {} to {} bytes",
+            current_capacity, new_capacity
+        );
+
+        match create_shm_provider(new_capacity) {
+            Ok(new_state) => {
+                info!("SHM pool grown to {} bytes", new_capacity);
+                *state = Some(new_state);
+                state.as_ref().map(|s| s.provider.clone())
+            }
+            Err(e) => {
+                warn!(
+                    "Cannot grow SHM pool to {} bytes: {}\nFalling back to network transport for large messages.",
+                    new_capacity,
+                    format_shm_error(&e, new_capacity)
+                );
+                None
+            }
+        }
+    }
+
+    /// Get current SHM capacity
+    #[cfg(feature = "shm")]
+    fn shm_capacity(&self) -> usize {
+        self.shm_state
+            .read()
+            .ok()
+            .and_then(|s| s.as_ref().map(|state| state.capacity))
+            .unwrap_or(0)
+    }
+
+    /// Try to send via SHM with automatic pool growth. Returns:
+    /// - Some(Ok(())) if sent successfully via SHM
+    /// - Some(Err(e)) if there was an error during sending
+    /// - None if SHM is unavailable and caller should fall back to network
+    #[cfg(feature = "shm")]
+    async fn try_shm_send(
+        &self,
+        total_len: usize,
+        id_bytes: &[u8; 4],
+        variable_type: VariableType,
+        padded_name: &[u8; 64],
+        data: &[u8],
+        data_key: &str,
+        id: u32,
+    ) -> Option<anyhow::Result<()>> {
+        // Get or initialize SHM provider
+        let mut shm_provider = self.get_or_init_shm()?;
+
+        // Try allocation, growing pool if needed (up to 2 attempts)
+        for attempt in 0..2 {
+            let shm_result = shm_provider
+                .alloc(total_len)
+                .with_policy::<BlockOn<GarbageCollect>>()
+                .await;
+
+            match shm_result {
+                Ok(mut shm_buf) => {
+                    // Copy data into SHM buffer
+                    shm_buf[0..4].copy_from_slice(id_bytes);
+                    shm_buf[4] = variable_type.into();
+                    shm_buf[5..69].copy_from_slice(padded_name);
+                    shm_buf[69..total_len].copy_from_slice(data);
+
+                    let shm_immut: zenoh::shm::ZShm = shm_buf.into();
+                    debug!("Sending {} bytes via SHM to {}", total_len, data_key);
+
+                    // Send with retry loop
+                    loop {
+                        let replies =
+                            match self.session.get(data_key).payload(shm_immut.clone()).wait() {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    return Some(Err(anyhow!("Failed to send data query: {}", e)));
+                                }
+                            };
+
+                        match replies.recv_async().await {
+                            Ok(reply) => match reply.result() {
+                                Ok(_sample) => {
+                                    debug!(
+                                        "Sent data id {} to {} via SHM (ACK received)",
+                                        id, data_key
+                                    );
+                                    return Some(Ok(()));
+                                }
+                                Err(err) => {
+                                    let err_payload = err.payload().to_bytes();
+                                    let err_msg = String::from_utf8_lossy(&err_payload);
+                                    warn!("Receiver error for id {}: {}", id, err_msg);
+                                    tokio::task::yield_now().await;
+                                    continue;
+                                }
+                            },
+                            Err(_) => {
+                                tokio::task::yield_now().await;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                Err(_) if attempt == 0 => {
+                    // First attempt failed - try to grow the pool
+                    let current_capacity = self.shm_capacity();
+                    if total_len > current_capacity {
+                        debug!(
+                            "Message ({} bytes) exceeds current SHM capacity ({} bytes), growing pool",
+                            total_len, current_capacity
+                        );
+                        if let Some(new_provider) = self.try_grow_shm(total_len) {
+                            shm_provider = new_provider;
+                            continue; // Retry with larger pool
+                        }
+                    }
+                    // Couldn't grow, fall back to network
+                    warn!(
+                        "SHM allocation failed for {} bytes, falling back to network transport",
+                        total_len
+                    );
+                    return None;
+                }
+                Err(_) => {
+                    // Second attempt also failed
+                    warn!(
+                        "SHM allocation failed after pool growth, falling back to network transport"
+                    );
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
     pub async fn init(ship_kind: ShipKind, rm_rules_on_disconnect: bool) -> Self {
         let domain_id = get_domain_id();
         if domain_id > 0 {
@@ -75,14 +370,6 @@ impl Client {
             .wait()
             .expect("Failed to open Zenoh session");
         let session = std::sync::Arc::new(session);
-
-        #[cfg(feature = "shm")]
-        let shm_provider = {
-            let provider = ShmProviderBuilder::default_backend(SHM_BUFFER_SIZE)
-                .wait()
-                .expect("Failed to create SHM provider");
-            std::sync::Arc::new(provider)
-        };
 
         let (updated_raw_recv, _) = tokio::sync::broadcast::channel(100);
         let raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>> =
@@ -218,7 +505,9 @@ impl Client {
             session,
             domain_id,
             #[cfg(feature = "shm")]
-            shm_provider,
+            shm_state: StdRwLock::new(None),
+            #[cfg(feature = "shm")]
+            shm_initialized: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -441,63 +730,22 @@ impl Client {
 
         #[cfg(feature = "shm")]
         if total_len >= SHM_SIZE_THRESHOLD {
-            // Try to allocate SHM buffer for zero-copy transfer
-            let shm_result = self
-                .shm_provider
-                .alloc(total_len)
-                .with_policy::<BlockOn<GarbageCollect>>()
-                .await;
-
-            if let Ok(mut shm_buf) = shm_result {
-                // Copy data into SHM buffer
-                shm_buf[0..4].copy_from_slice(&id_bytes);
-                shm_buf[4] = variable_type.into();
-                shm_buf[5..69].copy_from_slice(&padded_name);
-                shm_buf[69..total_len].copy_from_slice(&data);
-
-                // Convert to immutable SHM buffer (can be cloned for retries)
-                let shm_immut: zenoh::shm::ZShm = shm_buf.into();
-
-                debug!("Sending {} bytes via SHM to {}", total_len, data_key);
-
-                // Use query with SHM payload
-                loop {
-                    let replies = self
-                        .session
-                        .get(&data_key)
-                        .payload(shm_immut.clone())
-                        .wait()
-                        .map_err(|e| anyhow!("Failed to send data query: {}", e))?;
-
-                    match replies.recv_async().await {
-                        Ok(reply) => match reply.result() {
-                            Ok(_sample) => {
-                                debug!(
-                                    "Sent data id {} to {} via SHM (ACK received)",
-                                    id, data_key
-                                );
-                                return Ok(());
-                            }
-                            Err(err) => {
-                                let err_payload = err.payload().to_bytes();
-                                let err_msg = String::from_utf8_lossy(&err_payload);
-                                warn!("Receiver error for id {}: {}", id, err_msg);
-                                tokio::task::yield_now().await;
-                                continue;
-                            }
-                        },
-                        Err(_) => {
-                            tokio::task::yield_now().await;
-                            continue;
-                        }
-                    }
-                }
+            // Try SHM transfer with dynamic pool growth
+            if let Some(result) = self
+                .try_shm_send(
+                    total_len,
+                    &id_bytes,
+                    variable_type,
+                    &padded_name,
+                    &data,
+                    &data_key,
+                    id,
+                )
+                .await
+            {
+                return result;
             }
-            // Fall through to network transfer if SHM alloc failed
-            debug!(
-                "SHM allocation failed, falling back to network for {} bytes",
-                total_len
-            );
+            // If try_shm_send returns None, fall through to network
         }
 
         // Network transfer (small messages, SHM disabled, or SHM fallback)
