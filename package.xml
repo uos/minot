@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>minot</name>
-  <version>0.5.1</version>
+  <version>0.5.2</version>
   <description>A versatile toolset for debugging and verifying stateful robot perception software.</description>
   <maintainer email="stelzo@steado.de">Christopher Sieh</maintainer>
   <author email="stelzo@steado.de">Christopher Sieh</author>
