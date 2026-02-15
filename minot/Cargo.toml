@@ -87,5 +87,6 @@ section = "science"
 priority = "optional"
 assets = [
     ["target/release/minot", "usr/bin/minot", "755"],
+    ["target/release/minot-coord", "usr/bin/minot-coord", "755"],
 ]
 
