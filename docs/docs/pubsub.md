@@ -8,7 +8,7 @@ An async implementation of a basic Publish/Subscribe pattern with a ROS-like API
 
 While [Bagfile Query](./bagquery.md) and [Variable Sharing](./varshare.md) are the main features of Minot, this library is just a small cherry on top. The `ratpub` library uses existing networking primitives from Variable Sharing like Rats and dynamic Rules and implements a minimal Publish/Subscribe pattern on top of it.
 
-When used in static and simple environments (no lifecycle node, assuming stable network and more), it is stable enough for replacing the ROS2 Publish/Subscribe API. But it is absolutely not on par with ROS features.
+When used in static and simple environments, it is stable enough for replacing the ROS2 Publish/Subscribe API. But it is absolutely not on par with ROS features.
 
 
 !!! info "Domain ID for Network Isolation"
@@ -17,9 +17,9 @@ When used in static and simple environments (no lifecycle node, assuming stable 
 
 ## Coordinator
 
-Like in ROS1, the communication needs a *Master*. In this case it is our Coordinator, which we can run without any arguments.
+Like in ROS1, the communication needs a *Master*. In this case it is our *Coordinator*, which we can run without any arguments.
 
-Since we do not rely on ROS here, we can simply use the pip version of Minot, which is built with Ratpub and already ships with with the coordinator.
+Since we do not rely on ROS here, we can simply use the pip version of Minot, which is built with Ratpub and already ships with with the Coordinator.
 
 ~~~sh
 pip install minot-cli

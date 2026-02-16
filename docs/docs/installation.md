@@ -2,7 +2,9 @@ Minot consists of libraries and binaries, some with different compile flags for 
 
 ## ROS 2
 
-### Binary Release
+Minot seamlessly works with ROS to integrate into existing robot pipelines.
+
+### Binaries
 
 We precompile the CLI with coordinator and ROS 2 publisher for our PPA. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
 
@@ -14,7 +16,7 @@ sudo apt install ros-humble-minot
 sudo apt install ros-jazzy-minot
 ~~~
 
-### From Source
+### Source
 
 On Jazzy and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
 
@@ -39,9 +41,23 @@ Now run it like any ROS node.
 ros2 run minot minot tui <file.mt>
 ~~~
 
-Note that building from source will create huge incremental cache artifacts.
+!!! warning "High Disk Space Requirement"
 
-## Install Script
+    Building from source will create huge incremental cache artifacts. We recommend to use the binary installation wherever possible.
+
+## Cargo
+
+Minot is on [crates.io](https://crates.io/crates/minot), so Rustaceans can just use Cargo as expected.
+
+This next line assumes ROS2 is installed and sourced.
+
+~~~bash
+cargo install minot --locked --features embed-ros2-c
+~~~
+
+The binary helper `cargo-binstall` is not supported because it does not support feature flags.
+
+## Script
 
 For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
@@ -57,52 +73,15 @@ You can now run Minot.
 minot --help
 ~~~
 
+Or the standalone coordinator.
+
+~~~bash
+minot-coord --help
+~~~
+
 If the command could not be found, add your local binary folder to your `$PATH`: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`.
 
-## Using Cargo
-
-Minot is on [crates.io](https://crates.io/crates/minot), so Rustaceans can just use Cargo as expected.
-
-This next line assumes ROS2 is installed and sourced.
-
-~~~bash
-cargo install minot --locked --features embed-ros2-c
-~~~
-
-The binary helper `cargo-binstall` is not supported because it does not support feature flags.
-
-## VS Code Extension
-
-Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer.
-
-Select some lines and run them with `Run Selection` or use the Command Palette <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> and type "minot" to also see their keybindings.
-
-## Tree-sitter
-
-Minot comes with Tree-sitter syntax for highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
-
-## Advanced
-
-You can also download and run the install script manually to investigate its effects before running it on your system.
-
-Use `--help` to see all available configurations of Minot.
-
-~~~bash
-wget https://uos.github.io/minot/install -o install.sh
-chmod +x install.sh
-./install.sh --help
-~~~
-
-The installation script will:
-
-- Automatically detect your operating system and architecture
-- Resolve to the newest compatible and stable version
-- Download prebuilt binaries from GitHub releases if available
-- Fall back to building from source using Rust if needed
-- Copy binaries and libraries into your local user directory (customizable with `--dir`)
-- Add the uninstall script (`minot-uninstall`) to the same directory for easy removal later
-
-**Embedded Components:**
+**Script Usage:**
 
 Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed when building from source:
 
@@ -116,18 +95,19 @@ Use the `--embed` option to specify which components to embed when building from
 - `ros1-native` - ROS1 publisher (native, no system dependencies)
 - `ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
 
-**Common usage examples:**
-
-~~~bash
-# Install with ROS2 Jazzy support
-./install.sh --ros-distro jazzy
-
-# Build with multiple components
-./install.sh --build --embed ros1 --ros-distro jazzy
-
-# Non-interactive mode (useful for CI/CD)
-./install.sh --yes --build --embed ratpub
+~~~bash title="Script arguments"
+curl -sSLf https://uos.github.io/minot/install | sh -s -- --help
 ~~~
+
+## VS Code Extension
+
+Search for "Minot" in your editor an install the package. Running it will require a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer.
+
+Select some lines and run them with `Run Selection` or use the Command Palette <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> and type "minot" to also see their keybindings.
+
+## Tree-sitter Syntax Highlighting
+
+Minot comes with Tree-sitter syntax for highlighting outside of VS Code. See [this repository](https://codeberg.org/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
 
 ## Prebuilt Binaries
 
@@ -135,65 +115,55 @@ Binaries for common system configurations are available [here](https://github.co
 
 The `minot-$ROS_DISTRO-*` archives will only give you ROS specific binaries:
 
-- `minot` TUI + Coordinator + ROS2 Publisher (with any-type)
+- `minot` TUI + coordinator + ROS2 Publisher (with any-type)
 - `wind-ros2-c` Standalone ROS2 Publisher (with any-type)
-
-Archives not specific to a ROS distribution contain builds that can be used independently.
-
-- `minot` TUI + Coordinator
-- `minot-coord` Standalone Coordinator
-- `librat.*, rat.h` C libraries for Variable Sharing
-- `wind-ros*-native` ROS Publisher using [roslibrust](https://crates.io/crates/roslibrust) for ROS1 and [ros2-client](https://crates.io/crates/ros2-client) for ROS2
-
-While the prebuilt binaries cover many common use cases, you may need to build Minot from source to tailor it to your specific needs. Building from source requires the [Rust toolchain](https://www.rust-lang.org/tools/install) to be installed on your system.
-
-## All-in-one Binary
-
-To build the Minot bundled binary, there are some feature flags for embedding common network participants for convenience. A detailed list of supported flags can be found in the [Minot features definition](https://github.com/uos/minot/blob/main/minot/Cargo.toml#L45).
-
-With default settings, Minot builds with an integrated coordinator. When running the following command with no changes, you will get a `minot` binary with integrated Coordinator and a `minot-coord` binary, that is *just* a Coordinator. The standalone Coordinator is enough for sharing variables [with the rat library](./varshare.md#library).
-
 
 ??? "Publishing custom and any-type messages"
 
     Publishing any-type messages from a Bagfile (like `ros2 bag play`) needs the ROS2 C implementation to be linked to the message. When building the Rust bindings, it will link with every message in your `$PATH`. So if you use custom messages, you want to build Minot after you sourced your new message.
 
+Archives not specific to a ROS distribution contain builds that can be used independently.
 
-**To help you get up and running quickly, here are some popular configurations.**
+- `minot` TUI + coordinator
+- `minot-coord` Standalone coordinator
+- `librat.*, rat.h` C libraries for Variable Sharing
+- `wind-ros*-native` ROS Publisher using [roslibrust](https://crates.io/crates/roslibrust) for ROS1 and [ros2-client](https://crates.io/crates/ros2-client) for ROS2
 
-~~~bash title="(Recommended) With ROS2 publisher (+ any-type, needs sourced ROS2)"
-cargo install minot --locked --features embed-ros2-c
-~~~
+While the prebuilt binaries cover many common use cases, you may need to build Minot from source to tailor it to your specific needs. Building from source requires the [Rust toolchain](https://www.rust-lang.org/tools/install) to be installed on your system.
 
 ---
 
-This next version does not need any ROS1 or ROS2 installation to compile. It tries to find other standalone Minot nodes in the network and publishes to them if you query a Bagfile:
+## Embedded Ratpub Native Pub/Sub
 
-~~~bash title="Minimal with embedded Coordinator"
-cargo install minot --locked
+For non-ROS use cases like standalone pipelines or CI/CD, we also offer packages with embedded coordinator and Ratpub publisher.
+
+!!! info "Ratpub coordinator"
+    
+    Every install of Minot also gives you a standalone coordinator `minot-coord`. It is also a ready-to-use Ratpub coordinator for your pub/sub applications, which just use Ratpub and nothing else from Minot.
+
+### Arch
+
+Minot is in the AUR. Just use your favourite AUR helper.
+
+~~~bash
+paru -S minot
 ~~~
 
-Or maybe you want to publish to ROS1 and ROS2 at the same time without needing a ROS installation. Since the input is always a ROS2 Bagfile, only mapped types can be published (no any-type).
+### Ubuntu
 
-~~~bash title="With ROS1 and ROS2 publishers"
-cargo install minot --locked --features embed-ros1-native,embed-ros2-native
+After setting up [our PPA](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md):
+
+~~~bash
+sudo apt install minot
 ~~~
 
-## Coordinator
-
-Running `cargo install` as shown above will also build a standalone variant of the Coordinator. It is called `minot-coord` in your path.
-
-Alternatively, a non-ROS Minot version is built for PyPI, which also bundles the Coordinator. Install the binary with pip.
+### PyPI
 
 ~~~sh
 pip install minot-cli
 ~~~
 
-Then just run it.
-
-~~~sh
-minot-coord
-~~~
+---
 
 ## Bagfile Publishers
 
@@ -204,9 +174,7 @@ minot-coord
     For example: you could run the TUI on a Mac, connected to a Robot with a Raspberry Pi over Wi-Fi or LAN, which runs ROS1 or ROS2 and the wind nodes.
 
 
-Standalone publishers live inside the `wind` module. You can compile/install them to your `$PATH` by changing the previous command from `minot` to `wind`.
-
-With `--all-features`, you'll get all binaries but you need to have ROS2 sourced.
+Standalone publishers live inside the `wind` module. With `--all-features`, you'll get all binaries but you need to have ROS2 sourced.
 
 ~~~bash title="Standalone Publishers (needs sourced ROS2)"
 cargo install mt_wind --locked --all-features
