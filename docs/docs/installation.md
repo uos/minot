@@ -163,6 +163,16 @@ sudo apt install minot
 pip install minot-cli
 ~~~
 
+### Homebrew (MacOS)
+
+There is a tap with precompiled binaries for Apple Silicon Macs.
+
+~~~sh
+brew tap uos/minot
+
+brew install minot
+~~~
+
 ---
 
 ## Bagfile Publishers
