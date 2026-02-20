@@ -1,9 +1,5 @@
 use anyhow::anyhow;
 use log::{debug, error};
-use rkyv::{
-    Archive, Deserialize, api::high::HighValidator, bytecheck::CheckBytes, de::Pool,
-    rancor::Strategy,
-};
 use std::{marker::PhantomData, sync::Arc};
 
 use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
@@ -44,22 +40,11 @@ impl<T: Sendable> Publisher<T> {
 }
 
 #[derive(Debug)]
-pub struct Subscriber<T>
-where
-    T: Archive,
-    T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-        + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
-{
+pub struct Subscriber<T: Sendable> {
     chan: tokio::sync::mpsc::Receiver<T>,
 }
 
-impl<T> Subscriber<T>
-where
-    T: Send + Sync + 'static,
-    T: Archive,
-    T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-        + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
-{
+impl<T: Sendable> Subscriber<T> {
     pub async fn next(&mut self) -> Option<T> {
         self.chan.recv().await
     }
@@ -140,17 +125,11 @@ impl Node {
         })
     }
 
-    pub async fn create_subscriber<T>(
+    pub async fn create_subscriber<T: Sendable>(
         &self,
         topic: String,
         queue_size: usize,
-    ) -> anyhow::Result<Subscriber<T>>
-    where
-        T: Send + Sync + 'static,
-        T: Archive,
-        T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-            + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
-    {
+    ) -> anyhow::Result<Subscriber<T>> {
         let client = self.ship.client.lock().await;
         let coord_tx = {
             let client_send_lock = client.coordinator_send.read().unwrap();

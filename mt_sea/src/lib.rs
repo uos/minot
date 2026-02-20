@@ -164,6 +164,10 @@ use rkyv::rancor::Error as RkyvError;
 pub trait Sendable: Sized + Send + Sync + 'static
 where
     Self: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvError>>,
+    Self: Archive<
+        Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+                      + Deserialize<Self, Strategy<Pool, rkyv::rancor::Error>>,
+    >,
 {
 }
 // Blanket implementation for Sendable. Any type meeting the bounds is Sendable.
@@ -171,6 +175,10 @@ impl<T> Sendable for T
 where
     T: Sized + Send + Sync + 'static,
     T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvError>>,
+    T: Archive<
+        Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+                      + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
+    >,
 {
 }
 
@@ -191,12 +199,7 @@ pub trait Cannon: Send + Sync + 'static {
     /// Catch the dumped data from the source.
     /// The returning Vec can contain previously missed entities of T from existing sync connections.
     /// The first item of T is the newest, followed by incremental older ones.
-    async fn catch<T>(&self, id: u32) -> anyhow::Result<Vec<T>>
-    where
-        T: Send,
-        T: Archive,
-        T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-            + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>;
+    async fn catch<T: Sendable>(&self, id: u32) -> anyhow::Result<Vec<T>>;
 
     async fn catch_dyn(&self, id: u32) -> anyhow::Result<Vec<(String, VariableType, String)>>;
 }
