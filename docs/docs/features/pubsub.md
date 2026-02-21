@@ -19,11 +19,7 @@ When used in static and simple environments, it is stable enough for replacing t
 
 Like in ROS1, the communication needs a *Master*. In this case it is our *Coordinator*, which we can run without any arguments.
 
-Since we do not rely on ROS here, we can simply use the pip version of Minot, which is built with Ratpub and already ships with with the Coordinator.
-
-~~~sh
-pip install minot-cli
-~~~
+Since we do not rely on ROS here, we can simply use the any [packaged version of Minot](../installation/packages.md), which is built with Ratpub and already ships with with the Coordinator.
 
 Start the Coordinator in your terminal.
 
@@ -35,7 +31,7 @@ minot-coord
 
     The example uses pre-generated messages that ship with ROS2 Jazzy to already give you the types you typically use in your Node. If that is not enough, you can add your own types that implement `Serialize`, `Deserialize` and `Archive` from `rkyv`.
 
-After adding the library to your [Cargo.toml](./installation.md#ratpub-native-publishsubscribe), you can create a publisher and a subscriber.
+After adding the library to your [Cargo.toml](./../installation/ratpub.md), you can create a publisher and a subscriber.
 
 ~~~rust title="publisher.rs"
 use ratpub::Node;

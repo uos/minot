@@ -90,7 +90,7 @@ You still can define Rules in the same file you write your Bagfile Query code. B
 
 ## Library
 
-The library for sharing variables is just called Rat. It is a Rust library with C bindings and built for minimal intrusion. See the [installation guide](./installation.md) for how to setup the technical side in your project.
+The library for sharing variables is just called Rat. It is a Rust library with C bindings and built for minimal intrusion. See the [installation guide](./../installation/librat.md) for how to setup the technical side in your project.
 
 There are 3 functions.
 
@@ -137,11 +137,11 @@ There are 3 functions.
 
     !!! info "VariableType Argument in `fn bacon`"
 
-        This argument is currently needed for the C interop. So if you want to send a matrix to C or Mino TUI, the underlying datatype for the matrix must be specified. If you share variables with other Rusty Rats, you can set `VariableType::default()`.
+        This argument is currently needed for the C interop. So if you want to send a matrix to C or Minot TUI, the underlying datatype for the matrix must be specified. If you share variables with other *rusty Rats*, you can set `VariableType::default()`.
 
-The [example section](https://github.com/uos/minot/tree/main/mt_rat/examples) on GitHub should give you enough code to use the library in your project without any more explanations.
+The [examples](https://github.com/uos/minot/tree/main/mt_rat/examples) on GitHub should give you enough code to get started with the library in an actual project.
 
-For a general description of data, the shared datatype in C is a 2D Matrix, which is also the only supported format for the Minot TUI Variable Viewer. If you want to share more abstract data than  1D Vectors or 2D Arrays, you'll need to encode the data yourself. Either into a different typed Matrix or into raw bytes (unsigned char on non-ARM). The `rows` argument is then `0` and `cols` is the length of your buffer.
+For a general description of data, the shared datatype in C is a 2D matrix, which is also the only supported format for the TUI [Variable Viewer](./tui/overview.md#variable-sharing-log-and-compare). If you want to share more abstract data than  1D Vectors or 2D Arrays, you'll need to encode the data yourself. Either into a different typed Matrix or into raw bytes (unsigned char on non-ARM architectures). The `rows` argument then becomes `0` and `cols` is the length of your buffer.
 
-On the Rust side, there is a type called `NetArray` to assure C and TUI viewer compatibility. If you don't need that compatibility, you can also transport any type with automatic serialization by deriving `Serialize`, `Deserialize` and `Archive` from the powerful [`rkyv`](https://crates.io/crates/rkyv) crate – just like in the next feature: [Native Pub/Sub](./pubsub.md).
+On the Rust side, there is a type called `NetArray` to assure C and TUI viewer compatibility. If you don't need that compatibility, you can also transport any type with automatic serialization by deriving `Serialize`, `Deserialize` and `Archive` from the powerful [`rkyv`](https://crates.io/crates/rkyv) crate.
 

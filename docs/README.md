@@ -3,13 +3,11 @@
 Installing locally.
 
 ~~~sh
-python3 -m venv venv
-source venv/bin/activate
-pip install mkdocs-material mkdocs-awesome-nav mkdocs-glightbox
+uv tool install zensical
 ~~~
 
 
 Running.
 ~~~sh
-mkdocs serve
+zensical serve
 ~~~

@@ -9,3 +9,4 @@ target/
 vscode/out
 **/*.vsix
 .venv
+docs/site

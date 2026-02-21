@@ -1,15 +1,15 @@
-TUI stands for Terminal User Interface. In Minot, it functions as a dashboard with commands for controlling the features. It's the primary way you interact with Minot.
+TUI stands for Terminal User Interface. In Minot, it functions as a dashboard with commands for controlling the features. It is the primary way you interact with Minot.
 
-After [installing the binary with your chosen embeddings](installation.md#minot-tui), you can run the TUI with:
+After [installing the binary with your chosen embeddings](../../installation/ros.md), you can run the TUI with:
 ~~~bash
-minot tui <Path>
+minot tui <path>
 ~~~
 
-The Path defines the configuration file for [Bagfile Querying](bagquery.md) and [Variable Sharing](varshare.md#minot-tui-with-embedded-coordinator).
+The path defines the configuration file for [Bagfile Querying](../bagquery.md) and [Variable Sharing](../varshare.md#minot-tui-with-embedded-coordinator).
 
 On startup, Minot searches for a Coordinator and will immediately find it, since it starts one itself. The following interface will appear.
 
-![Terminal Startup](./assets/fresh_open.jpg){ width="500" loading=lazy }
+![Terminal Startup](./../../assets/fresh_open.jpg){ width="500" loading=lazy }
 /// caption
 The freshly opened TUI with embedded Coordinator.
 ///
@@ -20,7 +20,7 @@ The freshly opened TUI with embedded Coordinator.
 
 The first thing you'll see is the *Logs* window, which displays feedback from all background processes. You can adjust the output detail using the _log_level variable in the Ratslang file. Valid settings are `error`, `warn`, `info` (default), and `debug`.
 
-You can toggle the Logs window with <kbd>?</kbd> or quit Minot with <kbd>q</kbd>. For all keybindings, see [here](./keybindings.md).
+You can toggle the Logs window with <kbd>?</kbd> or quit Minot with <kbd>q</kbd>. Checkout all keybindings [here](./keybindings.md).
 
 ## Bagfile Query
 
@@ -29,7 +29,7 @@ At the bottom of the UI, you'll find the *Compare* indicator, which shows the cu
 With Wind mode activated, you can move the Wind Cursor in the bottom right corner using Vim-like motions. Consider this a selection of lines from the file specified when launching the binary from the terminal. You can also select multiple lines simultaneously using *Select Mode*. It will change to a [W], and you can use the same motions to expand the selection. By default, it selects all lines with `*`.
 
 
-![Query a Bagfile](./assets/play_bag_w_mat.jpg){ width="500" loading=lazy align=right }
+![Query a Bagfile](./../../assets/play_bag_w_mat.jpg){ width="500" loading=lazy align=right }
 
 At this point, it should become obvious that you'll need the Ratsfile open at the same time since you have no feedback like contents of the file. The file can also be modified, but be sure to save changes before returning to the TUI. You can then evaluate the selected lines.
 
@@ -55,7 +55,7 @@ The final UI element is the lock indicator in the top left. Locking a variable c
 
 By default, variables are not locked. You can overwrite this by setting `_start_locked = true` in your Ratsfile.
 
-![Complete matrix comparison](./assets/comparing_full.jpg){ width="500" loading=lazy align=left }
+![Complete matrix comparison](./../../assets/comparing_full.jpg){ width="500" loading=lazy align=left }
 Here is an example for the difference between floating matrices sent from two different Rats in the network. The tolerance is set to 0.9, and the right side shows the differences compared to the left.
 
 Red values indicate a lower value, with the absolute difference displayed inside the cell. Blue cells represent higher values than the reference, also with the absolute difference in the cell. The cursor is currently positioned on row 38, column 10.

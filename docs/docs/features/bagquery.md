@@ -4,11 +4,18 @@ While developing ROS nodes, Bagfiles are essential for reproducability. With Min
 
 To establish the power of querying, we will implement the typical `ros2 bag play` in Minot.
 
-To run the queries, you will need the [Minot TUI binary](installation.md#minot-tui). It expects a Ratslang file (`.rl`) as the first argument. When started, we typically are already in the Wind-Zen-Mode. It is the default view of the TUI but if you went wrong somewhere, you can get there again by switching modes until you get to Wind-Mode with <kbd>w</kbd> and then optionally go to Zen-Mode (or minimal Bagfile Querying Mode) to hide the Variable Sharing features with <kbd>z</kbd>. We now want to tell Minot which lines of the file to execute, so keep the file opened somehwere.
+To run the queries, you will need the Minot binary `minot`. It expects a Ratslang file (`.rl`) as the first argument after specifying the interaction mode. They are
+
+- `tui` for direct human interactions in the terminal or
+- `serve` for communcation via Linux file descriptor when used as a headless subprocess.
+
+When started with `tui`, we typically are already in the Wind-Zen-Mode. It is the default view of the TUI but if you went wrong somewhere, you can get there again by switching view modes until you get to Wind-Mode with <kbd>w</kbd> and then optionally go to Zen-Mode (or minimal Bagfile Querying Mode) to hide the Variable Sharing features with <kbd>z</kbd>.
+
+Now we want to tell Minot which lines of the file to execute, so keep the file opened somehwere.
 
 !!! info "The language of the file"
 
-    Minot uses an earlier, extended version of Ratslang, a minimal configuration language that inherently handles time and length units. The language is small, open source and easy. You should be able to read and speak it fluently by reading the 20 line example [here](https://github.com/stelzo/ratslang/blob/main/README.md).
+    Minot uses an earlier, extended version of Ratslang, a minimal configuration language that inherently handles time and length units. The language is small, open source and easy. You should be able to read and speak it fluently by reading the 20 line example in the [project readme](https://codeberg.org/stelzo/ratslang#readme).
 
 Outside of the typical configuration functionality of Ratslang, Minot defines functions specifically created for Bagfile Querying.
 
@@ -157,7 +164,7 @@ The field `_type` is of special interest for Minot when querying. It matches the
 - *Odom* == `nav_msgs/msg/Odometry`
 - *Mixed* == Any of the above
 
-The *Any* type will match every message type - regardless of existing mappings. In the [installation](./installation.md) section, this behaviour is defined as *with or without any-type*. By specifying an exisiting type, Minot can use it outside of ROS2 land. For example in ROS1 or the [Native Pub/Sub](./pubsub.md) library.
+The *Any* type will match every message type - regardless of existing mappings. In the [installation](./../installation/archives.md) section, this behaviour is defined as *with or without any-type*. By specifying an exisiting type, Minot can use it outside of ROS2 land. For example in ROS1 or the [Native Pub/Sub](./../features/pubsub.md) library.
 
 Specifying `_topic` allows for more detailed message matching. When you got multiple Imu topics in your Bagfile, this parameter becomes essential.
 
@@ -184,4 +191,4 @@ pf! any .. 1.
 
     With this code, Minot will load the entire content of the Bagfile into memory first, which is probably not want you want. Also, you can not stop publishing mid-way through. This is why you should still use `ros2 bag play` for this use case — but it still beautifully demonstrates the flexibility of Minots query feature.
 
-For information on how to execute the code in Minot TUI, click [here](./tui.md#bagfile-query).
+For information on how to execute the code in Minot TUI, click [here](./tui/overview.md#bagfile-query).
