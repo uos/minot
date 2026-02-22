@@ -11,8 +11,8 @@ makedepends=('zensical')
 options=('!lto' '!strip' '!debug')
 source=("$pkgname-$pkgver-bin.tar.gz::$url/releases/download/v$pkgver/minot-$CARCH-unknown-linux-gnu.tar.gz" "$pkgname-$pkgver-src.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP' 'SKIP')
-provides=('minot-coord' 'wind-rat' 'librat')
-conflicts=('minot-coord' 'wind-rat' 'librat')
+provides=('minot' 'minot-coord' 'wind-rat' 'librat')
+conflicts=('minot' 'minot-coord' 'wind-rat' 'librat')
 
 build() {
   cd "$srcdir/minot-$pkgver/docs/" && zensical build --clean && cd -
