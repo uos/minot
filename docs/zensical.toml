@@ -24,6 +24,9 @@ site_description = "A new project generated from the default template project."
 # Read more: https://zensical.org/docs/setup/basics/#site_author
 site_author = "Christopher Sieh"
 
+repo_url = "https://codeberg.org/stelzo/minot"
+repo_name = "stelzo/minot"
+
 # The site_url is the canonical URL for your site. When building online
 # documentation you should set this.
 # Read more: https://zensical.org/docs/setup/basics/#site_url
@@ -137,7 +140,6 @@ favicon = "assets/favicon.ico"
 #
 language = "en"
 
-repo_url = "https://github.com/uos/minot"
 
 # Zensical provides a number of feature toggles that change the behavior
 # of the documentation site.
@@ -338,9 +340,7 @@ accent = "cyan"
 # - https://zensical.org/docs/authoring/icons-emojis/#search
 # ----------------------------------------------------------------------------
 [project.theme.icon]
-repo = "fontawesome/brands/github"
-#logo = "lucide/smile"
-#repo = "lucide/smile"
+repo = "fontawesome/brands/git-alt"
 
 # ----------------------------------------------------------------------------
 # The "extra" section contains miscellaneous settings.
@@ -376,3 +376,5 @@ combine_header_slug = true
 [project.markdown_extensions.pymdownx.tabbed.slugify]
 object = "pymdownx.slugs.slugify"
 kwds = { case = "lower" }
+
+[project.plugins.offline]

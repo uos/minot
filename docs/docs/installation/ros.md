@@ -1,7 +1,5 @@
 # ROS 2
 
-Minot is highly modular and distributed. It consists of libraries and binaries. Some come with different compile flags for many use cases but we also offer a batteries-included solution for getting started quickly.
-
 Minot seamlessly works with ROS to integrate into existing robot pipelines.
 
 ### Binaries
