@@ -105,11 +105,14 @@ ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
 roslibrust = { version = "0.18", features = ["ros1", "macro"] }
 
 [profile.release]
-lto = "fat"       # Link Time Optimization
-codegen-units = 1 # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
 strip = "symbols" # Significantly reduce binary size
 opt-level = "s"   # Optimize for size but keep some performance
 debug = 0
+
+[profile.full-release]
+inherits = "release"
+lto = "fat"          # Link Time Optimization
+codegen-units = 1    # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
 
 [profile.colcon]
 inherits = "release"
