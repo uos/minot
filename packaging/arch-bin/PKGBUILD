@@ -26,7 +26,7 @@ build() {
 
 
 package() {
-  install -Dm755 "$srcdir/minot-$CARCH-unknown-linux-gnu/rat/minot" "$pkgdir/usr/bin/minot"   
+  install -Dm755 "$srcdir/minot-$CARCH-unknown-linux-gnu/rat/minot" "$pkgdir/usr/bin/minot"
   install -Dm755 "$srcdir/minot-$CARCH-unknown-linux-gnu/minot-coord" "$pkgdir/usr/bin/minot-coord"
   install -Dm755 "$srcdir/minot-$CARCH-unknown-linux-gnu/wind-rat" "$pkgdir/usr/bin/wind-rat"
   install -Dm755 "$srcdir/minot-$CARCH-unknown-linux-gnu/librat.so" "$pkgdir/usr/lib/librat.so"
