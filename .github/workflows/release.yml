@@ -125,6 +125,11 @@ jobs:
           cp target/$RUST_TARGET/release/librat.so dist/
           cp mt_rat/rat.h dist/
 
+          # Prepare pkg-config and cmake files
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
+
           # Create Debian Package
           cargo deb --package mt_rat --target $RUST_TARGET --no-build
           cargo deb --package minot --target $RUST_TARGET --no-build
@@ -182,6 +187,11 @@ jobs:
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
           cp mt_rat/rat.h dist/
+
+          # Prepare pkg-config and cmake files
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
           # Create Debian Package
           cargo deb --package mt_rat --target $RUST_TARGET --no-build
@@ -242,6 +252,11 @@ jobs:
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.so dist/
           cp mt_rat/rat.h dist/
+
+          # Prepare pkg-config and cmake files
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
           # Create Debian Package
           cargo deb --package mt_rat --target $RUST_TARGET --no-build
@@ -305,6 +320,11 @@ jobs:
           cp target/$RUST_TARGET/release/librat.a dist/
           cp target/$RUST_TARGET/release/librat.dylib dist/
           cp mt_rat/rat.h dist/
+
+          # Prepare pkg-config and cmake files
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > dist/librat.pc
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > dist/libratConfig.cmake
 
       - name: "Archive binary"
         run: |

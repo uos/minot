@@ -37,6 +37,7 @@ name = "librat-dev"
 assets = [
     ["rat.h", "usr/include/rat/rat.h", "644"],
     ["librat.pc", "usr/lib/pkgconfig/librat.pc", "644"],
+    ["libratConfig.cmake", "usr/lib/cmake/minot/libratConfig.cmake", "644"],
     ["target/release/librat.so", "usr/lib/librat.so", "644"],
     ["target/release/librat.a", "usr/lib/librat.a", "644"],
 ]

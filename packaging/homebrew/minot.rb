@@ -20,7 +20,14 @@ class Minot < Formula
 
     lib.install "librat.a"
     lib.install "librat.dylib"
-    include.install "rat.h"
+    (include/"rat").install "rat.h"
+
+    inreplace "librat.pc", "prefix=/usr", "prefix=#{prefix}"
+    (lib/"pkgconfig").install "librat.pc"
+    (lib/"cmake/minot").install "libratConfig.cmake"
+
+    # Fix install name for dylib to use @rpath
+    system "install_name_tool", "-id", "@rpath/librat.dylib", lib/"librat.dylib"
 
     generate_completions_from_executable(bin/"minot", "completions")
   end
