@@ -11,7 +11,7 @@ use mt_mtc::{
     AbsTimeRange, AnySensor, IMU_ROS2_TYPE, ODOM_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount,
     PlayKindUnitedPass3, SensorIdentification, SensorType,
 };
-use mt_net::{BagMsg, Odometry, Qos, QosProfile, SensorTypeMapped};
+use mt_net::{BagMsg, Odometry, Qos, QosProfile, QosTime, SensorTypeMapped};
 use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
@@ -155,6 +155,96 @@ fn validate_support(data: &Metadata) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn default_qos_profiles() -> Vec<QosProfile> {
+    vec![QosProfile {
+        history: "keep_last".to_string(),
+        depth: 10,
+        reliability: "reliable".to_string(),
+        durability: "volatile".to_string(),
+        deadline: QosTime {
+            sec: 9223372036,
+            nsec: 854775807,
+        },
+        lifespan: QosTime {
+            sec: 9223372036,
+            nsec: 854775807,
+        },
+        liveliness: "automatic".to_string(),
+        liveliness_lease_duration: QosTime {
+            sec: 9223372036,
+            nsec: 854775807,
+        },
+        avoid_ros_namespace_conventions: false,
+    }]
+}
+
+fn metadata_from_summary(summary: &Summary) -> Metadata {
+    let stats = summary.stats.as_ref();
+    let topics_with_message_count: Vec<TopicWithMessageCount> = summary
+        .channels
+        .values()
+        .map(|channel| {
+            let topic_type = channel
+                .schema
+                .as_ref()
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+
+            let offered_qos_profiles = channel
+                .metadata
+                .get("offered_qos_profiles")
+                .and_then(|s| serde_yml::from_str(s).ok())
+                .unwrap_or_else(default_qos_profiles);
+
+            let message_count = stats
+                .and_then(|s| s.channel_message_counts.get(&channel.id).copied())
+                .unwrap_or(0) as i64;
+
+            TopicWithMessageCount {
+                topic_metadata: TopicMetadata {
+                    name: channel.topic.clone(),
+                    topic_type,
+                    serialization_format: channel.message_encoding.clone(),
+                    offered_qos_profiles,
+                    type_description_hash: None,
+                },
+                message_count,
+            }
+        })
+        .collect();
+
+    let (start_ns, duration_ns, total_count) = if let Some(s) = stats {
+        (
+            s.message_start_time,
+            s.message_end_time.saturating_sub(s.message_start_time),
+            s.message_count as i64,
+        )
+    } else {
+        (0, 0, 0)
+    };
+
+    Metadata {
+        rosbag2_bagfile_information: Rosbag2BagfileInformation {
+            version: 0,
+            storage_identifier: "mcap".to_string(),
+            duration: Nanoseconds {
+                nanoseconds: duration_ns,
+            },
+            starting_time: NanosecondsSinceEpoch {
+                nanoseconds_since_epoch: start_ns,
+            },
+            message_count: total_count,
+            topics_with_message_count,
+            compression_format: String::new(),
+            compression_mode: String::new(),
+            relative_file_paths: vec![],
+            files: vec![],
+            custom_data: None,
+            ros_distro: None,
+        },
+    }
 }
 
 #[derive(Default)]
@@ -522,21 +612,41 @@ impl Bagfile {
         };
         if changed_path_or_new {
             let path = path.unwrap();
-            let metapath = path.join("metadata.yaml");
 
-            let metadata_contents = fs::read_to_string(metapath)?;
-            let bag_info: Metadata = serde_yml::from_str(&metadata_contents)?;
-            validate_support(&bag_info)?;
-            let mcap_file = bag_info
-                .rosbag2_bagfile_information
-                .files
-                .first()
-                .expect("Validated after deserialisation.");
+            // Raw .mcap file directly, or a bag directory.
+            let (mcap_path, bag_info_opt) =
+                if path.extension().map_or(false, |e| e == "mcap") && path.is_file() {
+                    (path.clone(), None)
+                } else {
+                    // Try metadata.yaml then metadata.yml
+                    let meta_contents = ["metadata.yaml", "metadata.yml"]
+                        .iter()
+                        .find_map(|name| fs::read_to_string(path.join(name)).ok());
 
-            let mcap_path = path.join(&mcap_file.path);
+                    if let Some(contents) = meta_contents {
+                        let bag_info: Metadata = serde_yml::from_str(&contents)?;
+                        validate_support(&bag_info)?;
+                        let mcap_file = bag_info
+                            .rosbag2_bagfile_information
+                            .files
+                            .first()
+                            .expect("Validated after deserialisation.");
+                        let mcap_path = path.join(&mcap_file.path);
+                        (mcap_path, Some(bag_info))
+                    } else {
+                        // No metadata file — find the first .mcap in the directory
+                        let mcap_path = fs::read_dir(&path)
+                            .with_context(|| format!("Cannot read directory {:?}", path))?
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.path())
+                            .find(|p| p.extension().map_or(false, |e| e == "mcap"))
+                            .ok_or_else(|| anyhow!("No .mcap file found in {:?}", path))?;
+                        (mcap_path, None)
+                    }
+                };
+
             let f = Utf8PathBuf::from_path_buf(mcap_path).unwrap();
             let mut file = fs::File::open(f).context("Couldn't open MCAP file")?;
-            self.metadata = Some(bag_info);
 
             let summary = {
                 let mut reader = mcap::sans_io::summary_reader::SummaryReader::new();
@@ -553,6 +663,8 @@ impl Bagfile {
                 }
                 reader.finish().unwrap()
             };
+
+            self.metadata = Some(bag_info_opt.unwrap_or_else(|| metadata_from_summary(&summary)));
             let reader = mcap::sans_io::indexed_reader::IndexedReader::new(&summary)
                 .expect("could not construct reader");
             self.reader = Some(reader);
@@ -962,7 +1074,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires actual bag file to be present
     fn bag_read_simple() {
         let path = "../dlg_cut";
         let mut bag = Bagfile::default();
@@ -986,7 +1097,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires actual bag file to be present
     fn bag_read_time() {
         let path = "../dlg_cut";
         let mut bag = Bagfile::default();
@@ -1037,5 +1147,62 @@ mod tests {
         assert!(clouds.is_ok());
         let clouds = clouds.unwrap();
         assert_eq!(clouds.messages.len(), 2);
+    }
+
+    #[test]
+    fn bag_read_direct_mcap() {
+        // Open a bare .mcap file without a metadata.yaml
+        let path = "../dlg_cut/dlg_cut_0.mcap";
+        let mut bag = Bagfile::default();
+        let res = bag.reset(Some(path));
+        assert!(res.is_ok(), "direct mcap open failed: {:?}", res.err());
+
+        let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
+            sensors: vec![AnySensor {
+                name: "".to_owned(),
+                id: SensorIdentification::Topic("/ouster/points".to_owned()),
+                short: None,
+            }],
+            count: PlayCount::Amount(1),
+            trigger: None,
+            play_mode: PlayMode::Fix,
+        });
+
+        assert!(clouds.is_ok(), "read failed: {:?}", clouds.err());
+        assert_eq!(clouds.unwrap().messages.len(), 1);
+    }
+
+    #[test]
+    fn bag_read_dir_no_metadata() {
+        // Directory with a .mcap but no metadata.yaml — should work via summary
+        let tmp = std::env::temp_dir().join("dlg_cut_no_meta");
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Symlink just the mcap, no metadata file
+        let dst = tmp.join("dlg_cut_0.mcap");
+        if !dst.exists() {
+            std::os::unix::fs::symlink(
+                std::fs::canonicalize("../dlg_cut/dlg_cut_0.mcap").unwrap(),
+                &dst,
+            )
+            .unwrap();
+        }
+
+        let mut bag = Bagfile::default();
+        let res = bag.reset(Some(&tmp));
+        assert!(res.is_ok(), "dir-no-metadata open failed: {:?}", res.err());
+
+        let clouds = bag.next(&PlayKindUnitedPass3::SensorCount {
+            sensors: vec![AnySensor {
+                name: "".to_owned(),
+                id: SensorIdentification::Topic("/ouster/points".to_owned()),
+                short: None,
+            }],
+            count: PlayCount::Amount(1),
+            trigger: None,
+            play_mode: PlayMode::Fix,
+        });
+
+        assert!(clouds.is_ok(), "read failed: {:?}", clouds.err());
+        assert_eq!(clouds.unwrap().messages.len(), 1);
     }
 }
