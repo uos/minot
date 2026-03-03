@@ -1684,11 +1684,11 @@ dependencies = [
 
 [[package]]
 name = "hashlink"
-version = "0.8.4"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8094feaf31ff591f651a2664fb9cfd92bba7a60ce3197265e9482ebe753c8f7"
+checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
 dependencies = [
- "hashbrown 0.14.5",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -2264,10 +2264,11 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.27.0"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf4e226dcd58b4be396f7bd3c20da8fdee2911400705297ba7d2d7cc2c30f716"
+checksum = "95b4103cffefa72eb8428cb6b47d6627161e51c2739fc5e3b734584157bc642a"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2493,7 +2494,7 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -2513,7 +2514,6 @@ dependencies = [
  "once_cell",
  "ratatui",
  "regex",
- "rosbag2-rs",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -2590,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "mt_bagread"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "camino",
@@ -2603,6 +2603,7 @@ dependencies = [
  "rkyv 0.8.15",
  "ros2-interfaces-jazzy-rkyv",
  "ros2-interfaces-jazzy-serde",
+ "rusqlite",
  "serde",
  "serde_yml",
  "tokio",
@@ -2610,7 +2611,7 @@ dependencies = [
 
 [[package]]
 name = "mt_mtc"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2623,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "mt_net"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "rkyv 0.8.15",
@@ -2633,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "mt_rat"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2648,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "mt_sea"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2664,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "mt_wind"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3788,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "ratpub"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4120,18 +4121,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rosbag2-rs"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f96e260c6b00feea5fdbd95ffaede40b3354de69f4a0c11ddf5e3504db01b52d"
-dependencies = [
- "anyhow",
- "rusqlite",
- "serde",
- "serde_yaml",
-]
-
-[[package]]
 name = "roslibrust"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4252,10 +4241,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusqlite"
-version = "0.30.0"
+name = "rsqlite-vfs"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a78046161564f5e7cd9008aff3b2990b3850dc8e0349119b98e8f251e099f24d"
+checksum = "a8a1f2315036ef6b1fbacd1972e8ee7688030b0a2121edfc2a6550febd41574d"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1c93dd1c9683b438c392c492109cb702b8090b2bfc8fed6f6e4eb4523f17af3"
 dependencies = [
  "bitflags 2.10.0",
  "fallible-iterator",
@@ -4263,6 +4262,7 @@ dependencies = [
  "hashlink",
  "libsqlite3-sys",
  "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -5027,6 +5027,18 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f4206ed3a67690b9c29b77d728f6acc3ce78f16bf846d83c94f76400320181b"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
 ]
 
 [[package]]

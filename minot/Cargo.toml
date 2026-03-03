@@ -29,7 +29,6 @@ anyhow.workspace = true
 crossterm.workspace = true
 futures.workspace = true
 ratatui.workspace = true
-rosbag2-rs.workspace = true
 chrono.workspace = true
 tui-logger.workspace = true
 clap.workspace = true
@@ -48,7 +47,8 @@ name = "minot-coord"
 path = "src/coord.rs"
 
 [features]
-default = ["embed-coord"]
+default = ["embed-coord", "db3"]
+db3 = ["mt_bagread/db3"]
 
 # Experimental: Enable shared memory for zero-copy transfer of large messages (same-machine only)
 shm = ["mt_sea/shm", "mt_wind?/shm"]

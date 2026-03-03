@@ -28,6 +28,8 @@ nalgebra.workspace = true
 ros2-interfaces-jazzy-serde.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
 cdr.workspace = true
+rusqlite = { workspace = true, optional = true }
 
 [features]
+db3 = ["dep:rusqlite"]
 humble = []
