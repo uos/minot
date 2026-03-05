@@ -45,15 +45,15 @@ jobs:
 
           # 1. Minimal (min)
           $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
 
           # 2. Coord (co)
           $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+          mkdir -p dist/co && cp target/$RUST_TARGET/full-release/minot dist/co/
 
           # 3. Ratpub (rat)
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+          mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           # 4. Sidecars & Libs
           $CARGO_CMD --package minot --bin minot-coord
@@ -62,10 +62,10 @@ jobs:
           $CARGO_CMD --package mt_rat --lib 
 
           # Move shared artifacts to root of dist
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          cp target/$RUST_TARGET/release/wind-rat dist/
-          cp target/$RUST_TARGET/release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/release/librat.a dist/
+          cp target/$RUST_TARGET/full-release/minot-coord dist/
+          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/full-release/librat.a dist/
           cp mt_rat/rat.h dist/
 
       - name: "Archive binary"
@@ -100,15 +100,15 @@ jobs:
 
           # 1. Minimal (min)
           $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
 
           # 2. Coord (co)
           $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+          mkdir -p dist/co && cp target/$RUST_TARGET/full-release/minot dist/co/
 
           # 3. Ratpub (rat)
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+          mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           # 4. Sidecars & Libs
           $CARGO_CMD --package minot --bin minot-coord
@@ -117,12 +117,12 @@ jobs:
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package mt_rat --lib 
 
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          cp target/$RUST_TARGET/release/wind-rat dist/
-          cp target/$RUST_TARGET/release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/release/librat.a dist/
-          cp target/$RUST_TARGET/release/librat.so dist/
+          cp target/$RUST_TARGET/full-release/minot-coord dist/
+          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
+          cp target/$RUST_TARGET/full-release/librat.a dist/
+          cp target/$RUST_TARGET/full-release/librat.so dist/
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
@@ -171,21 +171,21 @@ jobs:
 
           # Variants
           $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+          mkdir -p dist/co && cp target/$RUST_TARGET/full-release/minot dist/co/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+          mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           # Sidecars
           $CARGO_CMD --package minot --bin minot-coord
           $CARGO_CMD --package mt_rat --lib 
 
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          cp target/$RUST_TARGET/release/librat.a dist/
-          cp target/$RUST_TARGET/release/librat.so dist/
+          cp target/$RUST_TARGET/full-release/minot-coord dist/
+          cp target/$RUST_TARGET/full-release/librat.a dist/
+          cp target/$RUST_TARGET/full-release/librat.so dist/
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
@@ -234,23 +234,23 @@ jobs:
 
           # Variants
           $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+          mkdir -p dist/co && cp target/$RUST_TARGET/full-release/minot dist/co/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+          mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           # Sidecars
           $CARGO_CMD --package minot --bin minot-coord
           $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
           $CARGO_CMD --package mt_rat --lib 
 
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          cp target/$RUST_TARGET/release/wind-rat dist/
-          cp target/$RUST_TARGET/release/librat.a dist/
-          cp target/$RUST_TARGET/release/librat.so dist/
+          cp target/$RUST_TARGET/full-release/minot-coord dist/
+          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/librat.a dist/
+          cp target/$RUST_TARGET/full-release/librat.so dist/
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
@@ -299,13 +299,13 @@ jobs:
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
 
           $CARGO_CMD --package minot --bin minot --no-default-features
-          mkdir -p dist/min && cp target/$RUST_TARGET/release/minot dist/min/
+          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord
-          mkdir -p dist/co && cp target/$RUST_TARGET/release/minot dist/co/
+          mkdir -p dist/co && cp target/$RUST_TARGET/full-release/minot dist/co/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ratpub
-          mkdir -p dist/rat && cp target/$RUST_TARGET/release/minot dist/rat/
+          mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
           $CARGO_CMD --package mt_wind --bin wind-rat --features ratpub
@@ -313,12 +313,12 @@ jobs:
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package mt_rat --lib 
 
-          cp target/$RUST_TARGET/release/minot-coord dist/
-          cp target/$RUST_TARGET/release/wind-rat dist/
-          cp target/$RUST_TARGET/release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/release/librat.a dist/
-          cp target/$RUST_TARGET/release/librat.dylib dist/
+          cp target/$RUST_TARGET/full-release/minot-coord dist/
+          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
+          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
+          cp target/$RUST_TARGET/full-release/librat.a dist/
+          cp target/$RUST_TARGET/full-release/librat.dylib dist/
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
@@ -376,13 +376,13 @@ jobs:
 
           # Feature: embed-ros2-c
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
 
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
           $CARGO_CMD --package minot --bin minot-coord
 
           # Copy root artifacts
-          cp target/$RUST_TARGET/release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
 
       - name: "Archive binary"
         run: |
@@ -568,11 +568,11 @@ jobs:
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
 
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
 
-          cp target/$RUST_TARGET/release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
 
       - name: "Archive binary"
         run: |
@@ -618,19 +618,19 @@ jobs:
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
 
           # 3. ROS2 + ROS1 Combined (ros2_1)
           # Feature: embed-ros2-c-humble,embed-ros1-native
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble,embed-ros1-native
-          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
+          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/full-release/minot dist/ros2_1/
 
           # 4. Sidecars (wind-ros2-c, wind-ros1-native, minot-coord)
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
 
-          cp target/$RUST_TARGET/release/wind-ros2-c dist/
-          cp target/$RUST_TARGET/release/wind-ros1-native dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
 
       - name: "Archive binary"
         run: |
@@ -676,16 +676,16 @@ jobs:
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/release/minot dist/ros2/
+          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
 
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-ros2-c-humble,embed-ros1-native
-          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/release/minot dist/ros2_1/
+          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/full-release/minot dist/ros2_1/
 
           $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
 
-          cp target/$RUST_TARGET/release/wind-ros2-c dist/
-          cp target/$RUST_TARGET/release/wind-ros1-native dist/
+          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
+          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
 
       - name: "Archive binary"
         run: |
