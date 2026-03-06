@@ -93,12 +93,12 @@ section = "science"
 priority = "optional"
 assets = [
   [
-    "target/full-release/minot",
+    "target/release/minot",
     "usr/bin/minot",
     "755",
   ],
   [
-    "target/full-release/minot-coord",
+    "target/release/minot-coord",
     "usr/bin/minot-coord",
     "755",
   ],
