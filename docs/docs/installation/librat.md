@@ -72,6 +72,6 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.5.3"
+mt_rat = "0.6.0"
 ~~~
 

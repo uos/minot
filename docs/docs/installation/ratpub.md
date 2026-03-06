@@ -5,7 +5,7 @@ For using the library in your project, add these lines to your dependencies in `
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.5.3"
+ratpub = "0.6.0"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 
