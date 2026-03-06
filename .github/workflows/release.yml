@@ -131,6 +131,9 @@ jobs:
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
           # Create Debian Package
+          mkdir -p mt_rat/target/full-release
+          cp target/$RUST_TARGET/full-release/librat.so mt_rat/target/full-release/librat.so
+          cp target/$RUST_TARGET/full-release/librat.a mt_rat/target/full-release/librat.a
           cargo deb --package mt_rat --target $RUST_TARGET --no-build
           cargo deb --package minot --target $RUST_TARGET --no-build
           find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} dist/ \;
@@ -194,6 +197,9 @@ jobs:
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
           # Create Debian Package
+          mkdir -p mt_rat/target/full-release
+          cp target/$RUST_TARGET/full-release/librat.so mt_rat/target/full-release/librat.so
+          cp target/$RUST_TARGET/full-release/librat.a mt_rat/target/full-release/librat.a
           cargo deb --package mt_rat --target $RUST_TARGET --no-build
           cargo deb --package minot --target $RUST_TARGET --no-build
           find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} dist/ \;
@@ -259,6 +265,9 @@ jobs:
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
           # Create Debian Package
+          mkdir -p mt_rat/target/full-release
+          cp target/$RUST_TARGET/full-release/librat.so mt_rat/target/full-release/librat.so
+          cp target/$RUST_TARGET/full-release/librat.a mt_rat/target/full-release/librat.a
           cargo deb --package mt_rat --target $RUST_TARGET --no-build
           cargo deb --package minot --target $RUST_TARGET --no-build
           find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} dist/ \;
