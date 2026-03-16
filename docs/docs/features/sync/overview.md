@@ -1,17 +1,19 @@
-TUI stands for Terminal User Interface. In Minot, it functions as a dashboard with commands for controlling the features. It is the primary way you interact with Minot.
+# Minot Sync
 
-After [installing the binary with your chosen embeddings](../../installation/ros.md), you can run the TUI with:
+Minot Sync is the terminal-based interface for interacting with Minot. It functions as a dashboard with commands for controlling the features. It is the primary way you interact with Minot.
+
+After [installing the binary with your chosen embeddings](../../installation/ros.md), you can run the Sync UI with:
 ~~~bash
-minot tui <path>
+minot sync <path>
 ~~~
 
-The path defines the configuration file for [Bagfile Querying](../bagquery.md) and [Variable Sharing](../varshare.md#minot-tui-with-embedded-coordinator).
+The path defines the configuration file for [Bagfile Querying](../bagquery.md) and [Variable Sharing](../varshare.md#minot-sync-with-embedded-coordinator).
 
 On startup, Minot searches for a Coordinator and will immediately find it, since it starts one itself. The following interface will appear.
 
 ![Terminal Startup](./../../assets/fresh_open.jpg){ width="500" loading=lazy }
 /// caption
-The freshly opened TUI with embedded Coordinator.
+The freshly opened Sync UI with embedded Coordinator.
 ///
 
 ??? info "Background"
@@ -31,9 +33,9 @@ With Wind mode activated, you can move the Wind Cursor in the bottom right corne
 
 ![Query a Bagfile](./../../assets/play_bag_w_mat.jpg){ width="500" loading=lazy align=right }
 
-At this point, it should become obvious that you'll need the Ratsfile open at the same time since you have no feedback like contents of the file. The file can also be modified, but be sure to save changes before returning to the TUI. You can then evaluate the selected lines.
+At this point, it should become obvious that you'll need the Ratsfile open at the same time since you have no feedback like contents of the file. The file can also be modified, but be sure to save changes before returning to the Sync UI. You can then evaluate the selected lines.
 
-Ratsfile evaluation is stateful. If you select a large variable definition part, the variable state will be cached by the TUI for all following evaluations. This allows you to subsequently select only the lines needed for execution, even if they depend on previous context.
+Ratsfile evaluation is stateful. If you select a large variable definition part, the variable state will be cached by the Sync UI for all following evaluations. This allows you to subsequently select only the lines needed for execution, even if they depend on previous context.
 
 !!! warning
 
@@ -41,17 +43,17 @@ Ratsfile evaluation is stateful. If you select a large variable definition part,
 
 After evaluation, new log messages will appear (at least with _log_level = info), providing feedback on your commands.
 
-The screenshot shows an example for the logs while using the Bagfile Query feature (top) along with the Ratsfile code (bottom). The bottom right of the Minot TUI indicates that line 28 was successfully evaluated, playing `/ouster/imu` until a message was found from `/ouster/points`. The logs also show that an embedded Ratpub publisher was used to distribute the message over a network.
+The screenshot shows an example for the logs while using the Bagfile Query feature (top) along with the Ratsfile code (bottom). The bottom right of the Minot Sync indicates that line 28 was successfully evaluated, playing `/ouster/imu` until a message was found from `/ouster/points`. The logs also show that an embedded MtPubSub publisher was used to distribute the message over a network.
 
 ## Variable Sharing (LOG and Compare)
 
-Most of the screen in Minot TUI is dedicated to matrix logging and comparison.  All matrices sent to LOG are displayed here.  You can review the history of received matrices or compare matrices from different Rats that share the same variable.
+Most of the screen in Minot Sync is dedicated to matrix logging and comparison.  All matrices sent to LOG are displayed here.  You can review the history of received matrices or compare matrices from different Rats that share the same variable.
 
 You can move the cursor and observe the differences between each index of the right matrix (the comparison matrix) and a reference matrix on the left. You can swap the reference and comparison matrices and switch to different Rats with the same variable name.
 
 Comparisons account for a tolerance for fuzzy matching. The bottom left corner displays the current tolerance as a floating-point number.
 
-The final UI element is the lock indicator in the top left. Locking a variable causes the Rat to block the function until the TUI sends an unlock. This provides greater control over execution and enables advanced debugging. Combined with Bagfile Querying and variable triggers, you can create a step-by-step debugging experience by unlocking variables sequentially.
+The final UI element is the lock indicator in the top left. Locking a variable causes the Rat to block the function until the Sync UI sends an unlock. This provides greater control over execution and enables advanced debugging. Combined with Bagfile Querying and variable triggers, you can create a step-by-step debugging experience by unlocking variables sequentially.
 
 By default, variables are not locked. You can overwrite this by setting `_start_locked = true` in your Ratsfile.
 

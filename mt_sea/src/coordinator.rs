@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
 use log::{debug, error};
-use mt_net::{ActionPlan, COMPARE_NODE_NAME};
+use mt_net::{ActionPlan, COMPARE_NODE_NAME, Rules};
 
 use crate::{
     NetworkShipAddress, ShipName,
@@ -22,6 +22,10 @@ pub struct CoordinatorImpl {
     pub rat_qs: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
     pub new_rat_note: tokio::sync::broadcast::Sender<String>,
     pub new_client_notify: tokio::sync::broadcast::Sender<String>,
+    /// (ship_name, var_name) pairs that registered as BE subscribers
+    pub be_subscriptions: std::sync::Arc<std::sync::RwLock<HashSet<(String, String)>>>,
+    /// Variable names that have at least one best-effort publisher
+    pub be_publisher_vars: std::sync::Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -93,13 +97,74 @@ impl crate::Coordinator for CoordinatorImpl {
         }
     }
 
+    async fn push_routes_for_var(&self, variable: &str, rules: &Rules) -> anyhow::Result<()> {
+        let ships = rules.all_ships_for_var(variable);
+        // Pre-compute all ship→actions before any .await so we don't hold a lock across awaits.
+        let ship_actions: Vec<(String, Vec<ActionPlan>)> = ships
+            .into_iter()
+            .map(|ship| {
+                let actions = crate::get_strategies(rules, &ship, variable.to_string(), None);
+                (ship, actions)
+            })
+            .collect();
+
+        for (ship, actions) in ship_actions {
+            if ship == COMPARE_NODE_NAME {
+                continue; // #minot gets its Catch route via VariableTaskRequest → SendRatAction
+            }
+            for action_plan in actions {
+                match self.convert_action(&action_plan, variable).await {
+                    Ok(action) => {
+                        let packet = Packet {
+                            header: crate::net::Header::default(),
+                            data: PacketKind::RatAction {
+                                variable: variable.to_string(),
+                                action,
+                                lock_until_ack: false,
+                            },
+                        };
+                        // Best-effort: skip if ship not connected
+                        if let Some(ci) = self.rat_qs.read().await.get(&ship).cloned() {
+                            let _ = ci.sender.send(packet).await;
+                        }
+                    }
+                    Err(e) => {
+                        debug!(
+                            "push_routes_for_var: cannot convert action for {}: {}",
+                            ship, e
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn rat_action_send(
         &self,
         ship: String,
         variable: String,
         action: ActionPlan,
         lock_until_ack: bool,
+        best_effort: bool,
     ) -> anyhow::Result<()> {
+        if best_effort {
+            // Try-once: send if connected, silently skip if not
+            if let Some(ci) = self.rat_qs.read().await.get(&ship).cloned() {
+                let action = self.convert_action(&action, &variable).await?;
+                let paket = Packet {
+                    header: crate::net::Header::default(),
+                    data: PacketKind::RatAction {
+                        variable,
+                        action,
+                        lock_until_ack,
+                    },
+                };
+                let _ = ci.sender.send(paket).await;
+            }
+            return Ok(());
+        }
+
         // Subscribe BEFORE checking the map to avoid race condition
         let mut notify = self.new_client_notify.subscribe();
         loop {
@@ -109,7 +174,7 @@ impl crate::Coordinator for CoordinatorImpl {
             };
 
             if let Some(client_info) = client_info {
-                let action = self.convert_action(&action).await?;
+                let action = self.convert_action(&action, &variable).await?;
                 let paket = Packet {
                     header: crate::net::Header::default(),
                     data: PacketKind::RatAction {
@@ -223,7 +288,32 @@ impl CoordinatorImpl {
         }
     }
 
-    async fn convert_action(&self, human_action: &ActionPlan) -> anyhow::Result<crate::Action> {
+    /// Wait until the given ship appears in `rat_qs`.
+    /// Returns immediately if already present.
+    pub async fn wait_for_client(&self, ship: &str) {
+        // Subscribe BEFORE checking the map to avoid the race where the ship
+        // is inserted between our map-check and the subscribe.
+        let mut notify = self.new_client_notify.subscribe();
+        loop {
+            if self.rat_qs.read().await.contains_key(ship) {
+                return;
+            }
+            loop {
+                match notify.recv().await {
+                    Ok(name) if name == ship => return,
+                    Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                    Err(_) => return,
+                }
+            }
+        }
+    }
+
+    async fn convert_action(
+        &self,
+        human_action: &ActionPlan,
+        variable: &str,
+    ) -> anyhow::Result<crate::Action> {
         let action = match human_action {
             ActionPlan::Sail => crate::Action::Sail,
             ActionPlan::Shoot { target, id } => {
@@ -233,9 +323,17 @@ impl CoordinatorImpl {
                     let client_info = rat
                         .get(client_name)
                         .ok_or_else(|| anyhow!("Unknown client: {}", client_name))?;
-                    // In Zenoh, we use the network address which contains the ship kind with name
-                    let client_network = client_info.network.clone();
-                    targets.push(client_network);
+                    let mut addr = client_info.network.clone();
+                    // Override with per-subscription BE mode if registered
+                    if self
+                        .be_subscriptions
+                        .read()
+                        .unwrap()
+                        .contains(&(client_name.clone(), variable.to_string()))
+                    {
+                        addr.node_mode = crate::net::Qos::BestEffort;
+                    }
+                    targets.push(addr);
                 }
 
                 crate::Action::Shoot {
@@ -314,6 +412,8 @@ impl CoordinatorImpl {
             rat_qs: rat_queues,
             new_rat_note,
             new_client_notify,
+            be_subscriptions: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
+            be_publisher_vars: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
         }
     }
 }

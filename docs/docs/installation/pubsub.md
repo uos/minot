@@ -1,11 +1,13 @@
-# Ratpub
+# Pub/Sub
 
-Ratpub is only available for Rust. It uses Tokio for async I/O.
+The Pub/Sub library uses Tokio for async I/O.
 For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
+
+For using this library in Golang, see the [Go API](../features/go_api.md).
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.6.0"
+mt_pubsub = "0.7.0"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 

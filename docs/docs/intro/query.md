@@ -17,7 +17,7 @@ source /opt/ros/jazzy/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bas
 # Get Minot with ROS2 publisher
 curl -sSLf https://uos.github.io/minot/install | sh -s -- --ros-distro $ROS_DISTRO
 
-# Get a Bagfile saved with mcap storage
+# Get a Bagfile
 curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
     && unzip dlg_cut.zip \
     && rm dlg_cut.zip
@@ -34,11 +34,11 @@ rviz2 -d demo.rviz
 
 Open up a new terminal.
 
-~~~ bash title="Minot TUI"
+~~~ bash title="Minot Sync"
 source /opt/ros/$ROS_DISTRO/setup.bash
 
 # Run
-minot tui demo.mt
+minot sync demo.mt
 
 # Press Space
 # You should see a 3D point cloud in rviz2 now.

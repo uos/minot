@@ -1,0 +1,27 @@
+[package]
+name = "mt_action"
+description = "ROS2-compatible action goal lifecycle primitives for Minot."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+exclude.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+mt_sea.workspace = true
+mt_pubsub.workspace = true
+rkyv.workspace = true
+mt_service.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+ros2-interfaces-jazzy-rkyv.workspace = true

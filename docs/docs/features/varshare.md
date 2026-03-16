@@ -23,10 +23,10 @@ rule! (myvar
   # rat3 overwrite both variables of rat1 and rat2
   rat1, rat2 <- rat3
 
-  # Both rats send their myvar to the Minot TUI where they can be compared with each other
+  # Both rats send their myvar to the Minot sync where they can be compared with each other
   blue == yellow
 
-  # rat1 sends it myvar to the Minot TUI for displaying it
+  # rat1 sends it myvar to the Minot sync for displaying it
   rat1 -> LOG
 )
 ~~~
@@ -54,37 +54,37 @@ The `->` operator signalises sending the variable defined at the head from the l
 
 Sending from right to the left is signalised with `<-` or `=`. These operators are redundant but they can make a difference in readability so we offer both options.
 
-You can also send everything to the Minot TUI to compare them with the `==` operator. This is just a shorter version of sending assigning each Rat to the hardcoded TUI name `LOG`. You can always add the `LOG` at any receiver list to also get the value inside the Comparison Window in Minot TUI.
+You can also send everything to the Minot sync to compare them with the `==` operator. This is just a shorter version of sending assigning each Rat to the hardcoded name `LOG`. You can always add the `LOG` at any receiver list to also get the value inside the Comparison Window in Minot sync.
 
 ### Setup
 
 #### Standalone Coordinator
 
-Variable Sharing only needs the Coordinator, which can run standalone without the TUI. The binary takes a Ratslang file with Rules. It waits for every Rat in that Rule to be connected to the network before un(b)locking all Rats to continue their normal flow after intialisation.
+Variable Sharing only needs the Coordinator, which can run standalone without the sync command. The binary takes a Ratslang file with Rules. It waits for every Rat in that Rule to be connected to the network before un(b)locking all Rats to continue their normal flow after intialisation.
 
 ~~~bash title="Standalone Coordinator"
 minot-coord ./rules.mt
 ~~~
 
-#### Minot TUI with embedded Coordinator
+#### Minot sync with embedded Coordinator
 
-When using the TUI with integrated Coordinator (the default when building Minot), the Rules should not be defined in the file you give to the TUI at startup. You need to set the `_rules` variable to a Path or String that is relative to the Ratslang file you are defining the variable in.
+When using the sync command with integrated Coordinator (the default when building Minot), the Rules should not be defined in the file you give to the sync command at startup. You need to set the `_rules` variable to a Path or String that is relative to the Ratslang file you are defining the variable in.
 
 This is basically a specialized include statement but it needs to be explicitely stated because there is a difference of where you define Rules.
 
-~~~awk title="Defining Rules when running with TUI"
+~~~awk title="Defining Rules when running with sync"
 _rules = ./my_rules.mt
 ~~~
 
-You still can define Rules in the same file you write your Bagfile Query code. But the effect will be vastly different because Rules are also dynamic. You can delete all of them at runtime and add them again by evaluating lines within Minot TUI. You can read more about it [here](./tui.md).
+You still can define Rules in the same file you write your Bagfile Query code. But the effect will be vastly different because Rules are also dynamic. You can delete all of them at runtime and add them again by evaluating lines within Minot sync. You can read more about it [here](./sync/overview.md).
 
 ??? info "Why is that needed? Race Conditions"
 
-    If you combine both, Bagfile Queries and Rule definitions into one file when running the TUI with Coordinator, it effectively activates a datarace.
+    If you combine both, Bagfile Queries and Rule definitions into one file when running the sync command with Coordinator, it effectively activates a datarace.
 
-    The Coordinator sees all needed Rats but then the TUI sends a command to delete them all because the TUI interprets the Rules as something new at runtime. In the meantime the Rats may already be connected but there is no guarantee.
+    The Coordinator sees all needed Rats but then the sync command sends a command to delete them all because the sync command interprets the Rules as something new at runtime. In the meantime the Rats may already be connected but there is no guarantee.
 
-    If a Rat asks the Coordinator what to do for a specific variable now, the coordinator does not have Rules for the Rat and tells it to continue. Then the Rule from the TUI comes in and the other Rat asks what to do at the same variable that the other Rat just skipped. The coordinator sees the new Rule and tells the Rat to wait or send its variable to the other one that already asked. Both Rats aren't synchronised anymore and deadlocks occur where both Rats wait for each other.
+    If a Rat asks the Coordinator what to do for a specific variable now, the coordinator does not have Rules for the Rat and tells it to continue. Then the Rule from the sync command comes in and the other Rat asks what to do at the same variable that the other Rat just skipped. The coordinator sees the new Rule and tells the Rat to wait or send its variable to the other one that already asked. Both Rats aren't synchronised anymore and deadlocks occur where both Rats wait for each other.
 
 
 
@@ -137,11 +137,11 @@ There are 3 functions.
 
     !!! info "VariableType Argument in `fn bacon`"
 
-        This argument is currently needed for the C interop. So if you want to send a matrix to C or Minot TUI, the underlying datatype for the matrix must be specified. If you share variables with other *rusty Rats*, you can set `VariableType::default()`.
+        This argument is currently needed for the C interop. So if you want to send a matrix to C or Minot sync, the underlying datatype for the matrix must be specified. If you share variables with other *rusty Rats*, you can set `VariableType::default()`.
 
 The [examples](https://github.com/uos/minot/tree/main/mt_rat/examples) on GitHub should give you enough code to get started with the library in an actual project.
 
-For a general description of data, the shared datatype in C is a 2D matrix, which is also the only supported format for the TUI [Variable Viewer](./tui/overview.md#variable-sharing-log-and-compare). If you want to share more abstract data than  1D Vectors or 2D Arrays, you'll need to encode the data yourself. Either into a different typed Matrix or into raw bytes (unsigned char on non-ARM architectures). The `rows` argument then becomes `0` and `cols` is the length of your buffer.
+For a general description of data, the shared datatype in C is a 2D matrix, which is also the only supported format for the sync [Variable Viewer](./sync/overview.md#variable-sharing-log-and-compare). If you want to share more abstract data than  1D Vectors or 2D Arrays, you'll need to encode the data yourself. Either into a different typed Matrix or into raw bytes (unsigned char on non-ARM architectures). The `rows` argument then becomes `0` and `cols` is the length of your buffer.
 
-On the Rust side, there is a type called `NetArray` to assure C and TUI viewer compatibility. If you don't need that compatibility, you can also transport any type with automatic serialization by deriving `Serialize`, `Deserialize` and `Archive` from the powerful [`rkyv`](https://crates.io/crates/rkyv) crate.
+On the Rust side, there is a type called `NetArray` to assure C and sync viewer compatibility. If you don't need that compatibility, you can also transport any type with automatic serialization by deriving `Serialize`, `Deserialize` and `Archive` from the powerful [`rkyv`](https://crates.io/crates/rkyv) crate.
 

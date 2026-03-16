@@ -1,0 +1,16 @@
+--- minot/src/gen_c.rs
++++ minot/src/gen_c.rs
+@@ -62,7 +62,11 @@
+         .current_dir(&temp_dir)
+         .output()?;
+         
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    let res = extract_source_from_metadata_str(&stdout, pkg, msg);
++    
+     let _ = std::fs::remove_dir_all(&temp_dir);
++    return res.ok_or_else(|| anyhow!("Could not find the message definition even after downloading the crate."));
+-    
+-    let stdout = String::from_utf8_lossy(&output.stdout);
+-    extract_source_from_metadata_str(&stdout, pkg, msg)
+-        .ok_or_else(|| anyhow!("Could not find the message definition even after downloading the crate."))
+ }

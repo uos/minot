@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 pub use mt_sea;
-#[cfg(feature = "ratpub")]
-pub mod ratpub;
+#[cfg(feature = "mt_pubsub")]
+pub mod mt_pubsub;
 #[cfg(feature = "ros1-native")]
 pub mod ros1;
 #[cfg(feature = "ros2-native")]

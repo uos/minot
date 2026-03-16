@@ -4,7 +4,17 @@ Minot seamlessly works with ROS to integrate into existing robot pipelines.
 
 ### Binaries
 
-We precompile the CLI with coordinator and ROS 2 publisher for our PPA. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
+We precompile the CLI with coordinator and ROS 2 publisher for our PPA. 
+
+~~~bash title="UOS PPA"
+curl -fsSL "https://uos-robotics.codeberg.page/ppa/ubuntu/key.gpg" | gpg --dearmor \
+  | sudo tee /usr/share/keyrings/uos-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/uos-archive-keyring.gpg] https://uos-robotics.codeberg.page/ppa/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+  | sudo tee /etc/apt/sources.list.d/uos.list
+sudo apt update
+~~~
+
+After the setup, you can simply run apt.
 
 ~~~bash
 # humble
@@ -36,7 +46,7 @@ Building will take a while.
 Now run it like any ROS node.
 
 ~~~bash
-ros2 run minot minot tui <file.mt>
+ros2 run minot minot sync <file.mt>
 ~~~
 
 !!! warning "High Disk Space Requirement"

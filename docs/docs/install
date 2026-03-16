@@ -91,9 +91,9 @@ for f in \
   "${LIB_DIR}/librat.a" \
   "${LIB_DIR}/librat.so" \
   "${LIB_DIR}/librat.dylib" \
-  "${LIB_DIR}/libratpub.a" \
-  "${LIB_DIR}/libratpub.so" \
-  "${LIB_DIR}/libratpub.dylib" \
+  "${LIB_DIR}/libmt_pubsub.a" \
+  "${LIB_DIR}/libmt_pubsub.so" \
+  "${LIB_DIR}/libmt_pubsub.dylib" \
     "${INCLUDE_DIR}/rat/rat.h"; do
     if [ -f "$f" ]; then
         TO_REMOVE_LIST="${TO_REMOVE_LIST}\n${f}"
@@ -163,7 +163,7 @@ ${BOLD}OPTIONS:${NC}
     -h, --help                Show this help message
     -v, --version VERSION     Install specific version (default: latest)
     -d, --dir DIR             Installation directory (default: ~/.local/bin)
-    -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, ratpub)
+    -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, mt_pubsub)
     -f, --features FEATURES   Advanced: Raw cargo features (comma-separated)
     -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (jazzy, humble). Requires ROS2 sourced.
     -b, --build               Force build from source (skip binary download)
@@ -172,7 +172,7 @@ ${BOLD}OPTIONS:${NC}
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
-    ratpub        Ratpub publisher
+    mt_pubsub     MtPubsub publisher
     ros2-c        ROS2 publisher using the C bindings of rclc (needs sourced ROS)
     ros2-c-humble ROS2 publisher with specific handling of Humble using the C bindings of rclc (needs sourced ROS Humble)
     ros1-native   ROS1 publisher (native, no system dependencies)
@@ -186,7 +186,7 @@ ${BOLD}EXAMPLES:${NC}
     ./install.sh --ros-distro jazzy
 
     ${CYAN}# Build with multiple embedded components and force build from source${NC}
-    ./install.sh --build --embed jazzy,ratpub
+    ./install.sh --build --embed jazzy,mt_pubsub
 
     ${CYAN}# Resolve to a semver compatible version${NC}
     ./install.sh --version 0.1
@@ -508,7 +508,7 @@ embed_to_features() {
         comp=$(printf "%s" "$comp" | sed -E 's/^\s+|\s+$//g')
         case "$comp" in
             coord) feat="embed-coord" ;;
-            ratpub) feat="embed-ratpub" ;;
+            ratpub|mt_pubsub) feat="embed-mt-pubsub" ;;
             ros1-native) feat="embed-ros1-native" ;;
             ros2-native) feat="embed-ros2-native" ;;
             "ros2-c-humble"|"ros2_c_humble"|"ros2c-humble"|"ros2c_humble") feat="embed-ros2-c-humble" ;;
@@ -783,7 +783,7 @@ download_and_install() {
         req="$2"
         case "$binname" in
             minot|minot-coord) return 0 ;;
-            wind-ratpub*) echo "$req" | grep -Eq '(\bembed-ratpub\b|\bembed-ros\b)' && return 0 || return 1 ;;
+            wind-mt-pubsub*|wind-ratpub*) echo "$req" | grep -Eq '(\bembed-mt-pubsub\b|\bembed-ros\b)' && return 0 || return 1 ;;
             wind-ros1*)   echo "$req" | grep -Eq '(\bembed-ros1-native\b|\bembed-ros\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
             wind-ros2-native*) echo "$req" | grep -Eq '(\bembed-ros2-native\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
             wind-ros2-c*) echo "$req" | grep -Eq '(\bembed-ros2-c\b|\bembed-ros2-c-[a-z]+\b|\bembed-ros\b)' && return 0 || return 1 ;;
@@ -807,7 +807,7 @@ download_and_install() {
         
         if [ -z "$best_path" ]; then
             case ",$req," in
-                *,embed-ratpub,*) [ -x "$root/rat/minot" ] && best_path="$root/rat/minot" ;;
+                *,embed-mt-pubsub,*|*,embed-ratpub,*) [ -x "$root/mt_pubsub/minot" ] && best_path="$root/mt_pubsub/minot" ;;
                 *,embed-coord,*)  [ -x "$root/co/minot" ] && best_path="$root/co/minot" ;;
             esac
         fi

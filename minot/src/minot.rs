@@ -16,6 +16,7 @@ use anyhow::anyhow;
 pub mod app;
 pub mod coord;
 pub mod event;
+pub mod gen_c;
 pub mod handler;
 pub mod tui;
 pub mod ui;
@@ -33,7 +34,7 @@ const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
 const EMBED_ROS2_C_TURBINE_NAME: &'static str = "embedded_ros2_c_turbine";
 #[cfg(feature = "embed-ros1-turbine")]
 const EMBED_ROS1_TURBINE_NAME: &'static str = "embedded_ros1_turbine";
-#[cfg(feature = "embed-ratpub-turbine")]
+#[cfg(feature = "embed-mt-pubsub-turbine")]
 const EMBED_RATPUB_TURBINE_NAME: &'static str = "embedded_ratpub_turbine";
 
 #[derive(Debug, Clone, Subcommand)]
@@ -87,18 +88,32 @@ pub struct HeadlessArgs {
     pub sync: bool,
 }
 
+#[derive(Parser, Debug, Clone)]
+pub struct AsyncPlayArgs {
+    /// Path to a bag file or directory (.mcap, .db3, or folder with metadata.yaml)
+    pub path: PathBuf,
+
+    /// Playback rate multiplier (1.0 = real-time, 2.0 = 2× speed, 0.5 = half speed)
+    #[arg(long, default_value_t = 1.0)]
+    pub rate: f64,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 #[command()]
 pub(crate) enum Commands {
     /// Run the Terminal UI with all features of Minot (recommended)
-    Tui(TuiArgs),
+    #[command(name = "sync")]
+    Sync(TuiArgs),
+    /// Play a bag file in real-time to all connected winds (ratpub, ROS2, etc.)
+    #[command(name = "async")]
+    AsyncPlay(AsyncPlayArgs),
     /// Start the stdin-stdout server for bagfile querying, commonly used in integrations
     Serve,
     /// Run a .mt file in headless (offline) mode, outputting JSON logs
     Headless(HeadlessArgs),
     /// Show compiled features or check if a specific feature is available
     Features {
-        /// Optional feature name to check (e.g., "coord", "ratpub", "ros2") or comma-separated list (e.g., "coord,ros2")
+        /// Optional feature name to check (e.g., "coord", "mt_pubsub", "ros2") or comma-separated list (e.g., "coord,ros2")
         feature: Option<String>,
     },
     // Uninstall minot and minot-coord from the system
@@ -110,6 +125,29 @@ pub(crate) enum Commands {
         /// The shell to generate completions for
         #[arg(value_enum)]
         shell: Shell,
+    },
+    /// Generate C struct for a ROS message type
+    /// Example: `minot gen-c sensor_msgs/Imu > imu.h`
+    #[command(name = "gen-c")]
+    GenC {
+        /// ROS message type (e.g., "sensor_msgs/Imu")
+        type_name: String,
+    },
+    /// Initialize a new Go project with Minot support
+    #[command(name = "init-go")]
+    InitGo {
+        /// Project directory name
+        path: PathBuf,
+    },
+    /// Add a message type to an existing Go project
+    #[command(name = "add-go-msg")]
+    AddGoMsg {
+        /// ROS message type(s) (e.g., "sensor_msgs/Imu std_msgs/String")
+        #[arg(required = true, num_args = 1..)]
+        type_names: Vec<String>,
+        /// Path to the Go project directory
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
     },
 }
 
@@ -163,7 +201,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             Ok(None)
         }?;
 
-        #[cfg(feature = "embed-ratpub-turbine")]
+        #[cfg(feature = "embed-mt-pubsub-turbine")]
         {
             let wind_name =
                 mt_wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
@@ -175,7 +213,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                     // dump ready answer
                     _ = rx.await;
                 });
-                let res = mt_wind::ratpub::run_dyn_wind(&wind_name, tx).await;
+                let res = mt_wind::mt_pubsub::run_dyn_wind(&wind_name, tx).await;
                 match res {
                     Ok(_) => {} // will never return
                     Err(e) => {
@@ -224,7 +262,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             clients.insert(wind_name);
         }
 
-        #[cfg(feature = "embed-ratpub-turbine")]
+        #[cfg(feature = "embed-mt-pubsub-turbine")]
         {
             let wind_name =
                 mt_wind::get_env_or_default("wind_ratpub_name", &EMBED_RATPUB_TURBINE_NAME)?;
@@ -232,7 +270,9 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             clients.insert(wind_name);
         }
 
-        coord::run_coordinator(locked_start, clients, eval.rules);
+        if !mt_coord::try_start_with_rules(locked_start, clients, eval.rules, None) {
+            info!("Coordinator already running in the network, connecting as client.");
+        }
     }
 
     #[cfg(feature = "embed-ros2-turbine")]
@@ -310,9 +350,14 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     let rules = eval.rules;
     println!("Looking for coordinator...");
-    let comparer =
-        mt_sea::ship::NetworkShipImpl::init(ShipKind::Rat(COMPARE_NODE_NAME.to_string()), false)
-            .await?;
+    let comparer = std::sync::Arc::new(
+        mt_sea::ship::NetworkShipImpl::init(
+            ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
+            false,
+            mt_sea::Qos::Reliable,
+        )
+        .await?,
+    );
 
     // remove searching feedback
     print!("\x1b[1A");
@@ -394,6 +439,21 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Keep the coordinator's TUI-timeout alive by sending periodic heartbeats.
+    let comparer_hb = comparer.clone();
+    let comparer_disconnect = comparer.disconnect.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(
+                mt_sea::HEARTBEAT_INTERVAL_MS,
+            ))
+            .await;
+            if let Err(e) = comparer_hb.send_heartbeat().await {
+                log::debug!("TUI heartbeat send failed: {e}");
+            }
+        }
+    });
+
     tokio::spawn(async move {
         loop {
             match sub.recv().await {
@@ -456,7 +516,12 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         tokio::task::yield_now().await;
         tui.draw(&mut app)?;
         match tui.events.next().await? {
-            Event::Tick => app.tick(),
+            Event::Tick => {
+                app.tick();
+                if comparer_disconnect.is_cancelled() {
+                    app.quit();
+                }
+            }
             Event::Key(key_event) => handle_key_events(key_event, &mut app).await?,
             Event::Mouse(_) => {}
             Event::Resize(_, _) => {}
@@ -474,8 +539,8 @@ fn get_compiled_features() -> Vec<String> {
     #[cfg(feature = "embed-coord")]
     features.push("coord".to_string());
 
-    #[cfg(feature = "embed-ratpub")]
-    features.push("ratpub".to_string());
+    #[cfg(feature = "embed-mt-pubsub")]
+    features.push("mt_pubsub".to_string());
 
     #[cfg(feature = "embed-ros1-turbine")]
     features.push("ros1-native".to_string());
@@ -502,10 +567,10 @@ fn has_feature(feature_name: &str) -> bool {
             #[cfg(not(feature = "embed-coord"))]
             return false;
         }
-        "ratpub" => {
-            #[cfg(feature = "embed-ratpub-turbine")]
+        "mt_pubsub" => {
+            #[cfg(feature = "embed-mt-pubsub-turbine")]
             return true;
-            #[cfg(not(feature = "embed-ratpub-turbine"))]
+            #[cfg(not(feature = "embed-mt-pubsub-turbine"))]
             return false;
         }
         "ros1-native" => {
@@ -534,6 +599,155 @@ fn has_feature(feature_name: &str) -> bool {
         }
         _ => false,
     }
+}
+
+async fn async_play(path: PathBuf, rate: f64) -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .filter_module("zenoh", log::LevelFilter::Warn)
+        .filter_module("zenoh::api::admin", log::LevelFilter::Off)
+        .filter_module("zenoh::api::session", log::LevelFilter::Off)
+        .init();
+
+    #[allow(unused_mut)]
+    let mut ready_rxs: Vec<tokio::sync::oneshot::Receiver<()>> = Vec::new();
+    #[allow(unused_mut)]
+    let mut clients = std::collections::HashSet::<String>::new();
+
+    #[cfg(feature = "embed-mt-pubsub-turbine")]
+    {
+        let wind_name =
+            mt_wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+        clients.insert(wind_name.clone() + "_pub");
+        clients.insert(wind_name.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        ready_rxs.push(rx);
+        tokio::spawn(async move {
+            match mt_wind::mt_pubsub::run_dyn_wind(&wind_name, tx).await {
+                Ok(_) => {}
+                Err(e) => error!("Error in embedded ratpub turbine: {e}"),
+            }
+        });
+    }
+
+    #[cfg(feature = "embed-ros2-turbine")]
+    {
+        let wind_name = mt_wind::get_env_or_default("wind_ros2_name", &EMBED_ROS2_TURBINE_NAME)?;
+        clients.insert(wind_name.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        ready_rxs.push(rx);
+        tokio::spawn(async move {
+            match mt_wind::ros2::run_dyn_wind(&wind_name, tx).await {
+                Ok(_) => {}
+                Err(e) => error!("Error in embedded ROS2 turbine: {e}"),
+            }
+        });
+    }
+
+    #[cfg(feature = "embed-ros2-c-turbine")]
+    {
+        let wind_name =
+            mt_wind::get_env_or_default("wind_ros2_c_name", &EMBED_ROS2_C_TURBINE_NAME)?;
+        clients.insert(wind_name.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        ready_rxs.push(rx);
+        tokio::spawn(async move {
+            match mt_wind::ros2_r2r::run_dyn_wind(&wind_name, tx).await {
+                Ok(_) => {}
+                Err(e) => error!("Error in embedded ROS2-C turbine: {e}"),
+            }
+        });
+    }
+
+    #[cfg(feature = "embed-ros1-turbine")]
+    {
+        let wind_name = mt_wind::get_env_or_default("wind_ros1_name", &EMBED_ROS1_TURBINE_NAME)?;
+        clients.insert(wind_name.clone());
+        let master_uri = mt_wind::get_env_or_default("ROS_MASTER_URI", "http://localhost:11311")?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        ready_rxs.push(rx);
+        tokio::spawn(async move {
+            match mt_wind::ros1::run_dyn_wind(&master_uri, &wind_name, tx).await {
+                Ok(None) => warn!("ROS1 Master not found. Destroying node."),
+                Ok(Some(_)) => {}
+                Err(e) => error!("Error in embedded ROS1 turbine: {e}"),
+            }
+        });
+    }
+
+    let (torpedo_tx, mut torpedo_rx) = tokio::sync::mpsc::channel::<()>(1);
+    if !mt_coord::try_start_with_rules(false, clients, mt_net::Rules::new(), Some(torpedo_tx)) {
+        info!("Coordinator already running in the network, connecting as client.");
+    }
+
+    let ship = mt_sea::ship::NetworkShipImpl::init_with_coord_start(
+        mt_sea::ShipKind::Rat("async_player".to_string()),
+        false,
+        mt_sea::Qos::Reliable,
+        |_| async {
+            mt_coord::start_default();
+        },
+    )
+    .await?;
+
+    // Wire the torpedo signal (from the embedded coordinator) to the ship's disconnect token.
+    let ship_disconnect = ship.disconnect.clone();
+    tokio::spawn(async move {
+        if torpedo_rx.recv().await.is_some() {
+            ship_disconnect.cancel();
+        }
+    });
+
+    // Wait for all embedded turbines to signal they are connected and ready.
+    for rx in ready_rxs {
+        let _ = rx.await;
+    }
+
+    let mut bagfile = mt_bagread::Bagfile::default();
+    bagfile.reset(Some(&path))?;
+    info!("Playing bag: {}", path.display());
+
+    let mut first_ts: Option<u64> = None;
+    let wall_start = tokio::time::Instant::now();
+
+    let disconnect = ship.disconnect.clone();
+    loop {
+        let msg_opt = tokio::task::block_in_place(|| bagfile.next_message())?;
+
+        let (ts, msg) = match msg_opt {
+            Some(m) => m,
+            None => break,
+        };
+
+        let base = *first_ts.get_or_insert(ts);
+        if ts > base {
+            let target =
+                wall_start + std::time::Duration::from_nanos(((ts - base) as f64 / rate) as u64);
+            tokio::select! {
+                _ = tokio::time::sleep_until(target) => {}
+                _ = disconnect.cancelled() => {
+                    info!("Torpedo received — stopping bag playback.");
+                    return Ok(());
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    return Ok(());
+                }
+            }
+        }
+
+        if disconnect.is_cancelled() {
+            info!("Torpedo received — stopping bag playback.");
+            return Ok(());
+        }
+
+        ship.send_wind(vec![mt_sea::net::WindAt {
+            data: msg,
+            at_var: None,
+        }])
+        .await?;
+    }
+
+    info!("Bag playback complete.");
+    Ok(())
 }
 
 fn features_command(feature: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -696,6 +910,9 @@ impl log::Log for StdioLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         // Filter out verbose zenoh logs (only show warnings and errors)
         let target = metadata.target();
+        if target.starts_with("zenoh::api::admin") || target.starts_with("zenoh::api::session") {
+            return false;
+        }
         if target.starts_with("zenoh") && metadata.level() > log::Level::Warn {
             return false;
         }
@@ -887,7 +1104,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 clients.insert(wind_name);
                             }
 
-                            #[cfg(feature = "embed-ratpub-turbine")]
+                            #[cfg(feature = "embed-mt-pubsub-turbine")]
                             {
                                 let wind_name = mt_wind::get_env_or_default(
                                     "wind_ratpub_name",
@@ -897,10 +1114,19 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 clients.insert(wind_name);
                             }
 
-                            coord::run_coordinator(locked_start, clients, eval.rules);
+                            if !mt_coord::try_start_with_rules(
+                                locked_start,
+                                clients,
+                                eval.rules,
+                                None,
+                            ) {
+                                info!(
+                                    "Coordinator already running in the network, connecting as client."
+                                );
+                            }
                         }
 
-                        #[cfg(feature = "embed-ratpub-turbine")]
+                        #[cfg(feature = "embed-mt-pubsub-turbine")]
                         let ratpub_ready_rx = {
                             let wind_name = mt_wind::get_env_or_default(
                                 "ratpub_wind_name",
@@ -909,7 +1135,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
                             tokio::spawn(async move {
-                                let res = mt_wind::ratpub::run_dyn_wind(&wind_name, ready_tx).await;
+                                let res =
+                                    mt_wind::mt_pubsub::run_dyn_wind(&wind_name, ready_tx).await;
                                 match res {
                                     Ok(_) => {} // will never return
                                     Err(e) => {
@@ -921,7 +1148,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             });
                             Some(ready_rx)
                         };
-                        #[cfg(not(feature = "embed-ratpub-turbine"))]
+                        #[cfg(not(feature = "embed-mt-pubsub-turbine"))]
                         let ratpub_ready_rx: Option<
                             tokio::sync::oneshot::Receiver<()>,
                         > = None;
@@ -1017,11 +1244,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
                         let rules = eval.rules;
                         info!("Looking for coordinator...");
-                        let comparer = mt_sea::ship::NetworkShipImpl::init(
-                            ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
-                            false,
-                        )
-                        .await?;
+                        let comparer = std::sync::Arc::new(
+                            mt_sea::ship::NetworkShipImpl::init(
+                                ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
+                                false,
+                                mt_sea::Qos::Reliable,
+                            )
+                            .await?,
+                        );
 
                         let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
                         let (dyn_wind_tx, dyn_wind_rx) = tokio::sync::mpsc::channel(10);
@@ -1045,6 +1275,20 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 ))?;
                             (sub, sender)
                         };
+
+                        // Keep the coordinator's TUI-timeout alive by sending periodic heartbeats.
+                        let comparer_hb = comparer.clone();
+                        tokio::spawn(async move {
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(
+                                    mt_sea::HEARTBEAT_INTERVAL_MS,
+                                ))
+                                .await;
+                                if let Err(e) = comparer_hb.send_heartbeat().await {
+                                    log::debug!("Serve heartbeat send failed: {e}");
+                                }
+                            }
+                        });
 
                         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
@@ -1388,7 +1632,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match args.command {
-        Commands::Tui(tui_args) => tui(tui_args.file).await,
+        Commands::Sync(tui_args) => tui(tui_args.file).await,
+        Commands::AsyncPlay(args) => async_play(args.path, args.rate).await.map_err(|e| e.into()),
         Commands::Serve => serve().await,
         Commands::Headless(headless_args) => {
             runner::run(
@@ -1406,5 +1651,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
             Ok(())
         }
+        Commands::GenC { type_name } => gen_c::gen_c_command(type_name),
+        Commands::InitGo { path } => gen_c::init_go_command(path),
+        Commands::AddGoMsg {
+            type_names,
+            project,
+        } => gen_c::add_go_msg_command(type_names, project),
     }
 }

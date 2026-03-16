@@ -37,7 +37,7 @@ repo_name = "stelzo/minot"
 #
 # Read more: https://zensical.org/docs/setup/basics/#copyright
 copyright = """
-Copyright &copy; 2026 The authors
+Copyright &copy; 2026 Christopher Sieh
 """
 
 # Zensical supports both implicit navigation and explicitly defined navigation.
@@ -48,34 +48,39 @@ Copyright &copy; 2026 The authors
 #
 # Read more: https://zensical.org/docs/setup/navigation/
 nav = [
-  {"Home" = "index.md"},
-  {"Getting Started" = [
+  { "Home" = "index.md" },
+  { "Getting Started" = [
     "intro/query.md",
     "intro/share.md",
     "intro/pubsub.md",
-]},
-  {"Installation" = [
+  ] },
+  { "Installation" = [
     "installation/ros.md",
     "installation/script.md",
     "installation/tools.md",
     "installation/packages.md",
-    {"Ratpub Pub/Sub" = "installation/ratpub.md"},
-    {"Share Library" = "installation/librat.md"},
+    { "Pub/Sub (Rust/Go)" = "installation/pubsub.md" },
+    { "Share Library (C/Rust)" = "installation/librat.md" },
     "installation/publisher.md",
     "installation/archives.md",
-  ]},
-  {"Features" = [
-      {"Features" = [
-          "features/bagquery.md",
-          "features/varshare.md",
-          "features/pubsub.md",
-      ]},
-      {"TUI" = [
-        "features/tui/overview.md",
-        "features/tui/keybindings.md",
-      ]},
-  ]},
-  {"Extra" = "lore.md"},
+  ] },
+  { "Features" = [
+    { "Features" = [
+      "features/bagquery.md",
+      "features/varshare.md",
+      "features/pubsub.md",
+      "features/services.md",
+      "features/actions.md",
+    ] },
+    { "Sync" = [
+      "features/sync/overview.md",
+      "features/sync/keybindings.md",
+    ] },
+    { "API" = [
+      "features/api.md",
+    ] },
+  ] },
+  { "Extra" = "lore.md" },
 ]
 
 # With the "extra_css" option you can add your own CSS styling to customize
@@ -100,7 +105,7 @@ nav = [
 # Section for configuring theme options
 # ----------------------------------------------------------------------------
 [project.theme]
-logo = "assets/minot_92.png"
+# logo = "assets/minot_92.png"
 
 # change this to "classic" to use the traditional Material for MkDocs look.
 #variant = "classic"
@@ -123,7 +128,7 @@ logo = "assets/minot_92.png"
 # - https://zensical.org/docs/setup/logo-and-icons/#favicon
 # - https://developer.mozilla.org/en-US/docs/Glossary/Favicon
 #
-favicon = "assets/favicon.ico"
+# favicon = "assets/favicon.ico"
 
 # Zensical supports more than 60 different languages. This means that the
 # labels and tooltips that Zensical's templates produce are translated.
@@ -144,139 +149,139 @@ language = "en"
 # Zensical provides a number of feature toggles that change the behavior
 # of the documentation site.
 features = [
-    # Zensical includes an announcement bar. This feature allows users to
-    # dismiss it then they have read the announcement.
-    # https://zensical.org/docs/setup/header/#announcement-bar
-    "announce.dismiss",
+  # Zensical includes an announcement bar. This feature allows users to
+  # dismiss it then they have read the announcement.
+  # https://zensical.org/docs/setup/header/#announcement-bar
+  "announce.dismiss",
 
-    # If you have a repository configured and turn on this feature, Zensical
-    # will generate an edit button for the page. This works for common
-    # repository hosting services.
-    # https://zensical.org/docs/setup/repository/#code-actions
-    #"content.action.edit",
+  # If you have a repository configured and turn on this feature, Zensical
+  # will generate an edit button for the page. This works for common
+  # repository hosting services.
+  # https://zensical.org/docs/setup/repository/#code-actions
+  #"content.action.edit",
 
-    # If you have a repository configured and turn on this feature, Zensical
-    # will generate a button that allows the user to view the Markdown
-    # code for the current page.
-    # https://zensical.org/docs/setup/repository/#code-actions
-    #"content.action.view",
+  # If you have a repository configured and turn on this feature, Zensical
+  # will generate a button that allows the user to view the Markdown
+  # code for the current page.
+  # https://zensical.org/docs/setup/repository/#code-actions
+  #"content.action.view",
 
-    # Code annotations allow you to add an icon with a tooltip to your
-    # code blocks to provide explanations at crucial points.
-    # https://zensical.org/docs/authoring/code-blocks/#code-annotations
-    "content.code.annotate",
+  # Code annotations allow you to add an icon with a tooltip to your
+  # code blocks to provide explanations at crucial points.
+  # https://zensical.org/docs/authoring/code-blocks/#code-annotations
+  "content.code.annotate",
 
-    # This feature turns on a button in code blocks that allow users to
-    # copy the content to their clipboard without first selecting it.
-    # https://zensical.org/docs/authoring/code-blocks/#code-copy-button
-    "content.code.copy",
+  # This feature turns on a button in code blocks that allow users to
+  # copy the content to their clipboard without first selecting it.
+  # https://zensical.org/docs/authoring/code-blocks/#code-copy-button
+  "content.code.copy",
 
-    # Code blocks can include a button to allow for the selection of line
-    # ranges by the user.
-    # https://zensical.org/docs/authoring/code-blocks/#code-selection-button
-    "content.code.select",
+  # Code blocks can include a button to allow for the selection of line
+  # ranges by the user.
+  # https://zensical.org/docs/authoring/code-blocks/#code-selection-button
+  "content.code.select",
 
-    # Zensical can render footnotes as inline tooltips, so the user can read
-    # the footnote without leaving the context of the document.
-    # https://zensical.org/docs/authoring/footnotes/#footnote-tooltips
-    "content.footnote.tooltips",
+  # Zensical can render footnotes as inline tooltips, so the user can read
+  # the footnote without leaving the context of the document.
+  # https://zensical.org/docs/authoring/footnotes/#footnote-tooltips
+  "content.footnote.tooltips",
 
-    # If you have many content tabs that have the same titles (e.g., "Python",
-    # "JavaScript", "Cobol"), this feature causes all of them to switch to
-    # at the same time when the user chooses their language in one.
-    # https://zensical.org/docs/authoring/content-tabs/#linked-content-tabs
-    "content.tabs.link",
+  # If you have many content tabs that have the same titles (e.g., "Python",
+  # "JavaScript", "Cobol"), this feature causes all of them to switch to
+  # at the same time when the user chooses their language in one.
+  # https://zensical.org/docs/authoring/content-tabs/#linked-content-tabs
+  "content.tabs.link",
 
-    # TODO: not sure I understand this one? Is there a demo of this in the docs?
-    # https://zensical.org/docs/authoring/tooltips/#improved-tooltips
-    "content.tooltips",
+  # TODO: not sure I understand this one? Is there a demo of this in the docs?
+  # https://zensical.org/docs/authoring/tooltips/#improved-tooltips
+  "content.tooltips",
 
-    # With this feature enabled, Zensical will automatically hide parts
-    # of the header when the user scrolls past a certain point.
-    # https://zensical.org/docs/setup/header/#automatic-hiding
-    # "header.autohide",
+  # With this feature enabled, Zensical will automatically hide parts
+  # of the header when the user scrolls past a certain point.
+  # https://zensical.org/docs/setup/header/#automatic-hiding
+  # "header.autohide",
 
-    # Turn on this feature to expand all collapsible sections in the
-    # navigation sidebar by default.
-    # https://zensical.org/docs/setup/navigation/#navigation-expansion
-    "navigation.expand",
+  # Turn on this feature to expand all collapsible sections in the
+  # navigation sidebar by default.
+  # https://zensical.org/docs/setup/navigation/#navigation-expansion
+  "navigation.expand",
 
-    # This feature turns on navigation elements in the footer that allow the
-    # user to navigate to a next or previous page.
-    # https://zensical.org/docs/setup/footer/#navigation
-    "navigation.footer",
+  # This feature turns on navigation elements in the footer that allow the
+  # user to navigate to a next or previous page.
+  # https://zensical.org/docs/setup/footer/#navigation
+  "navigation.footer",
 
-    # When section index pages are enabled, documents can be directly attached
-    # to sections, which is particularly useful for providing overview pages.
-    # https://zensical.org/docs/setup/navigation/#section-index-pages
-    "navigation.indexes",
+  # When section index pages are enabled, documents can be directly attached
+  # to sections, which is particularly useful for providing overview pages.
+  # https://zensical.org/docs/setup/navigation/#section-index-pages
+  "navigation.indexes",
 
-    # When instant navigation is enabled, clicks on all internal links will be
-    # intercepted and dispatched via XHR without fully reloading the page.
-    # https://zensical.org/docs/setup/navigation/#instant-navigation
-    "navigation.instant",
+  # When instant navigation is enabled, clicks on all internal links will be
+  # intercepted and dispatched via XHR without fully reloading the page.
+  # https://zensical.org/docs/setup/navigation/#instant-navigation
+  "navigation.instant",
 
-    # With instant prefetching, your site will start to fetch a page once the
-    # user hovers over a link. This will reduce the perceived loading time
-    # for the user.
-    # https://zensical.org/docs/setup/navigation/#instant-prefetching
-    "navigation.instant.prefetch",
+  # With instant prefetching, your site will start to fetch a page once the
+  # user hovers over a link. This will reduce the perceived loading time
+  # for the user.
+  # https://zensical.org/docs/setup/navigation/#instant-prefetching
+  "navigation.instant.prefetch",
 
-    # In order to provide a better user experience on slow connections when
-    # using instant navigation, a progress indicator can be enabled.
-    # https://zensical.org/docs/setup/navigation/#progress-indicator
-    #"navigation.instant.progress",
+  # In order to provide a better user experience on slow connections when
+  # using instant navigation, a progress indicator can be enabled.
+  # https://zensical.org/docs/setup/navigation/#progress-indicator
+  #"navigation.instant.progress",
 
-    # When navigation paths are activated, a breadcrumb navigation is rendered
-    # above the title of each page
-    # https://zensical.org/docs/setup/navigation/#navigation-path
-    "navigation.path",
+  # When navigation paths are activated, a breadcrumb navigation is rendered
+  # above the title of each page
+  # https://zensical.org/docs/setup/navigation/#navigation-path
+  "navigation.path",
 
-    # When pruning is enabled, only the visible navigation items are included
-    # in the rendered HTML, reducing the size of the built site by 33% or more.
-    # https://zensical.org/docs/setup/navigation/#navigation-pruning
-    #"navigation.prune",
+  # When pruning is enabled, only the visible navigation items are included
+  # in the rendered HTML, reducing the size of the built site by 33% or more.
+  # https://zensical.org/docs/setup/navigation/#navigation-pruning
+  #"navigation.prune",
 
-    # When sections are enabled, top-level sections are rendered as groups in
-    # the sidebar for viewports above 1220px, but remain as-is on mobile.
-    # https://zensical.org/docs/setup/navigation/#navigation-sections
-    "navigation.sections",
+  # When sections are enabled, top-level sections are rendered as groups in
+  # the sidebar for viewports above 1220px, but remain as-is on mobile.
+  # https://zensical.org/docs/setup/navigation/#navigation-sections
+  "navigation.sections",
 
-    # When tabs are enabled, top-level sections are rendered in a menu layer
-    # below the header for viewports above 1220px, but remain as-is on mobile.
-    # https://zensical.org/docs/setup/navigation/#navigation-tabs
-    "navigation.tabs",
+  # When tabs are enabled, top-level sections are rendered in a menu layer
+  # below the header for viewports above 1220px, but remain as-is on mobile.
+  # https://zensical.org/docs/setup/navigation/#navigation-tabs
+  "navigation.tabs",
 
-    # When sticky tabs are enabled, navigation tabs will lock below the header
-    # and always remain visible when scrolling down.
-    # https://zensical.org/docs/setup/navigation/#sticky-navigation-tabs
-    #"navigation.tabs.sticky",
+  # When sticky tabs are enabled, navigation tabs will lock below the header
+  # and always remain visible when scrolling down.
+  # https://zensical.org/docs/setup/navigation/#sticky-navigation-tabs
+  #"navigation.tabs.sticky",
 
-    # A back-to-top button can be shown when the user, after scrolling down,
-    # starts to scroll up again.
-    # https://zensical.org/docs/setup/navigation/#back-to-top-button
-    "navigation.top",
+  # A back-to-top button can be shown when the user, after scrolling down,
+  # starts to scroll up again.
+  # https://zensical.org/docs/setup/navigation/#back-to-top-button
+  "navigation.top",
 
-    # When anchor tracking is enabled, the URL in the address bar is
-    # automatically updated with the active anchor as highlighted in the table
-    # of contents.
-    # https://zensical.org/docs/setup/navigation/#anchor-tracking
-    "navigation.tracking",
+  # When anchor tracking is enabled, the URL in the address bar is
+  # automatically updated with the active anchor as highlighted in the table
+  # of contents.
+  # https://zensical.org/docs/setup/navigation/#anchor-tracking
+  "navigation.tracking",
 
-    # When search highlighting is enabled and a user clicks on a search result,
-    # Zensical will highlight all occurrences after following the link.
-    # https://zensical.org/docs/setup/search/#search-highlighting
-    "search.highlight",
+  # When search highlighting is enabled and a user clicks on a search result,
+  # Zensical will highlight all occurrences after following the link.
+  # https://zensical.org/docs/setup/search/#search-highlighting
+  "search.highlight",
 
-    # When anchor following for the table of contents is enabled, the sidebar
-    # is automatically scrolled so that the active anchor is always visible.
-    # https://zensical.org/docs/setup/navigation/#anchor-following
-    # "toc.follow",
+  # When anchor following for the table of contents is enabled, the sidebar
+  # is automatically scrolled so that the active anchor is always visible.
+  # https://zensical.org/docs/setup/navigation/#anchor-following
+  # "toc.follow",
 
-    # When navigation integration for the table of contents is enabled, it is
-    # always rendered as part of the navigation sidebar on the left.
-    # https://zensical.org/docs/setup/navigation/#navigation-integration
-    "toc.integrate",
+  # When navigation integration for the table of contents is enabled, it is
+  # always rendered as part of the navigation sidebar on the left.
+  # https://zensical.org/docs/setup/navigation/#navigation-integration
+  "toc.integrate",
 ]
 
 # ----------------------------------------------------------------------------
@@ -366,7 +371,7 @@ pygments_lang_class = true
 [project.markdown_extensions.abbr]
 
 [project.markdown_extensions.pymdownx.emoji]
-emoji_index = "zensical.extensions.emoji.twemoji" 
+emoji_index = "zensical.extensions.emoji.twemoji"
 emoji_generator = "zensical.extensions.emoji.to_svg"
 
 [project.markdown_extensions.pymdownx.tabbed]

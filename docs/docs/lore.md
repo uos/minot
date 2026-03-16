@@ -12,7 +12,7 @@ Minot can use these names without conflict. This makes them easy to find with a 
 
 However, there's a more interesting story behind the names.
 
-![Minot's Ledge Lighthouse in a storm](https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Minot_light.gif/500px-Minot_light.gif){ width="350" loading="lazy" align=right }
+![Minot's Ledge Lighthouse in a storm](assets/Minot_light.png){ width="350" loading="lazy" align=right }
 
 Minot is named after *Minot's Ledge Lighthouse* near Boston (see [Wikipedia](https://en.wikipedia.org/wiki/Minot%27s_Ledge_Light)). Early versions of the lighthouse didn't last, so a new one was built with a solid granite base. This formidable structure, standing alone at the edge of shallows, was a statement of permanence. Completed in 1860, it still stands today.
 

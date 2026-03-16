@@ -37,6 +37,9 @@ regex.workspace = true
 once_cell.workspace = true
 rust_decimal.workspace = true
 bytesize.workspace = true
+mt_coord.workspace = true
+syn = { version = "2.0.117", features = ["full", "extra-traits"] }
+heck = "0.5.0"
 
 [[bin]]
 name = "minot"
@@ -66,19 +69,19 @@ embed-ros2-native = ["embed-ros2-turbine"]
 embed-ros1-native = ["embed-ros1-turbine"]
 
 # Publishing through a pub-sub implementation on top of the existing network stack from Minot.
-embed-ratpub = ["embed-ratpub-turbine"]
+embed-mt-pubsub = ["embed-mt-pubsub-turbine"]
 
 # Run the coordinator in the background.
 embed-coord = []
 embed-ros2-turbine = ["dep:mt_wind", "mt_wind/ros2-native"]
 embed-ros2-c-turbine = ["dep:mt_wind", "mt_wind/ros2-c"]
 embed-ros1-turbine = ["dep:mt_wind", "mt_wind/ros1-native"]
-embed-ratpub-turbine = ["dep:mt_wind", "mt_wind/ratpub"]
+embed-mt-pubsub-turbine = ["dep:mt_wind", "mt_wind/mt_pubsub"]
 
 [package.metadata.docs.rs]
 features = [
   "embed-coord",
-  "embed-ratpub",
+  "embed-mt-pubsub",
   "embed-ros1-native",
   "embed-ros2-c",
   "embed-ros2-c-humble",

@@ -1,4 +1,4 @@
-use ratpub::Node;
+use mt_pubsub::{Node, NodeConfig};
 use ros2_interfaces_jazzy_rkyv::std_msgs::msg;
 
 fn main() -> anyhow::Result<()> {
@@ -6,11 +6,15 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()
         .unwrap();
-    let node = frt.block_on(async { Node::create("subber".to_owned()).await.unwrap() });
+    let node = frt.block_on(async { Node::create(NodeConfig::new("subber")).await.unwrap() });
     let mut subber = frt.block_on(async {
-        node.create_subscriber::<msg::String>("/some_topic".to_owned(), 10)
-            .await
-            .unwrap()
+        node.create_subscriber::<msg::String>(
+            "/some_topic".to_owned(),
+            10,
+            mt_pubsub::Qos::Reliable,
+        )
+        .await
+        .unwrap()
     });
 
     let jh = std::thread::spawn(move || {

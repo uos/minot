@@ -521,6 +521,85 @@ impl Rules {
         }
     }
 
+    /// Returns all ship names that are subscribers for `var`, from both cache and store.
+    pub fn subscriber_ships(&self, var: &str) -> Vec<String> {
+        let mut ships = Vec::new();
+
+        // From cache: pending registrations not yet matched into rules
+        if let Some(entries) = self.cache.get(var) {
+            for (ship, kind) in entries {
+                if *kind == RatPubRegisterKind::Subscribe {
+                    ships.push(ship.clone());
+                }
+            }
+        }
+
+        // From store: already-matched rules where ship has a Catch action (subscriber role)
+        if let Some(rules) = self.store.get(var) {
+            for vh in rules {
+                if matches!(vh.strategy, Some(ActionPlan::Catch { .. })) {
+                    ships.push(vh.ship.clone());
+                }
+            }
+        }
+
+        ships
+    }
+
+    /// All ship names registered for a variable (store + cache, deduped).
+    pub fn all_ships_for_var(&self, var: &str) -> Vec<String> {
+        let mut ships = HashSet::new();
+
+        if let Some(rules) = self.store.get(var) {
+            for vh in rules {
+                ships.insert(vh.ship.clone());
+                match &vh.strategy {
+                    Some(ActionPlan::Shoot { target, .. }) => {
+                        for t in target {
+                            ships.insert(t.clone());
+                        }
+                    }
+                    Some(ActionPlan::Catch { source, .. }) => {
+                        ships.insert(source.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(entries) = self.cache.get(var) {
+            for (ship, _) in entries {
+                ships.insert(ship.clone());
+            }
+        }
+
+        ships.into_iter().collect()
+    }
+
+    /// All variable names a given ship appears in (store + cache, deduped).
+    pub fn all_vars_for_ship(&self, ship: &str) -> Vec<String> {
+        let mut vars = HashSet::new();
+
+        for (var, rules) in &self.store {
+            let found = rules.iter().any(|vh| {
+                vh.ship == ship
+                    || matches!(&vh.strategy, Some(ActionPlan::Shoot { target, .. }) if target.iter().any(|t| t == ship))
+                    || matches!(&vh.strategy, Some(ActionPlan::Catch { source, .. }) if source == ship)
+            });
+            if found {
+                vars.insert(var.clone());
+            }
+        }
+
+        for (var, entries) in &self.cache {
+            if entries.iter().any(|(s, _)| s == ship) {
+                vars.insert(var.clone());
+            }
+        }
+
+        vars.into_iter().collect()
+    }
+
     pub fn register(&mut self, var: String, client: String, kind: RatPubRegisterKind) {
         match self.cache.get_mut(&var) {
             Some(el) => {

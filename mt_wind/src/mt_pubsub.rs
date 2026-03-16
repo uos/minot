@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use mt_net::SensorTypeMapped;
+use mt_pubsub::{Node, NodeConfig, Qos};
 use mt_sea::{Ship, ShipKind};
-use ratpub::Node;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), false).await?;
+    let ship =
+        mt_sea::ship::NetworkShipImpl::init(kind.clone(), false, mt_sea::Qos::Reliable).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -36,7 +37,7 @@ pub async fn run_dyn_wind(
     ready: tokio::sync::oneshot::Sender<()>,
 ) -> anyhow::Result<Option<()>> {
     let nh_name = wind_name.to_string() + "_pub";
-    let nh = tokio::spawn(async move { Node::create(nh_name).await });
+    let nh = tokio::spawn(async move { Node::create(NodeConfig::new(nh_name)).await });
     let wind_name_owned = wind_name.to_owned();
     let wind_receiver = tokio::spawn(async move { wind(&wind_name_owned).await });
 
@@ -46,8 +47,9 @@ pub async fn run_dyn_wind(
     let mut cloud_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
+    let mut any_type_warned = false;
     if ready.send(()).is_err() {
-        warn!("ratpub could not signal to be ready to handle requests");
+        warn!("mt_pubsub could not signal to be ready to handle requests");
     }
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
@@ -55,7 +57,9 @@ pub async fn run_dyn_wind(
                 SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
-                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        let pubber = node
+                            .create_publisher(data.topic.clone(), Qos::Reliable)
+                            .await?;
                         cloud_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             cloud_publishers
@@ -71,7 +75,9 @@ pub async fn run_dyn_wind(
                 SensorTypeMapped::Imu(imu_msg) => {
                     let mut existing_pubber = imu_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
-                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        let pubber = node
+                            .create_publisher(data.topic.clone(), Qos::Reliable)
+                            .await?;
                         imu_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             imu_publishers
@@ -85,14 +91,19 @@ pub async fn run_dyn_wind(
                     debug!("published imu");
                 }
                 SensorTypeMapped::Any(_) => {
-                    error!(
-                        "Any-Types are not supported for ratpub due to different message encodings."
-                    )
+                    if !any_type_warned {
+                        warn!(
+                            "Any-Types are not supported for mt_pubsub due to different message encodings, skipping."
+                        );
+                        any_type_warned = true;
+                    }
                 }
                 SensorTypeMapped::Odometry(odom_msg) => {
                     let mut existing_pubber = odom_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
-                        let pubber = node.create_publisher(data.topic.clone()).await?;
+                        let pubber = node
+                            .create_publisher(data.topic.clone(), Qos::Reliable)
+                            .await?;
                         odom_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             odom_publishers
@@ -130,7 +141,7 @@ pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
 async fn main() -> anyhow::Result<()> {
     mt_sea::init_logging();
 
-    let wind_name = get_env_or_default("wind_name", "turbine_ratpub")?;
+    let wind_name = get_env_or_default("wind_name", "turbine_mt_pubsub")?;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
 

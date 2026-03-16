@@ -24,6 +24,7 @@ mt_net.workspace = true
 env_logger.workspace = true
 rand.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 anyhow.workspace = true
 rkyv.workspace = true
 async-trait.workspace = true

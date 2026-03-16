@@ -2,16 +2,17 @@
 
 While developing ROS nodes, Bagfiles are essential for reproducability. With Minot you can query that recording and control each message that is published to your nodes. Bagfile Query is not built for a long stream of data. The idea is to grab specific chunks that fit some query and send them via the Coordinator (like a ROS1 Master) to all connected nodes that care about publishing Bagfile data. It is not meant to be a replacement for `ros2 bag play`. If you *just want to play a Bagfile*, we recommend the usual ROS tooling.
 
-To establish the power of querying, we will implement the typical `ros2 bag play` in Minot.
+To establish the power of querying, we will implement (a really inefficient) `minot async` in Minot sync — or `ros2 bag play`, as known in the ROS world.
 
 To run the queries, you will need the Minot binary `minot`. It expects a Ratslang file (`.rl`) as the first argument after specifying the interaction mode. They are
 
-- `tui` for direct human interactions in the terminal or
+- `async` for real-time playback of a bagfile,
+- `sync` for step by step human interactions in the terminal, or
 - `serve` for communcation via Linux file descriptor when used as a headless subprocess.
 
-When started with `tui`, we typically are already in the Wind-Zen-Mode. It is the default view of the TUI but if you went wrong somewhere, you can get there again by switching view modes until you get to Wind-Mode with <kbd>w</kbd> and then optionally go to Zen-Mode (or minimal Bagfile Querying Mode) to hide the Variable Sharing features with <kbd>z</kbd>.
+When started with `sync`, we typically are already in the Wind-Zen-Mode. It is the default view of the Sync UI but if you went wrong somewhere, you can get there again by switching view modes until you get to Wind-Mode with <kbd>w</kbd> and then optionally go to Zen-Mode (for minimal Bagfile Querying) to hide the Variable Sharing features with <kbd>z</kbd>.
 
-Now we want to tell Minot which lines of the file to execute, so keep the file opened somehwere.
+Now we want to tell Minot which lines of the file to execute, so keep the file opened somewhere.
 
 !!! info "The language of the file"
 
@@ -25,7 +26,7 @@ Outside of the typical configuration functionality of Ratslang, Minot defines fu
 
 Load a Bagfile and set the cursor to the beginning.
 
-This function requires a path to a Bagfile (directory name). The path is relative to your current working directory where you started the Minot TUI.
+This function requires a path to a Bagfile (directory name). The path is relative to your current working directory where you started the Minot Sync.
 
 ~~~awk title="Example"
 reset! ./mybag
@@ -34,11 +35,6 @@ reset! ./mybag
 ~~~ title="Definition"
 reset! <Path>
 ~~~
-
-
-!!! warning
-
-    At the moment, we only support the MCAP storage backend. It is the default for Rosbags since ROS2 Iron Irwini. For older Bagfiles, follow the conversion guide [here](https://mcap.dev/guides/getting-started/ros-2).
 
 ## `pf!`
 
@@ -100,7 +96,7 @@ pf! i 10 20s
 #---
 ~~~
 
-Now you can jump to sections with <kbd>PageDown</kbd>/<kbd>PageUp</kbd> in the Minot TUI.
+Now you can jump to sections with <kbd>PageDown</kbd>/<kbd>PageUp</kbd> in the Minot Sync.
 
 !!! info "Formal Definition"
 
@@ -189,6 +185,22 @@ pf! any .. 1.
 
 !!! warning
 
-    With this code, Minot will load the entire content of the Bagfile into memory first, which is probably not want you want. Also, you can not stop publishing mid-way through. This is why you should still use `ros2 bag play` for this use case — but it still beautifully demonstrates the flexibility of Minots query feature.
+    With this code, Minot will load the entire content of the Bagfile into memory first, which is probably not want you want. Also, you can not stop publishing mid-way through. This is why you should still use `minot async` for this use case — but it still beautifully demonstrates the flexibility of Minots query feature.
 
-For information on how to execute the code in Minot TUI, click [here](./tui/overview.md#bagfile-query).
+## Real-time Playback (`minot async`)
+
+While the script-based approach gives you fine-grained control, sometimes you just want to stream a bag file at real-time speed to your network. For this, you can use the `async` command:
+
+~~~bash
+minot async <path_to_bag> --rate 1.0
+~~~
+
+This command:
+1.  **Automatically detects** if a coordinator is running, and starts an embedded one if not.
+2.  **Initializes all embedded Winds** (ROS2, MtPubSub, etc.).
+3.  **Streams data** from `.mcap` or `.db3` files in real-time.
+4.  **Supports rate control** via the `--rate` flag (e.g., `2.0` for double speed).
+
+It's a lightweight alternative to `ros2 bag play` that integrates directly with the Minot ecosystem.
+
+For information on how to execute script-based code in Minot Sync, click [here](./sync/overview.md#bagfile-query).

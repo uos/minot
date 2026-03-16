@@ -4,7 +4,17 @@ Nodes in the Minot network that share data are called Rats ([here is why](../lor
 
 ### Ubuntu
 
-Our PPA provides `.deb` files for a system-wide installation. After the [setup](https://codeberg.org/uos-robotics/ppa/src/branch/pages/README.md), you can simply run apt.
+Our PPA provides `.deb` files for a system-wide installation.
+
+~~~bash title="UOS PPA"
+curl -fsSL "https://uos-robotics.codeberg.page/ppa/ubuntu/key.gpg" | gpg --dearmor \
+  | sudo tee /usr/share/keyrings/uos-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/uos-archive-keyring.gpg] https://uos-robotics.codeberg.page/ppa/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+  | sudo tee /etc/apt/sources.list.d/uos.list
+sudo apt update
+~~~
+
+After the setup, you can simply run apt.
 
 ~~~bash
 sudo apt install librat-dev
@@ -56,7 +66,7 @@ A typical system-wide installation is done by copying the libraries to your link
 ~~~bash
 sudo cp ./target/release/librat.* /usr/local/lib/
 sudo mkdir -p /usr/local/include/rat/
-sudo cp ./rat/rat.h /usr/local/include/rat/
+sudo cp ./mt_rat/rat.h /usr/local/include/rat/
 ~~~
 
 Then you can use the library in your C/C++ code.
@@ -72,6 +82,6 @@ For using the Rust library, just add this to your dependencies in `Cargo.toml`.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_rat = "0.6.0"
+mt_rat = "0.7.0"
 ~~~
 

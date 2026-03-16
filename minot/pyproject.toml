@@ -7,17 +7,17 @@ name = "minot-cli"
 description = "Minot with embedded Coordinator and Ratpub. A versatile toolset for debugging and verifying stateful robot perception software."
 dynamic = ["version"]
 requires-python = ">=3.8"
-license = {text = "MIT OR Apache-2.0"}
+license = { text = "MIT OR Apache-2.0" }
 keywords = ["robotics", "tools"]
 classifiers = [
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Rust",
-    "Framework :: Robot Framework :: Tool",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Rust",
+  "Framework :: Robot Framework :: Tool",
 ]
 
 [tool.maturin]
 bindings = "bin"
-features = ["embed-ratpub"]
+features = ["embed-mt-pubsub"]

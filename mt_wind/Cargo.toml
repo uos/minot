@@ -31,16 +31,16 @@ ros2-client = { workspace = true, optional = true }
 ros2-interfaces-jazzy-serde = { workspace = true, optional = true }
 ros2-interfaces-jazzy-rkyv.workspace = true
 cdr-encoding.workspace = true
-ratpub = { workspace = true, optional = true }
+mt_pubsub = { workspace = true, optional = true }
 
 [features]
-default = ["ratpub"]
-shm = ["mt_sea/shm", "ratpub?/shm"]
+default = ["mt_pubsub"]
+shm = ["mt_sea/shm", "mt_pubsub?/shm"]
 humble = ["mt_bagread/humble"]
 ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy-serde"]
 ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]
 ros1-native = ["dep:roslibrust"]
-ratpub = ["dep:ratpub"]
+mt_pubsub = ["dep:mt_pubsub"]
 
 [[bin]]
 name = "wind-ros1-native"
@@ -58,6 +58,6 @@ path = "src/ros2_r2r.rs"
 required-features = ["ros2-c"]
 
 [[bin]]
-name = "wind-rat"
-path = "src/ratpub.rs"
-required-features = ["ratpub"]
+name = "wind-mt-pubsub"
+path = "src/mt_pubsub.rs"
+required-features = ["mt_pubsub"]

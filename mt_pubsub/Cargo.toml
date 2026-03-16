@@ -1,5 +1,5 @@
 [package]
-name = "ratpub"
+name = "mt_pubsub"
 description = "A simple and deterministic Pub/Sub implementation with Minot primitives."
 version.workspace = true
 keywords.workspace = true
@@ -15,11 +15,13 @@ exclude.workspace = true
 
 [dependencies]
 mt_sea.workspace = true
+mt_coord.workspace = true
 mt_net.workspace = true
 env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 rkyv.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

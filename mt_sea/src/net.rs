@@ -72,10 +72,18 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
     }
 }
 
+#[derive(Serialize, Deserialize, Archive, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Qos {
+    #[default]
+    Reliable,
+    BestEffort,
+}
+
 #[derive(Serialize, Deserialize, Archive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RatPubRegisterKind {
     Publish,
     Subscribe,
+    Scope,
 }
 
 #[derive(Serialize, Deserialize, Archive, Clone, Debug)]
@@ -87,6 +95,7 @@ pub enum PacketKind {
         kind: ShipKind,
         remove_rules_on_disconnect: bool,
         domain_id: u16,
+        node_mode: Qos,
     },
     Welcome {
         addr: crate::NetworkShipAddress,
@@ -119,6 +128,17 @@ pub enum PacketKind {
         ship: String,
         var: String,
         kind: RatPubRegisterKind,
+        node_mode: Qos,
+    },
+    RegistrationError(String),
+    Sonar,
+    Torpedo(Vec<String>),
+    ClientsHash {
+        reliable: HashSet<String>,
+        best_effort: HashSet<String>,
+    },
+    PeerDead {
+        ship: String,
     },
 }
 
@@ -143,6 +163,7 @@ pub struct ShipHandle {
     pub recv: tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>,
     pub send: tokio::sync::mpsc::Sender<Packet>,
     pub remove_rules_on_disconnect: bool,
+    pub node_mode: Qos,
 }
 
 /// Zenoh-based Sea coordinator
@@ -215,6 +236,7 @@ impl Sea {
                     kind: ship_kind,
                     remove_rules_on_disconnect,
                     domain_id: client_domain_id,
+                    node_mode,
                 } = packet.data
                 {
                     if client_domain_id != domain_id {
@@ -262,6 +284,7 @@ impl Sea {
                         port: 0,
                         ship: generated_id,
                         kind: ship_kind.clone(),
+                        node_mode,
                     };
 
                     // Key for coordinator -> client messages
@@ -319,8 +342,14 @@ impl Sea {
                     let coord_to_client_key_owned = coord_to_client_key.clone();
                     let publisher = session_clone
                         .declare_publisher(coord_to_client_key_owned)
-                        .congestion_control(zenoh::qos::CongestionControl::Block)
-                        .reliability(zenoh::qos::Reliability::Reliable)
+                        .congestion_control(match node_mode {
+                            Qos::Reliable => zenoh::qos::CongestionControl::Block,
+                            Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
+                        })
+                        .reliability(match node_mode {
+                            Qos::Reliable => zenoh::qos::Reliability::Reliable,
+                            Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
+                        })
                         .wait()
                         .expect("Failed to create publisher for client");
 
@@ -366,6 +395,7 @@ impl Sea {
                         name: ship_kind,
                         addr_from_coord: client_addr,
                         remove_rules_on_disconnect,
+                        node_mode,
                     };
 
                     if let Err(e) = clients_tx_inner.send(ship_handle) {

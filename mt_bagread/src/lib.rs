@@ -5,7 +5,15 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, anyhow};
 use camino::Utf8PathBuf;
 use mcap::Summary;
-use mcap::records::{nanos_to_system_time, system_time_to_nanos};
+fn nanos_to_system_time(nanos: u64) -> std::time::SystemTime {
+    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(nanos)
+}
+
+fn system_time_to_nanos(time: &std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
 use mcap::sans_io::{IndexedReadEvent, IndexedReader, IndexedReaderOptions, SummaryReadEvent};
 use mt_mtc::{
     AbsTimeRange, AnySensor, IMU_ROS2_TYPE, ODOM_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount,
@@ -1075,6 +1083,125 @@ impl Bagfile {
             db3.cursor_ns = None;
         }
         Ok(())
+    }
+
+    /// Returns the next message from the bag in chronological order, or `None` at end of bag.
+    /// The `u64` is nanoseconds since the start of the bag (relative timestamp).
+    /// O(1) memory — exactly one message is deserialized per call.
+    pub fn next_message(&mut self) -> anyhow::Result<Option<(u64, BagMsg)>> {
+        if let Some(reader) = self.reader.as_mut() {
+            let file = self.file.as_mut().ok_or_else(|| anyhow!("file not open"))?;
+            let buf = &mut self.read_buffer;
+            let summary = &self.summary;
+            let metadata = &self.metadata;
+
+            loop {
+                match reader.next_event() {
+                    Some(Ok(IndexedReadEvent::ReadChunkRequest { offset, length })) => {
+                        file.seek(std::io::SeekFrom::Start(offset))?;
+                        buf.resize(length, 0);
+                        file.read_exact(buf)?;
+                        reader.insert_chunk_record_data(offset, buf)?;
+                    }
+                    Some(Ok(IndexedReadEvent::Message { header, data })) => {
+                        let channel = summary
+                            .channels
+                            .get(&header.channel_id)
+                            .ok_or_else(|| anyhow!("unknown channel id {}", header.channel_id))?;
+                        let topic_type = channel
+                            .schema
+                            .as_ref()
+                            .map(|s| s.name.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let start_ns = summary
+                            .stats
+                            .as_ref()
+                            .map(|s| s.message_start_time)
+                            .unwrap_or(0);
+                        let relative_ns = header.log_time.saturating_sub(start_ns);
+
+                        let mapped = deserialize_message(data, SensorType::Mixed, &topic_type)?;
+                        let qos = metadata
+                            .as_ref()
+                            .and_then(|m| m.get_topic_meta(&channel.topic))
+                            .and_then(|t| t.offered_qos_profiles.last())
+                            .map(|q| Qos::Custom(q.clone()));
+
+                        return Ok(Some((
+                            relative_ns,
+                            BagMsg {
+                                topic: channel.topic.clone(),
+                                msg_type: topic_type,
+                                data: mapped,
+                                qos,
+                            },
+                        )));
+                    }
+                    Some(Err(e)) => return Err(anyhow!("MCAP read error: {}", e)),
+                    None => return Ok(None),
+                }
+            }
+        }
+
+        #[cfg(feature = "db3")]
+        if let Some(db3) = self.db3.as_mut() {
+            let conn = db3.conn.lock().expect("db3 mutex poisoned");
+            if db3.start_ns.is_none() {
+                let min_ts: Option<i64> = conn
+                    .query_row("SELECT MIN(timestamp) FROM messages", [], |row| row.get(0))
+                    .optional()
+                    .context("failed to get start time from db3")?;
+                db3.start_ns = Some(min_ts.unwrap_or(0) as u64);
+            }
+            let start_ns = db3.start_ns.unwrap_or(0);
+            let from_ns = db3.cursor_ns.unwrap_or(start_ns);
+
+            let mut stmt = conn.prepare_cached(
+                "SELECT m.timestamp, m.data, m.topic_id \
+                 FROM messages m WHERE m.timestamp >= ?1 \
+                 ORDER BY m.timestamp LIMIT 1",
+            )?;
+
+            let result = stmt.query_row([from_ns as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u64,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            });
+
+            return match result {
+                Ok((ts, data, topic_id)) => {
+                    let (topic_name, topic_type, qos_profiles) = db3
+                        .topic_map
+                        .get(&topic_id)
+                        .ok_or_else(|| anyhow!("unknown topic_id {}", topic_id))?
+                        .clone();
+
+                    db3.cursor_ns = Some(ts.saturating_add(1));
+
+                    let mapped = deserialize_message(&data, SensorType::Mixed, &topic_type)?;
+                    let qos = qos_profiles.last().map(|q| Qos::Custom(q.clone()));
+                    let relative_ns = ts.saturating_sub(start_ns);
+
+                    Ok(Some((
+                        relative_ns,
+                        BagMsg {
+                            topic: topic_name,
+                            msg_type: topic_type,
+                            data: mapped,
+                            qos,
+                        },
+                    )))
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(anyhow!("DB3 read error: {}", e)),
+            };
+        }
+
+        Err(anyhow!("Bagfile not opened — call reset() first"))
     }
 }
 

@@ -32,7 +32,7 @@ Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed 
 Use the `--embed` option to specify which components to embed when building from source:
 
 - `coord` - Coordinator (default)
-- `ratpub` - Ratpub publisher
+- `mt_pubsub` - MtPubSub publisher
 - `ros1-native` - ROS1 publisher (native, no system dependencies)
 - `ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
 

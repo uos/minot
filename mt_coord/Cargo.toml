@@ -1,0 +1,27 @@
+[package]
+name = "mt_coord"
+description = "Coordinator runtime for Minot — can be embedded in-process or run standalone."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+exclude.workspace = true
+
+[features]
+default = ["embed-scope"]
+embed-scope = ["dep:mt_scope"]
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+mt_sea.workspace = true
+mt_net.workspace = true
+mt_scope = { workspace = true, optional = true }
+tokio.workspace = true
+fs2.workspace = true

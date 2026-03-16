@@ -1,0 +1,173 @@
+--- minot/src/gen_c.rs
++++ minot/src/gen_c.rs
+@@ -102,64 +102,126 @@
+ 
+ pub fn parse_and_generate(input_rust_code: &str, _target_type: &str) -> Result<String> {
+     let file = syn::parse_file(input_rust_code)?;
+-    let mut out = String::new();
+-    out.push_str("#include <stdint.h>\n#include <stdbool.h>\n\n");
+     
+-    // rkyv 0.8 string/vec types implementation
+-    out.push_str("typedef struct {\n    uint32_t len;\n    int32_t offset;\n} minot_rkyv_out_of_line;\n\n");
+-    out.push_str("typedef union {\n    minot_rkyv_out_of_line out_of_line;\n    uint8_t inline_bytes[8];\n} minot_rkyv_string;\n\n");
++    let mut c_out = String::new();
++    let mut rs_out = String::new();
++    
++    c_out.push_str("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n");
++    c_out.push_str("typedef struct {\n    const char* ptr;\n    size_t len;\n} minot_c_string;\n\n");
++    
++    rs_out.push_str("#[repr(C)]\n#[derive(Debug, Clone, Copy)]\npub struct minot_c_string {\n    pub ptr: *const std::ffi::c_char,\n    pub len: usize,\n}\n\n");
++
++    let mut vec_types = std::collections::HashSet::new();
++
++    // First pass to collect Vec inner types
++    for item in &file.items {
++        if let Item::Struct(item_struct) = item {
++            for field in &item_struct.fields {
++                if let Some(inner) = is_vec(&field.ty) {
++                    vec_types.insert(rust_type_to_c_inner(inner));
++                }
++            }
++        }
++    }
++
++    for v in &vec_types {
++        c_out.push_str(&format!("typedef struct {{\n    const {}* ptr;\n    size_t len;\n}} minot_c_slice_{};\n\n", v.c_type, v.safe_name));
++        rs_out.push_str(&format!("#[repr(C)]\n#[derive(Debug, Clone, Copy)]\npub struct minot_c_slice_{} {{\n    pub ptr: *const {},\n    pub len: usize,\n}}\n\n", v.safe_name, v.rs_ffi_type));
++    }
+ 
+     for item in file.items {
+         if let Item::Struct(item_struct) = item {
+             let struct_name = item_struct.ident.to_string();
+-            // Determine if we need to add an alignment attribute because rkyv pads structs to the max alignment of their fields
+-            let mut requires_8byte_align = false;
+-            for field in &item_struct.fields {
+-                let ty_str = rust_type_to_c(&field.ty);
+-                if ty_str == "double" || ty_str == "int64_t" || ty_str == "uint64_t" {
+-                    requires_8byte_align = true;
+-                    break;
+-                }
+-                if let Some((array_type, _)) = is_array(&field.ty) {
+-                    let arr_ty_str = rust_type_to_c(array_type);
+-                    if arr_ty_str == "double" || arr_ty_str == "int64_t" || arr_ty_str == "uint64_t" {
+-                        requires_8byte_align = true;
+-                        break;
+-                    }
+-                }
+-            }
+             
+-            if requires_8byte_align {
+-                // If compiled under GCC/Clang, this ensures struct alignment matches rkyv 8-byte rules
+-                out.push_str(&format!("typedef struct __attribute__((aligned(8))) {{\n"));
+-            } else {
+-                out.push_str(&format!("typedef struct {{\n"));
+-            }
++            c_out.push_str(&format!("typedef struct {{\n"));
++            rs_out.push_str(&format!("#[repr(C)]\n#[derive(Debug, Clone, Copy)]\npub struct minot_{} {{\n", struct_name));
+             
+             for field in item_struct.fields {
+                 let field_name = field.ident.map(|i| i.to_string()).unwrap_or_else(|| "unnamed".to_string());
+                 if let Some((array_type, size)) = is_array(&field.ty) {
+-                    out.push_str(&format!("    {} {}[{}];\n", rust_type_to_c(array_type), field_name, size));
++                    let t = rust_type_to_c_inner(array_type);
++                    c_out.push_str(&format!("    {} {}[{}];\n", t.c_type, field_name, size));
++                    rs_out.push_str(&format!("    pub {}: [{}; {}],\n", field_name, t.rs_ffi_type, size));
++                } else if let Some(inner) = is_vec(&field.ty) {
++                    let t = rust_type_to_c_inner(inner);
++                    c_out.push_str(&format!("    minot_c_slice_{} {};\n", t.safe_name, field_name));
++                    rs_out.push_str(&format!("    pub {}: minot_c_slice_{},\n", field_name, t.safe_name));
+                 } else {
+-                    let c_type = rust_type_to_c(&field.ty);
+-                    out.push_str(&format!("    {} {};\n", c_type, field_name));
++                    let t = rust_type_to_c_inner(&field.ty);
++                    c_out.push_str(&format!("    {} {};\n", t.c_type, field_name));
++                    rs_out.push_str(&format!("    pub {}: {},\n", field_name, t.rs_ffi_type));
+                 }
+             }
+-            out.push_str(&format!("}} minot_{};\n\n", struct_name));
++            c_out.push_str(&format!("}} minot_{};\n\n", struct_name));
++            rs_out.push_str(&format!("}}\n\n"));
+         }
+     }
+-    Ok(out)
++    
++    let mut combined = String::new();
++    combined.push_str("/* ==========================================\n");
++    combined.push_str("   C HEADER\n");
++    combined.push_str("   ========================================== */\n");
++    combined.push_str(&c_out);
++    
++    combined.push_str("\n/* ==========================================\n");
++    combined.push_str("   RUST FFI DEFINITIONS\n");
++    combined.push_str("   ========================================== */\n");
++    combined.push_str("/*\n");
++    combined.push_str(&rs_out);
++    combined.push_str("*/\n");
++    
++    Ok(combined)
+ }
+ 
+-fn rust_type_to_c(ty: &Type) -> String {
++#[derive(PartialEq, Eq, Hash)]
++struct MappedType {
++    c_type: String,
++    safe_name: String,
++    rs_ffi_type: String,
++}
++
++fn is_vec(ty: &Type) -> Option<&Type> {
+     match ty {
+         Type::Path(TypePath { path, .. }) => {
+             let last = path.segments.last().unwrap().ident.to_string();
++            if last == "Vec" {
++                if let syn::PathArguments::AngleBracketed(args) = &path.segments.last().unwrap().arguments {
++                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
++                        return Some(inner_ty);
++                    }
++                }
++            }
++            None
++        },
++        _ => None,
++    }
++}
++
++fn rust_type_to_c_inner(ty: &Type) -> MappedType {
++    match ty {
++        Type::Path(TypePath { path, .. }) => {
++            let last = path.segments.last().unwrap().ident.to_string();
+             match last.as_str() {
+-                "f64" => "double".to_string(),
+-                "f32" => "float".to_string(),
+-                "u8" => "uint8_t".to_string(),
+-                "i8" => "int8_t".to_string(),
+-                "u16" => "uint16_t".to_string(),
+-                "i16" => "int16_t".to_string(),
+-                "u32" => "uint32_t".to_string(),
+-                "i32" => "int32_t".to_string(),
+-                "u64" => "uint64_t".to_string(),
+-                "i64" => "int64_t".to_string(),
+-                "bool" => "bool".to_string(),
+-                "String" => "minot_rkyv_string".to_string(),
+-                "Vec" => "minot_rkyv_string".to_string(), // approximation for rkyv
+-                other => format!("minot_{}", other),
++                "f64" => MappedType { c_type: "double".to_string(), safe_name: "double".to_string(), rs_ffi_type: "f64".to_string() },
++                "f32" => MappedType { c_type: "float".to_string(), safe_name: "float".to_string(), rs_ffi_type: "f32".to_string() },
++                "u8" => MappedType { c_type: "uint8_t".to_string(), safe_name: "uint8_t".to_string(), rs_ffi_type: "u8".to_string() },
++                "i8" => MappedType { c_type: "int8_t".to_string(), safe_name: "int8_t".to_string(), rs_ffi_type: "i8".to_string() },
++                "u16" => MappedType { c_type: "uint16_t".to_string(), safe_name: "uint16_t".to_string(), rs_ffi_type: "u16".to_string() },
++                "i16" => MappedType { c_type: "int16_t".to_string(), safe_name: "int16_t".to_string(), rs_ffi_type: "i16".to_string() },
++                "u32" => MappedType { c_type: "uint32_t".to_string(), safe_name: "uint32_t".to_string(), rs_ffi_type: "u32".to_string() },
++                "i32" => MappedType { c_type: "int32_t".to_string(), safe_name: "int32_t".to_string(), rs_ffi_type: "i32".to_string() },
++                "u64" => MappedType { c_type: "uint64_t".to_string(), safe_name: "uint64_t".to_string(), rs_ffi_type: "u64".to_string() },
++                "i64" => MappedType { c_type: "int64_t".to_string(), safe_name: "int64_t".to_string(), rs_ffi_type: "i64".to_string() },
++                "bool" => MappedType { c_type: "bool".to_string(), safe_name: "bool".to_string(), rs_ffi_type: "bool".to_string() },
++                "String" => MappedType { c_type: "minot_c_string".to_string(), safe_name: "minot_c_string".to_string(), rs_ffi_type: "minot_c_string".to_string() },
++                other => MappedType { c_type: format!("minot_{}", other), safe_name: format!("minot_{}", other), rs_ffi_type: format!("minot_{}", other) },
+             }
+         },
+-        _ => "void*".to_string(),
++        _ => MappedType { c_type: "void*".to_string(), safe_name: "void_ptr".to_string(), rs_ffi_type: "*mut std::ffi::c_void".to_string() },
+     }
+ }
+ 

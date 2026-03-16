@@ -3,6 +3,40 @@ pub mod coordinator;
 pub mod net;
 pub mod ship;
 
+pub use net::Qos;
+
+// ---------------------------------------------------------------------------
+// Timing constants — these values are interdependent.
+// When changing one, check all others marked with the same group tag.
+// ---------------------------------------------------------------------------
+
+/// [heartbeat] How often nodes send heartbeat messages to keep their connection alive.
+pub const HEARTBEAT_INTERVAL_MS: u64 = 400;
+
+/// [heartbeat] Heartbeat is skipped if data was sent within this window.
+/// Must be ≤ HEARTBEAT_INTERVAL_MS so a heartbeat is always sent before
+/// DISCONNECT_TIMEOUT_MS elapses after the last real data.
+pub const HEARTBEAT_SUPPRESS_MS: u64 = HEARTBEAT_INTERVAL_MS / 2;
+
+/// [heartbeat] Coordinator drops a client after this long with no message.
+/// Must be > HEARTBEAT_INTERVAL_MS + HEARTBEAT_SUPPRESS_MS to avoid false disconnects.
+pub const DISCONNECT_TIMEOUT_MS: u64 = HEARTBEAT_INTERVAL_MS * 2; // 800 ms
+
+/// [registration] How long to wait for a coordinator before giving up on registration.
+pub const REGISTRATION_TIMEOUT_MS: u64 = 2000;
+
+/// [peer-heartbeat] Consecutive ping failures before declaring a peer dead.
+pub const PEER_DEAD_THRESHOLD: u32 = 3;
+
+/// [coordinator] Last-resort timeout for coordinator-side per-client handler.
+/// Nodes no longer heartbeat the coordinator directly; this only fires for
+/// truly isolated or zombie clients that sent no packet for this long.
+pub const COORD_CLIENT_IDLE_TIMEOUT_MS: u64 = 30_000;
+
+/// [registration] How long to wait for an embedded coordinator to start before
+/// retrying registration.
+pub const COORDINATOR_STARTUP_WAIT_MS: u64 = 1000;
+
 use mt_net::{ActionPlan, BagMsg, Rules, VariableHuman};
 
 /// Initialize logging with zenoh logs filtered to warn level regardless of RUST_LOG setting.
@@ -12,6 +46,8 @@ pub fn init_logging() {
     let env = Env::new().filter_or("RUST_LOG", "info");
     env_logger::Builder::from_env(env)
         .filter_module("zenoh", log::LevelFilter::Warn)
+        .filter_module("zenoh::api::admin", log::LevelFilter::Off)
+        .filter_module("zenoh::api::session", log::LevelFilter::Off)
         .filter_module("zenoh_transport", log::LevelFilter::Warn)
         .filter_module("zenoh_link", log::LevelFilter::Warn)
         .filter_module("zenoh_protocol", log::LevelFilter::Warn)
@@ -41,6 +77,7 @@ pub struct NetworkShipAddress {
     pub port: u16,
     ship: ShipName,
     pub kind: ShipKind,
+    pub node_mode: net::Qos,
 }
 
 #[derive(Debug, Archive, Clone, Default, Serialize, Deserialize)]
@@ -234,5 +271,10 @@ pub trait Coordinator: Send + Sync + 'static {
         variable: String,
         action: ActionPlan,
         lock_until_ack: bool,
+        best_effort: bool,
     ) -> anyhow::Result<()>;
+
+    /// Push updated routes for `variable` to all ships currently involved in it.
+    /// Called after topology changes (register / disconnect / PeerDead).
+    async fn push_routes_for_var(&self, variable: &str, rules: &Rules) -> anyhow::Result<()>;
 }

@@ -1,0 +1,28 @@
+[package]
+name = "mt_scope"
+description = "Node crash monitoring for Minot — detects disconnected nodes and fires a Torpedo shutdown."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+exclude.workspace = true
+
+[features]
+default = []
+shm = ["zenoh/shared-memory"]
+
+[dependencies]
+zenoh.workspace = true
+tokio.workspace = true
+mt_sea.workspace = true
+anyhow.workspace = true
+once_cell.workspace = true
+rand.workspace = true
+log.workspace = true
+env_logger.workspace = true

@@ -2,18 +2,22 @@
 
 members = [
   "minot",
-  "ratpub",
+  "mt_pubsub",
+  "mt_coord",
   "mt_bagread",
   "mt_rat",
   "mt_mtc",
   "mt_sea",
   "mt_wind",
   "mt_net",
+  "mt_service",
+  "mt_action",
+  "mt_scope",
 ]
 resolver = "3"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://codeberg.org/stelzo/minot"
@@ -37,12 +41,16 @@ exclude = [
 ]
 
 [workspace.dependencies]
-mt_sea = { path = "mt_sea", version = "0.6.0" }
-ratpub = { path = "ratpub", version = "0.6.0" }
-mt_bagread = { path = "mt_bagread", version = "0.6.0" }
-mt_net = { path = "mt_net", version = "0.6.0" }
-mt_wind = { path = "mt_wind", version = "0.6.0" }
-mt_mtc = { path = "mt_mtc", version = "0.6.0" }
+mt_sea = { path = "mt_sea", version = "0.7.0" }
+mt_coord = { path = "mt_coord", version = "0.7.0" }
+mt_pubsub = { path = "mt_pubsub", version = "0.7.0" }
+mt_service = { path = "mt_service", version = "0.7.0" }
+mt_action = { path = "mt_action", version = "0.7.0" }
+mt_scope = { path = "mt_scope", version = "0.7.0" }
+mt_bagread = { path = "mt_bagread", version = "0.7.0" }
+mt_net = { path = "mt_net", version = "0.7.0" }
+mt_wind = { path = "mt_wind", version = "0.7.0" }
+mt_mtc = { path = "mt_mtc", version = "0.7.0" }
 
 # Tools
 anyhow = "1.0"
@@ -65,11 +73,14 @@ rust_decimal = "1.37.1"
 logos = "0.15.0"
 chumsky = { version = "0.12", default-features = false, features = ["std"] }
 ariadne = "0.4"
-mcap = "0.17.0"
+mcap = "0.24.0"
 camino = "1.0"
 serde_yml = "0.0.12"
 cdr = "0.2.4"
 rand = "0.8"
+fs2 = "0.4"
+uuid = { version = "1", features = ["v4"] }
+tokio-util = { version = "0.7", features = ["full"] }
 cdr-encoding = "0.10"
 bytesize = "2.3"
 

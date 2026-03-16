@@ -10,7 +10,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship = mt_sea::ship::NetworkShipImpl::init(kind.clone(), false).await?;
+    let ship =
+        mt_sea::ship::NetworkShipImpl::init(kind.clone(), false, mt_sea::Qos::Reliable).await?;
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -136,6 +137,7 @@ pub async fn run_dyn_wind(
     let mut cloud_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
+    let mut any_type_warned = false;
 
     let mut wind_receiver = wind(wind_name).await?;
 
@@ -216,7 +218,12 @@ pub async fn run_dyn_wind(
                     debug!("published imu");
                 }
                 mt_net::SensorTypeMapped::Any(_) => {
-                    error!("Any-Types are not supported for RustDDS due to API incompatibilities.")
+                    if !any_type_warned {
+                        warn!(
+                            "Any-Types are not supported for RustDDS due to API incompatibilities, skipping."
+                        );
+                        any_type_warned = true;
+                    }
                 }
                 mt_net::SensorTypeMapped::Odometry(odom_msg) => {
                     let mut existing_pubber = odom_publishers.get(&topic_parse);

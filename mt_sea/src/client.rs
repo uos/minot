@@ -15,7 +15,7 @@ use zenoh::shm::{
 
 use crate::{
     ShipKind, ShipName, VariableType,
-    net::{CONTROLLER_CLIENT_ID, Packet, PacketKind, Sea, get_domain_id, sanitize_key},
+    net::{CONTROLLER_CLIENT_ID, Packet, PacketKind, Qos, Sea, get_domain_id, sanitize_key},
 };
 
 pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>;
@@ -64,6 +64,7 @@ pub struct Client {
         std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<Packet>>>>,
     pub kind: ShipKind,
     rm_rules_on_disconnect: bool,
+    node_mode: Qos,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
     pub raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
     pub wind_receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Packet>>>,
@@ -359,17 +360,43 @@ impl Client {
         None
     }
 
-    pub async fn init(ship_kind: ShipKind, rm_rules_on_disconnect: bool) -> Self {
+    pub async fn init(
+        ship_kind: ShipKind,
+        rm_rules_on_disconnect: bool,
+        node_mode: Qos,
+    ) -> anyhow::Result<Self> {
         let domain_id = get_domain_id();
         if domain_id > 0 {
             info!("Client using domain ID {}", domain_id);
         }
 
-        // Initialize Zenoh session
-        let config = zenoh::Config::default();
+        // Initialize Zenoh session.
+        // If MINOT_COORD_ADDR is set (e.g. "tcp/192.168.1.100:7447"), disable multicast
+        // scouting and connect directly — required on platforms that block multicast (iOS).
+        let config = if let Ok(addr) = std::env::var("MINOT_COORD_ADDR") {
+            let json5 = format!(
+                r#"{{"mode":"peer","scouting":{{"multicast":{{"enabled":false}}}},"connect":{{"endpoints":["{}"]}}}}"#,
+                addr
+            );
+            match zenoh::Config::from_json5(&json5) {
+                Ok(cfg) => {
+                    info!("Client using unicast coordinator: {}", addr);
+                    cfg
+                }
+                Err(e) => {
+                    warn!(
+                        "MINOT_COORD_ADDR '{}' produced invalid config: {}, falling back to multicast",
+                        addr, e
+                    );
+                    zenoh::Config::default()
+                }
+            }
+        } else {
+            zenoh::Config::default()
+        };
         let session = zenoh::open(config)
             .wait()
-            .expect("Failed to open Zenoh session");
+            .map_err(|e| anyhow::anyhow!("Failed to open Zenoh session: {}", e))?;
         let session = std::sync::Arc::new(session);
 
         let (updated_raw_recv, _) = tokio::sync::broadcast::channel(100);
@@ -494,11 +521,30 @@ impl Client {
         let _ = ready_rx.await;
         debug!("Client {} queryable handler ready", ship_name_str);
 
-        Self {
+        // Declare a heartbeat queryable so peers can ping us directly.
+        // Responds with an empty payload to any query ("I'm alive").
+        let heartbeat_key = format!("minot/{}/heartbeat/{}", domain_id, ship_name_key);
+        let heartbeat_queryable = session
+            .declare_queryable(&heartbeat_key)
+            .wait()
+            .expect("Failed to create heartbeat queryable");
+        debug!(
+            "Client {} heartbeat queryable on {}",
+            ship_name_str, heartbeat_key
+        );
+        tokio::spawn(async move {
+            while let Ok(query) = heartbeat_queryable.recv_async().await {
+                let key_expr = query.key_expr().clone();
+                let _ = query.reply(key_expr, &[0u8; 1]).wait();
+            }
+        });
+
+        Ok(Self {
             kind: ship_kind,
             coordinator_send: coord_send_tx,
             coordinator_receive: coord_receive_tx,
             rm_rules_on_disconnect,
+            node_mode,
             updated_raw_recv,
             raw_recv_buff,
             wind_receiver,
@@ -509,7 +555,7 @@ impl Client {
             shm_state: StdRwLock::new(None),
             #[cfg(feature = "shm")]
             shm_initialized: std::sync::atomic::AtomicBool::new(false),
-        }
+        })
     }
 
     /// Register the client to the network
@@ -551,11 +597,18 @@ impl Client {
         // Task to send to coordinator
         let session_for_send = std::sync::Arc::clone(&self.session);
         let client_to_coord_key_owned = client_to_coord_key.clone();
+        let node_mode = self.node_mode;
         tokio::spawn(async move {
             let coord_publisher = session_for_send
                 .declare_publisher(client_to_coord_key_owned)
-                .congestion_control(zenoh::qos::CongestionControl::Block)
-                .reliability(zenoh::qos::Reliability::Reliable)
+                .congestion_control(match node_mode {
+                    Qos::Reliable => zenoh::qos::CongestionControl::Block,
+                    Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
+                })
+                .reliability(match node_mode {
+                    Qos::Reliable => zenoh::qos::Reliability::Reliable,
+                    Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
+                })
                 .wait()
                 .expect("Failed to create coordinator publisher");
 
@@ -572,21 +625,84 @@ impl Client {
         let recv_tx_clone = recv_tx.clone();
         let ship_kind_clone = self.kind.clone();
         let wind_sender_clone = self.wind_sender.clone();
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
+        let (reg_done_tx, mut reg_done_rx) = tokio::sync::oneshot::channel::<()>();
+
         tokio::spawn(async move {
+            // Phase 1: no timeout during registration / wait_for_ack — duration is unbounded
             loop {
-                match coord_subscriber.recv_async().await {
-                    Ok(sample) => {
+                tokio::select! {
+                    result = coord_subscriber.recv_async() => {
+                        match result {
+                            Ok(sample) => {
+                                let payload = sample.payload().to_bytes();
+                                let aligned = align_bytes(&payload);
+                                match from_bytes::<Packet, rkyv::rancor::Error>(&aligned) {
+                                    Ok(packet) => {
+                                        if matches!(packet.data, PacketKind::Wind(_)) {
+                                            if let Err(e) = wind_sender_clone.send(packet.clone()).await {
+                                                debug!("Failed to forward wind packet: {}", e);
+                                            }
+                                        }
+                                        if let Err(e) = recv_tx_clone.send((packet, None)) {
+                                            debug!("Failed to forward coordinator packet: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to deserialize coordinator packet: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Coordinator connection lost for {:?}: {}", ship_kind_clone, e);
+                                let _ = disconnect_tx.send(());
+                                return;
+                            }
+                        }
+                    }
+                    // reg_done fires once register() has fully completed (incl. wait_for_ack)
+                    _ = &mut reg_done_rx => break,
+                }
+            }
+
+            // Phase 2: coordinator must echo our heartbeats within DISCONNECT_TIMEOUT_MS.
+            // Wait for the first heartbeat echo with no timeout — the first echo can't
+            // arrive until the client sends its first heartbeat (up to HEARTBEAT_INTERVAL_MS
+            // away), so applying DISCONNECT_TIMEOUT_MS here would fire false positives.
+            // Only after receiving the first echo do we start enforcing the timeout.
+            let mut received_first = false;
+            loop {
+                let recv_fut = coord_subscriber.recv_async();
+                let result = if received_first {
+                    tokio::time::timeout(
+                        tokio::time::Duration::from_millis(crate::DISCONNECT_TIMEOUT_MS),
+                        recv_fut,
+                    )
+                    .await
+                } else {
+                    // No timeout until first heartbeat echo arrives
+                    match recv_fut.await {
+                        Ok(s) => Ok(Ok(s)),
+                        Err(e) => Ok(Err(e)),
+                    }
+                };
+                match result {
+                    Ok(Ok(sample)) => {
                         let payload = sample.payload().to_bytes();
                         let aligned = align_bytes(&payload);
                         match from_bytes::<Packet, rkyv::rancor::Error>(&aligned) {
                             Ok(packet) => {
-                                // Forward wind packets to dedicated channel (buffered, no race)
+                                // Only arm the disconnect timer after the first heartbeat
+                                // echo — ships that never send heartbeats won't have a timer
+                                // and won't produce false positives.
+                                if matches!(packet.data, PacketKind::Heartbeat) {
+                                    received_first = true;
+                                }
                                 if matches!(packet.data, PacketKind::Wind(_)) {
                                     if let Err(e) = wind_sender_clone.send(packet.clone()).await {
                                         debug!("Failed to forward wind packet: {}", e);
                                     }
                                 }
-                                // Also forward to broadcast for other consumers
                                 if let Err(e) = recv_tx_clone.send((packet, None)) {
                                     debug!("Failed to forward coordinator packet: {}", e);
                                 }
@@ -596,11 +712,20 @@ impl Client {
                             }
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         warn!(
                             "Coordinator connection lost for {:?}: {}",
                             ship_kind_clone, e
                         );
+                        let _ = disconnect_tx.send(());
+                        break;
+                    }
+                    Err(_elapsed) => {
+                        warn!(
+                            "Coordinator heartbeat timeout for {:?} — coordinator unreachable",
+                            ship_kind_clone
+                        );
+                        let _ = disconnect_tx.send(());
                         break;
                     }
                 }
@@ -617,6 +742,7 @@ impl Client {
                 kind: Sea::pad_ship_kind_name(&self.kind),
                 remove_rules_on_disconnect: self.rm_rules_on_disconnect,
                 domain_id: self.domain_id,
+                node_mode: self.node_mode,
             },
         };
 
@@ -627,8 +753,14 @@ impl Client {
         let publisher = self
             .session
             .declare_publisher(&join_key)
-            .congestion_control(zenoh::qos::CongestionControl::Block)
-            .reliability(zenoh::qos::Reliability::Reliable)
+            .congestion_control(match self.node_mode {
+                Qos::Reliable => zenoh::qos::CongestionControl::Block,
+                Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
+            })
+            .reliability(match self.node_mode {
+                Qos::Reliable => zenoh::qos::Reliability::Reliable,
+                Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
+            })
             .wait()
             .expect("Failed to create join publisher");
 
@@ -668,7 +800,8 @@ impl Client {
                             Self::wait_for_ack(welcome_sub).await?;
                         }
 
-                        let (_disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                        // Registration fully complete — switch receive task to timeout mode
+                        let _ = reg_done_tx.send(());
                         return Ok(disconnect_rx);
                     }
                     // Not a welcome packet, keep waiting
@@ -703,6 +836,64 @@ impl Client {
                         debug!("Received ack, all clients connected!");
                         return Ok(());
                     }
+                }
+            }
+        }
+    }
+
+    pub fn session(&self) -> std::sync::Arc<zenoh::Session> {
+        std::sync::Arc::clone(&self.session)
+    }
+
+    pub fn domain_id(&self) -> u16 {
+        self.domain_id
+    }
+
+    /// Network-only send (no SHM). Used for fire-and-forget BE delivery.
+    pub async fn send_raw_network(
+        session: std::sync::Arc<zenoh::Session>,
+        domain_id: u16,
+        id: u32,
+        data: rkyv::util::AlignedVec,
+        variable_type: VariableType,
+        variable_name: String,
+        target_ship_name: String,
+    ) -> anyhow::Result<()> {
+        let target_key = sanitize_key(&target_ship_name);
+        let data_key = format!("minot/{}/data/{}", domain_id, target_key);
+
+        let id_bytes = id.to_be_bytes();
+        let mut padded_name = [0u8; 64];
+        let name_bytes = variable_name.as_bytes();
+        let len = name_bytes.len().min(64);
+        padded_name[..len].copy_from_slice(&name_bytes[..len]);
+
+        let total_len = 69 + data.len();
+        let mut payload = Vec::with_capacity(total_len);
+        payload.extend_from_slice(&id_bytes);
+        payload.push(variable_type.into());
+        payload.extend_from_slice(&padded_name);
+        payload.extend_from_slice(&data);
+
+        loop {
+            let replies = session
+                .get(&data_key)
+                .payload(&payload)
+                .priority(zenoh::qos::Priority::Background)
+                .wait()
+                .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
+
+            match replies.recv_async().await {
+                Ok(reply) => match reply.result() {
+                    Ok(_) => return Ok(()),
+                    Err(_) => {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    tokio::task::yield_now().await;
+                    continue;
                 }
             }
         }

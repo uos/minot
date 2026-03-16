@@ -1,6 +1,6 @@
 # Keybindings
 
-Keybindings for the Minot TUI. They cannot be changed after compile time for the moment.
+Keybindings for the Sync UI. They cannot be changed after compile time for the moment.
 
 
 ## Basics

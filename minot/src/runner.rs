@@ -11,7 +11,12 @@ type BoxError = Box<dyn std::error::Error>;
 /// Initialize a stderr logger for the runner process with a minimal format
 /// that pelorus can parse: `[LEVEL] target: message`
 fn init_runner_logger() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,zenoh=warn"))
+    let mut builder = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,zenoh=warn"),
+    );
+    builder
+        .filter_module("zenoh::api::admin", log::LevelFilter::Off)
+        .filter_module("zenoh::api::session", log::LevelFilter::Off)
         .format(|buf, record| {
             use std::io::Write;
             writeln!(
@@ -22,8 +27,8 @@ fn init_runner_logger() {
                 record.args()
             )
         })
-        .target(env_logger::Target::Stderr)
-        .init();
+        .target(env_logger::Target::Stderr);
+    builder.init();
 }
 
 /// Re-emit a log record received from serve's JSON protocol at the correct level.
