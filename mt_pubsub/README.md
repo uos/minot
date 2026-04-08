@@ -1,17 +1,17 @@
-# ratpub
+# mt_pubsub
 
 A simple and deterministic Pub/Sub implementation with Minot primitives.
 
 Part of the [minot](https://github.com/uos/minot) family of crates.
 
-[![Latest version](https://img.shields.io/crates/v/ratpub.svg)](https://crates.io/crates/ratpub)
+[![Latest version](https://img.shields.io/crates/v/mt_pubsub.svg)](https://crates.io/crates/mt_pubsub)
 ![MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Apache](https://img.shields.io/badge/license-Apache-blue.svg)
 
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-ratpub = "0.5.0"
+mt_pubsub = "0.7.0"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 

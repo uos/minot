@@ -1,6 +1,6 @@
 [package]
 name = "mt_service"
-description = "ROS2-compatible request/reply service primitives for Minot."
+description = "Request/reply service primitives for Minot."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

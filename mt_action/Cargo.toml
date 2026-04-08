@@ -1,6 +1,6 @@
 [package]
 name = "mt_action"
-description = "ROS2-compatible action goal lifecycle primitives for Minot."
+description = "Action goal lifecycle primitives for Minot."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
