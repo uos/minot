@@ -53,12 +53,12 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package mt_wind --bin wind-rat --features mt_pubsub
+          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub
           $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
           $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/full-release/minot-coord dist/
-          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
           cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
           cp target/$RUST_TARGET/full-release/librat.a dist/
           cp mt_rat/rat.h dist/
@@ -103,13 +103,13 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package mt_wind --bin wind-rat --features mt_pubsub
+          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub
           $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/full-release/minot-coord dist/
-          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
           cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
           cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
           cp target/$RUST_TARGET/full-release/librat.a dist/
@@ -235,11 +235,11 @@ jobs:
 
           # Sidecars
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package mt_wind --bin wind-rat --features mt_pubsub
+          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub
           $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/full-release/minot-coord dist/
-          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
           cp target/$RUST_TARGET/full-release/librat.a dist/
           cp target/$RUST_TARGET/full-release/librat.so dist/
           cp mt_rat/rat.h dist/
@@ -299,13 +299,13 @@ jobs:
           mkdir -p dist/rat && cp target/$RUST_TARGET/full-release/minot dist/rat/
 
           $CARGO_CMD --package minot --bin minot-coord
-          $CARGO_CMD --package mt_wind --bin wind-rat --features mt_pubsub
+          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub
           $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
           $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
           $CARGO_CMD --package mt_rat --lib 
 
           cp target/$RUST_TARGET/full-release/minot-coord dist/
-          cp target/$RUST_TARGET/full-release/wind-rat dist/
+          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
           cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
           cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
           cp target/$RUST_TARGET/full-release/librat.a dist/
@@ -724,27 +724,27 @@ jobs:
               "minot-x86_64-unknown-linux-musl": {
                 "subdirs": ["min", "co", "rat"],
                 "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "librat.a", "rat.h"]
+                "root_artifacts": ["minot-coord", "wind-mt-pubsub", "wind-ros2-native", "librat.a", "rat.h"]
               },
               "minot-x86_64-unknown-linux-gnu": {
                 "subdirs": ["min", "co", "rat"],
                 "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
+                "root_artifacts": ["minot-coord", "wind-mt-pubsub", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
               },
               "minot-aarch64-unknown-linux-gnu": {
                 "subdirs": ["min", "co", "rat"],
                 "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
+                "root_artifacts": ["minot-coord", "wind-mt-pubsub", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
               },
               "minot-armv7-unknown-linux-gnueabihf": {
                 "subdirs": ["min", "co", "rat"],
                 "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["minot-coord", "wind-rat", "librat.a", "librat.so", "rat.h"]
+                "root_artifacts": ["minot-coord", "wind-mt-pubsub", "librat.a", "librat.so", "rat.h"]
               },
               "minot-aarch64-apple-darwin": {
                 "subdirs": ["min", "co", "rat"],
                 "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["minot-coord", "wind-rat", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
+                "root_artifacts": ["minot-coord", "wind-mt-pubsub", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
               },
               "minot-jazzy-x86_64-unknown-linux-gnu": {
                 "subdirs": ["ros2"],
