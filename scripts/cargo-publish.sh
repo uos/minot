@@ -3,6 +3,7 @@
 cargo publish -p mt_net
 cargo publish -p mt_sea
 cargo publish -p mt_mtc
+cargo publish -p mt_coord
 cargo publish -p mt_bagread
 cargo publish -p mt_pubsub
 cargo publish -p mt_service
