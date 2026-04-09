@@ -7,7 +7,7 @@ Minot is a highly versatile toolset for debugging and verifying stateful robot p
 * ROS1 -> ROS2 or language migrations
 * Functional method evaluations
 
-Visit the [Documentation](https://uos.github.io/minot) to find out more.
+Visit the [Web Documentation](https://uos.github.io/minot) or `ssh minot@steado.tech` to find out more.
 
 ## ROS 2
 
