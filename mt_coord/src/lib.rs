@@ -22,10 +22,6 @@ enum MinotTask {
         var_name: String,
         data: ActionPlan,
     },
-    SendWind {
-        ship_name: String,
-        data: Vec<WindData>,
-    },
     WindDynamicVarReq(String),
     Unlock,
     RegisterShipAtVar {
@@ -80,7 +76,10 @@ pub fn run_coordinator(
     ));
     let winds_changer = std::sync::Arc::clone(&winds_var);
 
-    let (wind_tx, _) = tokio::sync::broadcast::channel::<Vec<WindData>>(20);
+    // Bounded queue to apply backpressure when wind forwarding is slower than producers.
+    let (wind_tx, mut wind_rx) = tokio::sync::mpsc::channel::<Vec<WindData>>(64);
+    let wind_clients: std::sync::Arc<std::sync::RwLock<HashSet<String>>> =
+        std::sync::Arc::new(std::sync::RwLock::new(HashSet::new()));
 
     // Shared set of currently connected client names (for Sonar responses)
     let connected_clients: std::sync::Arc<std::sync::RwLock<HashSet<String>>> =
@@ -97,6 +96,66 @@ pub fn run_coordinator(
     tokio::spawn(async move {
         let coordinator =
             std::sync::Arc::new(CoordinatorImpl::new(None, clients_wait_for_ack).await);
+        let coordinator_for_wind_dispatch = std::sync::Arc::clone(&coordinator);
+        let wind_clients_for_dispatch = std::sync::Arc::clone(&wind_clients);
+
+        tokio::spawn(async move {
+            let mut waiting_for_wind = false;
+            while let Some(data) = wind_rx.recv().await {
+                let targets: Vec<String> = loop {
+                    let current = wind_clients_for_dispatch
+                        .read()
+                        .unwrap()
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !current.is_empty() {
+                        if waiting_for_wind {
+                            info!("Wind client connected; resuming queued wind forwarding.");
+                            waiting_for_wind = false;
+                        }
+                        break current;
+                    }
+                    if !waiting_for_wind {
+                        warn!(
+                            "Received wind data but no connected winds; pausing forwarding until a wind client connects."
+                        );
+                        waiting_for_wind = true;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                };
+
+                for ship_name in targets {
+                    let ship_known = coordinator_for_wind_dispatch
+                        .rat_qs
+                        .read()
+                        .await
+                        .contains_key(&ship_name);
+                    if !ship_known {
+                        warn!(
+                            "Skipping stale wind target '{}' while forwarding wind data.",
+                            ship_name
+                        );
+                        wind_clients_for_dispatch
+                            .write()
+                            .unwrap()
+                            .remove(&ship_name);
+                        continue;
+                    }
+                    if let Err(e) = coordinator_for_wind_dispatch
+                        .blow_wind(ship_name.clone(), data.clone())
+                        .await
+                    {
+                        error!("Error while blowing wind to {}: {}", ship_name, e);
+                        wind_clients_for_dispatch
+                            .write()
+                            .unwrap()
+                            .remove(&ship_name);
+                    }
+                }
+            }
+            debug!("wind_rx closed");
+        });
 
         // unlock clients to send us stuff when all our expected clients are connected
         let total_clients_check_rats = std::sync::Arc::clone(&coordinator.rat_qs);
@@ -133,6 +192,7 @@ pub fn run_coordinator(
         let rules_change_for_disconnect = std::sync::Arc::clone(&rules_changer);
         let cc_for_spawn = std::sync::Arc::clone(&connected_clients);
         let be_for_spawn = std::sync::Arc::clone(&best_effort_clients);
+        let wind_clients_for_spawn = std::sync::Arc::clone(&wind_clients);
         // Keep a clone for the coord_rx loop; torpedo_tx itself is moved into the inner spawn.
         let torpedo_tx_for_coord = torpedo_tx.clone();
         let client_handlers: std::sync::Arc<
@@ -257,11 +317,13 @@ pub fn run_coordinator(
                                                             }
                                                         }
 
-                                                        let res = wind_tx_inner.send(send_now);
-                                                        if res.is_err() {
-                                                            error!(
-                                                                "Could not send wind data to proxy sender. Are you sure the winds are connected?",
-                                                            );
+                                                        if !send_now.is_empty() {
+                                                            if let Err(e) = wind_tx_inner.send(send_now).await {
+                                                                error!(
+                                                                    "Could not enqueue wind data from Minot TUI for forwarding: {}",
+                                                                    e
+                                                                );
+                                                            }
                                                         }
                                                     }
 
@@ -386,60 +448,75 @@ pub fn run_coordinator(
                                                                     .unwrap();
                                                                 }
 
-                                                                let mut winds =
-                                                                    winds_inner.write().unwrap();
-
-                                                                let mut asked_for_dynamic = false;
-                                                                if let Some(wt) =
-                                                                    winds.get_mut(&variable)
+                                                                let mut pending_fixed =
+                                                                    Vec::<Vec<WindData>>::new();
                                                                 {
-                                                                    wt.iter_mut().for_each(|wte| {
-                                                                        if !wte.already_seen {
-                                                                            match &mut wte.kind {
-                                                                                WindTaskKind::Fix(wind_datas) => {
-                                                                                        let ret = wind_tx_inner.send(wind_datas.clone());
-                                                                                        match ret {
-                                                                                            Ok(_) => {},
-                                                                                            Err(e) => {
-                                                                                                error!("Could not reach any turbine. Are you sure you have started and connected any? {e}");
-                                                                                            },
+                                                                    let mut winds =
+                                                                        winds_inner.write().unwrap();
+
+                                                                    let mut asked_for_dynamic = false;
+                                                                    if let Some(wt) =
+                                                                        winds.get_mut(&variable)
+                                                                    {
+                                                                        for wte in wt.iter_mut() {
+                                                                            if !wte.already_seen {
+                                                                                match &mut wte.kind {
+                                                                                    WindTaskKind::Fix(wind_datas) => {
+                                                                                        pending_fixed.push(wind_datas.clone());
+                                                                                    }
+                                                                                    WindTaskKind::Dynamic => {
+                                                                                        if asked_for_dynamic {
+                                                                                            wte.already_seen = true;
+                                                                                            continue;
                                                                                         }
-                                                                                }
-                                                                                WindTaskKind::Dynamic => {
-                                                                                    if asked_for_dynamic {
-                                                                                        wte.already_seen = true;
-                                                                                        return;
-                                                                                    }
-                                                                                    asked_for_dynamic = true;
+                                                                                        asked_for_dynamic = true;
 
-                                                                                    info!("asking Minot TUI for dyn for {}", &variable);
-                                                                                    let ret = rat_coord_tx.send(MinotTask::WindDynamicVarReq(variable.clone()));
-                                                                                    match ret {
-                                                                                        Ok(_) => {},
-                                                                                        Err(e) => {
-                                                                                            error!("Could not find connected Minot TUI for asking dynamic wind. {e}");
-                                                                                        },
+                                                                                        info!(
+                                                                                            "asking Minot TUI for dyn for {}",
+                                                                                            &variable
+                                                                                        );
+                                                                                        let ret = rat_coord_tx.send(
+                                                                                            MinotTask::WindDynamicVarReq(
+                                                                                                variable.clone(),
+                                                                                            ),
+                                                                                        );
+                                                                                        match ret {
+                                                                                            Ok(_) => {}
+                                                                                            Err(e) => {
+                                                                                                error!("Could not find connected Minot TUI for asking dynamic wind. {e}");
+                                                                                            }
+                                                                                        }
                                                                                     }
-                                                                                }
-                                                                            };
-                                                                            wte.already_seen = true;
+                                                                                };
+                                                                                wte.already_seen = true;
+                                                                            }
                                                                         }
-                                                                    });
-                                                                }
-
-                                                                // set all other to be sent again
-                                                                for (var, wind) in winds.iter_mut()
-                                                                {
-                                                                    if var == &variable {
-                                                                        continue;
                                                                     }
 
-                                                                    wind.iter_mut().for_each(
-                                                                        |wte| {
-                                                                            wte.already_seen =
-                                                                                false;
-                                                                        },
-                                                                    );
+                                                                    // set all other to be sent again
+                                                                    for (var, wind) in winds.iter_mut() {
+                                                                        if var == &variable {
+                                                                            continue;
+                                                                        }
+
+                                                                        wind.iter_mut().for_each(
+                                                                            |wte| {
+                                                                                wte.already_seen =
+                                                                                    false;
+                                                                            },
+                                                                        );
+                                                                    }
+                                                                }
+
+                                                                for wind_data in pending_fixed {
+                                                                    if let Err(e) =
+                                                                        wind_tx_inner.send(wind_data).await
+                                                                    {
+                                                                        error!(
+                                                                            "Could not enqueue stored wind data for forwarding: {}",
+                                                                            e
+                                                                        );
+                                                                    }
                                                                 }
                                                             }
                                                             PacketKind::Heartbeat => {
@@ -499,11 +576,14 @@ pub fn run_coordinator(
                                                                         }
                                                                     }
                                                                 }
-                                                                let res = wind_tx_inner.send(send_now);
-                                                                if res.is_err() {
-                                                                    error!(
-                                                                        "Could not send wind data to proxy sender. Are you sure the winds are connected?",
-                                                                    );
+                                                                if !send_now.is_empty() {
+                                                                    if let Err(e) = wind_tx_inner.send(send_now).await {
+                                                                        error!(
+                                                                            "Could not enqueue wind data from client '{}' for forwarding: {}",
+                                                                            inner_name,
+                                                                            e
+                                                                        );
+                                                                    }
                                                                 }
                                                             }
                                                             PacketKind::Torpedo(dead_clients) => {
@@ -593,22 +673,20 @@ pub fn run_coordinator(
                                 if let Some(old) = client_handlers.lock().unwrap().remove(&name) {
                                     old.abort();
                                 }
+                                wind_clients_for_spawn.write().unwrap().insert(name.clone());
                                 let mut client_news = client.recv.subscribe();
-                                let (acked_wind_tx, mut acked_wind_rx) =
-                                    tokio::sync::mpsc::channel(5);
                                 let inner_name_rx = name.clone();
                                 let winds_on_disconnect = std::sync::Arc::clone(&winds_changer);
+                                let wind_clients_on_disconnect =
+                                    std::sync::Arc::clone(&wind_clients_for_spawn);
                                 let wind_recv_handle = tokio::spawn(async move {
                                     loop {
                                         match client_news.recv().await {
                                             Ok((packet, _)) => match packet.data {
                                                 PacketKind::Acknowledge => {
-                                                    if let Err(e) = acked_wind_tx.send(()).await {
-                                                        error!(
-                                                            "Could not passthrough ack trigger in wind receiver {inner_name_rx}: {e}"
-                                                        );
-                                                        return;
-                                                    }
+                                                    debug!(
+                                                        "Received wind ack from {inner_name_rx}"
+                                                    );
                                                 }
                                                 PacketKind::Heartbeat => {
                                                     debug!(
@@ -633,45 +711,16 @@ pub fn run_coordinator(
                                                 info!(
                                                     "Wind client {inner_name_rx} disconnected, clearing wind state"
                                                 );
+                                                wind_clients_on_disconnect
+                                                    .write()
+                                                    .unwrap()
+                                                    .remove(&inner_name_rx);
                                                 winds_on_disconnect.write().unwrap().clear();
                                                 return;
                                             }
                                         }
                                     }
                                 });
-                                let inner_name = name.clone();
-                                let wind_coord_tx = coord_tx_new_client.clone();
-                                let mut sub = wind_tx_inner.subscribe();
-                                let is_best_effort = be_for_spawn.read().unwrap().contains(&name);
-                                let wind_fwd_handle = tokio::spawn(async move {
-                                    info!("Started wind forwarding for turbine: {}", &inner_name);
-                                    while let Ok(data) = sub.recv().await {
-                                        wind_coord_tx
-                                            .send(MinotTask::SendWind {
-                                                ship_name: inner_name.clone(),
-                                                data,
-                                            })
-                                            .unwrap();
-                                        if is_best_effort {
-                                            match tokio::time::timeout(
-                                                std::time::Duration::from_secs(5),
-                                                acked_wind_rx.recv(),
-                                            )
-                                            .await
-                                            {
-                                                Ok(None) | Err(_) => break,
-                                                Ok(Some(())) => {}
-                                            }
-                                        } else if acked_wind_rx.recv().await.is_none() {
-                                            break;
-                                        }
-                                    }
-                                });
-                                // Store both task handles under the same key; aborting either
-                                // cascades: aborting recv drops acked_wind_tx → fwd gets None → exits,
-                                // and aborting fwd drops acked_wind_rx → recv errors on next send → exits.
-                                // We store recv as the primary abort target.
-                                drop(wind_fwd_handle); // kept alive by the executor
                                 client_handlers
                                     .lock()
                                     .unwrap()
@@ -752,12 +801,6 @@ pub fn run_coordinator(
                         }
                     }
                     lock_next = false;
-                }
-                MinotTask::SendWind { ship_name, data } => {
-                    if let Err(e) = coordinator.blow_wind(ship_name.clone(), data).await {
-                        error!("Error while blowing wind to {}: {}", ship_name, e);
-                        std::process::exit(1);
-                    }
                 }
                 MinotTask::SendRatAction {
                     ship_name,
