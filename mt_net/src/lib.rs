@@ -238,19 +238,17 @@ impl Rules {
                 if rule.ship == client {
                     // Case 1: Client is the main ship performing an action. Remove the rule.
                     match &rule.strategy {
-                        Some(ActionPlan::Shoot { target, id: _ }) => {
+                        Some(ActionPlan::Shoot { target, id: _ }) if !target.is_empty() => {
                             // The client was the shooter, the targets were effectively subscribers
-                            if !target.is_empty() {
-                                cache_registrations_from_store
-                                    .entry(variable.clone())
-                                    .or_default()
-                                    .extend(
-                                        target
-                                            .iter()
-                                            .cloned()
-                                            .map(|t| (t, RatPubRegisterKind::Subscribe)),
-                                    );
-                            }
+                            cache_registrations_from_store
+                                .entry(variable.clone())
+                                .or_default()
+                                .extend(
+                                    target
+                                        .iter()
+                                        .cloned()
+                                        .map(|t| (t, RatPubRegisterKind::Subscribe)),
+                                );
                         }
                         Some(ActionPlan::Catch { source, id: _ }) => {
                             // The client was the catcher, the source was the publisher
@@ -438,7 +436,7 @@ impl Rules {
                                     Some(ActionPlan::Shoot { target, id: _ }) => {
                                         all_pubs.insert(vh.ship);
                                         // Also collect existing subscribers from targets of existing shoots
-                                        all_subs.extend(target.into_iter());
+                                        all_subs.extend(target);
                                     }
                                     // Treat existing Catch rules' ships as subscribers for combining lists
                                     Some(ActionPlan::Catch { source: _, id: _ }) => {
@@ -451,8 +449,8 @@ impl Rules {
                             }
                         }
                         // Add new clients from cache registrations
-                        all_pubs.extend(new_pubs.into_iter());
-                        all_subs.extend(new_subs.into_iter());
+                        all_pubs.extend(new_pubs);
+                        all_subs.extend(new_subs);
 
                         let mut sorted_all_pubs: Vec<String> = all_pubs.into_iter().collect();
                         sorted_all_pubs.sort();
