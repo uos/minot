@@ -106,3 +106,15 @@ assets = [
     "755",
   ],
 ]
+
+[package.metadata.generate-rpm]
+
+[[package.metadata.generate-rpm.assets]]
+source = "target/release/minot"
+dest = "/usr/bin/minot"
+mode = "0755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "target/release/minot-coord"
+dest = "/usr/bin/minot-coord"
+mode = "0755"

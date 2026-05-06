@@ -16,7 +16,6 @@ class Minot < Formula
   def install
     bin.install "rat/minot"
     bin.install "minot-coord"
-    bin.install "wind-rat"
 
     lib.install "librat.a"
     lib.install "librat.dylib"
