@@ -1106,7 +1106,8 @@ pub fn try_start_with_rules(
     rules: Rules,
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> bool {
-    let lock_file_path = std::env::temp_dir().join("minot-coord.lock");
+    let lock_file_path =
+        std::env::temp_dir().join(format!("minot-coord_{}.lock", users::get_current_uid()));
     let lock_file = match std::fs::File::create(&lock_file_path) {
         Ok(f) => f,
         Err(e) => {
