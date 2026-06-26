@@ -25,3 +25,4 @@ mt_net.workspace = true
 mt_scope = { workspace = true, optional = true }
 tokio.workspace = true
 fs2.workspace = true
+users = "0.11.0"
