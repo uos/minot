@@ -14,6 +14,10 @@ pub use mt_coord::run_coordinator;
 #[command(version, about, author, long_about = None)]
 /// Minot Coordinator — Network Manager for MtPubsub Nodes
 pub struct Args {
+    /// Restrict Minot discovery and communication to this machine.
+    #[arg(long, global = true)]
+    pub local_only: bool,
+
     /// Path to .mt file for initialization
     pub file: Option<PathBuf>,
 }
@@ -97,6 +101,7 @@ pub async fn main() -> anyhow::Result<()> {
     mt_sea::init_logging();
 
     let args = Args::parse();
+    mt_sea::network::set_local_only(args.local_only);
     let filepath = args.file;
 
     let eval = if let Some(fp) = filepath {

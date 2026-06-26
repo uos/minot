@@ -50,6 +50,10 @@ pub(crate) struct Args {
     #[command(subcommand)]
     pub command: Commands,
 
+    /// Restrict Minot discovery and communication to this machine.
+    #[arg(long, global = true)]
+    pub local_only: bool,
+
     /// Disable POSIX shared memory for zero-copy transfer.
     /// SHM is enabled by default for better performance with large messages.
     #[cfg(feature = "shm")]
@@ -1620,6 +1624,8 @@ fn start_logging_thread(rx: std::sync::mpsc::Receiver<String>) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    mt_sea::network::set_local_only(args.local_only);
+
     // Set SHM environment variables for mt_sea to read
     // SHM is enabled by default, --no-shm disables it
     // SAFETY: We're setting env vars at the start of main before spawning any threads
@@ -1640,6 +1646,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 headless_args.file,
                 headless_args.minot_path,
                 headless_args.sync,
+                args.local_only,
             )
             .await
         }

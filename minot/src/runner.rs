@@ -92,7 +92,12 @@ struct ServerResponse {
     data: Option<serde_json::Value>,
 }
 
-pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<(), BoxError> {
+pub async fn run(
+    file_path: PathBuf,
+    minot_path: PathBuf,
+    sync: bool,
+    local_only: bool,
+) -> Result<(), BoxError> {
     init_runner_logger();
 
     let file_content = std::fs::read_to_string(&file_path)
@@ -107,7 +112,11 @@ pub async fn run(file_path: PathBuf, minot_path: PathBuf, sync: bool) -> Result<
         minot_path.clone()
     };
 
-    let mut child = Command::new(&spawn_path)
+    let mut command = Command::new(&spawn_path);
+    if local_only {
+        command.arg("--local-only");
+    }
+    let mut child = command
         .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

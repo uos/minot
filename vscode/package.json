@@ -2,7 +2,7 @@
   "name": "minot",
   "displayName": "Minot",
   "description": "Minot Language Support for Visual Studio Code with basic commands for bagfile publishing and syntax highlighting.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "engines": {
     "vscode": "^1.105.0",
     "minot": "0.7.0"

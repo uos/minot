@@ -1,6 +1,7 @@
 pub mod client;
 pub mod coordinator;
 pub mod net;
+pub mod network;
 pub mod ship;
 
 pub use net::Qos;

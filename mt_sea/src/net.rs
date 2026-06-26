@@ -187,7 +187,7 @@ impl Sea {
         }
 
         // Initialize Zenoh session
-        let config = zenoh::Config::default();
+        let config = crate::network::zenoh_config(crate::network::NetworkRole::Coordinator);
         let session = zenoh::open(config)
             .wait()
             .expect("Failed to open Zenoh session");

@@ -370,30 +370,7 @@ impl Client {
             info!("Client using domain ID {}", domain_id);
         }
 
-        // Initialize Zenoh session.
-        // If MINOT_COORD_ADDR is set (e.g. "tcp/192.168.1.100:7447"), disable multicast
-        // scouting and connect directly — required on platforms that block multicast (iOS).
-        let config = if let Ok(addr) = std::env::var("MINOT_COORD_ADDR") {
-            let json5 = format!(
-                r#"{{"mode":"peer","scouting":{{"multicast":{{"enabled":false}}}},"connect":{{"endpoints":["{}"]}}}}"#,
-                addr
-            );
-            match zenoh::Config::from_json5(&json5) {
-                Ok(cfg) => {
-                    info!("Client using unicast coordinator: {}", addr);
-                    cfg
-                }
-                Err(e) => {
-                    warn!(
-                        "MINOT_COORD_ADDR '{}' produced invalid config: {}, falling back to multicast",
-                        addr, e
-                    );
-                    zenoh::Config::default()
-                }
-            }
-        } else {
-            zenoh::Config::default()
-        };
+        let config = crate::network::zenoh_config(crate::network::NetworkRole::Client);
         let session = zenoh::open(config)
             .wait()
             .map_err(|e| anyhow::anyhow!("Failed to open Zenoh session: {}", e))?;
