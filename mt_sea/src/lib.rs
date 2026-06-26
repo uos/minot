@@ -49,6 +49,7 @@ pub fn init_logging() {
         .filter_module("zenoh", log::LevelFilter::Warn)
         .filter_module("zenoh::api::admin", log::LevelFilter::Off)
         .filter_module("zenoh::api::session", log::LevelFilter::Off)
+        .filter_module("zenoh::net::routing::hat::peer", log::LevelFilter::Error)
         .filter_module("zenoh_transport", log::LevelFilter::Warn)
         .filter_module("zenoh_link", log::LevelFilter::Warn)
         .filter_module("zenoh_protocol", log::LevelFilter::Warn)

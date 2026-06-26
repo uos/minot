@@ -18,12 +18,12 @@ pub enum CoordMode {
 
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
-    pub name: String,
+    name: String,
     /// Whether this node is reliable or best-effort.
     /// Best-effort: if this node crashes, the scope will NOT torpedo other nodes.
-    pub mode: Qos,
+    mode: Qos,
     /// Controls coordinator startup behavior.
-    pub coord_mode: CoordMode,
+    coord_mode: CoordMode,
 }
 
 impl NodeConfig {
@@ -44,6 +44,24 @@ impl NodeConfig {
     /// Set the coordinator mode (AutoStart or External).
     pub fn coord_mode(mut self, coord_mode: CoordMode) -> Self {
         self.coord_mode = coord_mode;
+        self
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn node_mode(&self) -> Qos {
+        self.mode
+    }
+
+    pub fn coordinator_mode(&self) -> CoordMode {
+        self.coord_mode
+    }
+
+    /// Restrict this node, and any embedded coordinator it starts, to this machine.
+    pub fn local_only(self, local_only: bool) -> Self {
+        mt_sea::network::set_local_only(local_only);
         self
     }
 }
@@ -386,5 +404,32 @@ impl Node {
     /// Returns a token that is cancelled when the coordinator connection is lost.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    static NETWORK_FLAG_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn node_config_defaults_to_network_discovery() {
+        let _guard = NETWORK_FLAG_TEST_LOCK.lock().unwrap();
+        mt_sea::network::set_local_only(false);
+        let config = NodeConfig::new("node");
+
+        assert!(!mt_sea::network::is_local_only());
+        assert_eq!(config.name(), "node");
+    }
+
+    #[test]
+    fn node_config_can_enable_local_only() {
+        let _guard = NETWORK_FLAG_TEST_LOCK.lock().unwrap();
+        mt_sea::network::set_local_only(false);
+        let _config = NodeConfig::new("node").local_only(true);
+
+        assert!(mt_sea::network::is_local_only());
     }
 }

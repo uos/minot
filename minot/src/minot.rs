@@ -917,6 +917,9 @@ impl log::Log for StdioLogger {
         if target.starts_with("zenoh::api::admin") || target.starts_with("zenoh::api::session") {
             return false;
         }
+        if target.starts_with("zenoh::net::routing::hat::peer") {
+            return metadata.level() <= log::Level::Error && metadata.level() <= log::max_level();
+        }
         if target.starts_with("zenoh") && metadata.level() > log::Level::Warn {
             return false;
         }

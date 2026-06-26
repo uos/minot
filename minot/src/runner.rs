@@ -17,6 +17,7 @@ fn init_runner_logger() {
     builder
         .filter_module("zenoh::api::admin", log::LevelFilter::Off)
         .filter_module("zenoh::api::session", log::LevelFilter::Off)
+        .filter_module("zenoh::net::routing::hat::peer", log::LevelFilter::Error)
         .format(|buf, record| {
             use std::io::Write;
             writeln!(

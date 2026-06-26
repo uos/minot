@@ -46,11 +46,11 @@ fn config_for(
 
         let json5 = match role {
             NetworkRole::Coordinator => format!(
-                r#"{{mode:"peer",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},listen:{{endpoints:["{}"]}}}}"#,
+                r#"{{mode:"router",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},listen:{{endpoints:["{}"]}}}}"#,
                 LOCAL_COORD_ENDPOINT
             ),
             NetworkRole::Client => format!(
-                r#"{{mode:"peer",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
+                r#"{{mode:"client",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
                 LOCAL_COORD_ENDPOINT
             ),
         };
@@ -97,6 +97,7 @@ mod tests {
     fn local_coordinator_only_listens_on_loopback() {
         let config = config_for(NetworkRole::Coordinator, true, None);
         let endpoints = value(&config, "listen/endpoints");
+        assert_eq!(value(&config, "mode"), r#""router""#);
         assert!(endpoints.contains(LOCAL_COORD_ENDPOINT));
         assert!(!endpoints.contains("0.0.0.0"));
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
@@ -106,6 +107,7 @@ mod tests {
     #[test]
     fn local_client_connects_to_loopback_and_retries() {
         let config = config_for(NetworkRole::Client, true, None);
+        assert_eq!(value(&config, "mode"), r#""client""#);
         assert!(value(&config, "connect/endpoints").contains(LOCAL_COORD_ENDPOINT));
         assert_eq!(value(&config, "connect/exit_on_failure"), "false");
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
