@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-dev-resolute
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --verbose
 
@@ -34,9 +33,8 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: apt-get update && apt-get install -y musl-tools
       - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-musl
@@ -86,9 +84,6 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-deb --locked
-        run: cargo install cargo-deb --locked
       - name: Build Variants
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
@@ -152,11 +147,9 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-          cargo install cargo-deb --locked
+          apt-get update && apt-get install -y gcc-aarch64-linux-gnu
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
@@ -216,11 +209,9 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf
-          cargo install cargo-deb --locked
+          apt-get update && apt-get install -y gcc-arm-linux-gnueabihf
       - name: Build Variants
         env:
           RUST_TARGET: armv7-unknown-linux-gnueabihf
@@ -333,10 +324,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config git $APT_DEPS
-          rustup toolchain install stable
-          rustup default stable
           rustup target add "$RUST_TARGET"
-          cargo install cargo-deb --locked
 
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-mt-pubsub
@@ -370,7 +358,6 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-apple-darwin
@@ -434,20 +421,19 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Jazzy
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
 
       - name: Build Variants
         env:
@@ -489,27 +475,25 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Jazzy
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
-          sudo rosdep init
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+          rosdep init
           rosdep update
 
       - name: Build
         run: |
           source /opt/ros/jazzy/setup.bash
-          rustup default stable
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
@@ -526,27 +510,25 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Jazzy
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
-          sudo rosdep init
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+          rosdep init
           rosdep update
 
       - name: Build
         run: |
           source /opt/ros/jazzy/setup.bash
-          rustup default stable
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
@@ -575,8 +557,6 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -n 65536
-          rustup toolchain install stable
-          rustup default stable
           source /opt/ros/lyrical/setup.bash
           bash ./scripts/make-deb.bash
 
@@ -594,27 +574,25 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Humble
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
-          sudo rosdep init
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+          rosdep init
           rosdep update
 
       - name: Build
         run: |
           source /opt/ros/humble/setup.bash
-          rustup default stable
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
@@ -631,27 +609,25 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Humble
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
-          sudo rosdep init
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+          rosdep init
           rosdep update
 
       - name: Build
         run: |
           source /opt/ros/humble/setup.bash
-          rustup default stable
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
@@ -668,20 +644,19 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Jazzy
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
 
       - name: Build Variants
         env:
@@ -720,20 +695,19 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Humble
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
 
       - name: Build Variants
         env:
@@ -780,20 +754,19 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - name: Dependencies
         run: |
-          sudo apt-get install -y curl git unzip clang
-          sudo apt-get update --assume-yes && sudo apt-get install locales --assume-yes
-          sudo locale-gen en_US en_US.UTF-8
+          apt-get install -y curl git unzip clang
+          apt-get update --assume-yes && apt-get install locales --assume-yes
+          locale-gen en_US en_US.UTF-8
           export LANG=en_US.UTF-8
-          sudo apt-get install software-properties-common --assume-yes
+          apt-get install software-properties-common --assume-yes
           # ROS2 Humble
-          sudo add-apt-repository universe -y
-          sudo apt-get update --assume-yes
-          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update --assume-yes && sudo apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
+          add-apt-repository universe -y
+          apt-get update --assume-yes
+          curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          apt-get update --assume-yes && apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
 
       - name: Build Variants
         env:
@@ -942,8 +915,6 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -n 65536
-          rustup toolchain install stable
-          rustup default stable
           rustup target add "$TARGET"
           maturin build --zig --manifest-path minot/Cargo.toml --profile full-release --target-dir wheels --target "$TARGET"
       - name: Upload wheels
@@ -970,8 +941,6 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -n 65536
-          rustup toolchain install stable
-          rustup default stable
           rustup target add "$TARGET"
           maturin build --zig --manifest-path minot/Cargo.toml --profile full-release --target-dir wheels --target "$TARGET"
       - name: Upload wheels
@@ -995,8 +964,6 @@ jobs:
           TARGET: ${{ matrix.platform.target }}
         run: |
           set -euo pipefail
-          rustup toolchain install stable
-          rustup default stable
           rustup target add "$TARGET"
           maturin build --manifest-path minot/Cargo.toml --profile full-release --target-dir wheels --target "$TARGET"
       - name: Upload wheels
@@ -1014,8 +981,6 @@ jobs:
       - name: Build sdist
         run: |
           set -euo pipefail
-          rustup toolchain install stable
-          rustup default stable
           maturin sdist --manifest-path minot/Cargo.toml --out target/wheels
       - name: Upload sdist
         uses: actions/upload-artifact@v3
@@ -1239,7 +1204,7 @@ jobs:
     steps:
       - name: Deps
         run: |
-          pacman -Sy --noconfirm openssh git nodejs sudo base-devel
+          pacman -Sy --noconfirm openssh git nodejs base-devel
           useradd -m build
           echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
       - uses: actions/checkout@v4
@@ -1253,7 +1218,7 @@ jobs:
           ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
           chown -R build:build . /home/build/.ssh
 
-          sudo -u build env \
+          -u build env \
             GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
             FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
             FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
@@ -1279,7 +1244,7 @@ jobs:
     steps:
       - name: Deps
         run: |
-          pacman -Sy --noconfirm openssh git nodejs sudo base-devel
+          pacman -Sy --noconfirm openssh git nodejs base-devel
           useradd -m build
           echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
       - uses: actions/checkout@v4
@@ -1293,7 +1258,7 @@ jobs:
           ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
           chown -R build:build . /home/build/.ssh
 
-          sudo -u build env \
+          -u build env \
             GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
             FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
             FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
@@ -1356,10 +1321,6 @@ jobs:
     runs-on: ubuntu-dev-resolute
     steps:
       - uses: actions/checkout@v4
-      - name: Deps
-        run: |
-          rustup toolchain install stable
-          rustup default stable
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
