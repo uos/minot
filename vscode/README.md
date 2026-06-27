@@ -57,6 +57,10 @@ Currently none. Will be added with future releases.
 
 ## Release Notes
 
+### 0.9.0
+
+- Switched to Minot version 0.8.0
+
 ### 0.7.0
 
 - Switched to Minot version 0.7.0
