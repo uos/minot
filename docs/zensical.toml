@@ -351,8 +351,8 @@ repo = "fontawesome/brands/git-alt"
 # The "extra" section contains miscellaneous settings.
 # ----------------------------------------------------------------------------
 [[project.extra.social]]
-icon = "fontawesome/brands/github"
-link = "https://github.com/uos/minot"
+icon = "fontawesome/brands/git-alt"
+link = "https://codeberg.org/stelzo/minot"
 
 # Extensions
 [project.markdown_extensions.attr_list]

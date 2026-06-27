@@ -7,7 +7,7 @@ Minot is a highly versatile toolset for debugging and verifying stateful robot p
 * ROS1 -> ROS2 or language migrations
 * Functional method evaluations
 
-Visit the [Web Documentation](https://uos.github.io/minot) or `ssh minot@steado.tech` to find out more.
+Visit the [Web Documentation](https://stelzo.codeberg.page/minot) or `ssh minot@steado.tech` to find out more.
 
 ## ROS 2
 
@@ -31,17 +31,20 @@ sudo apt install ros-humble-minot
 
 # jazzy
 sudo apt install ros-jazzy-minot
+
+# lyrical
+sudo apt install ros-lyrical-minot
 ~~~
 
 ### From Source
 
-On Jazzy and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
+On Lyrical, Jazzy, and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
 
 The Minot CLI integrates seamlessly with typical ROS tooling. Just clone the repository into the src folder of your ROS workspace.
 
 ~~~bash
 cd ~/ros2_ws/src
-git clone https://github.com/uos/minot
+git clone https://codeberg.org/stelzo/minot
 cd ..
 
 rosdep install --from-paths src -y --ignore-src
@@ -58,7 +61,7 @@ Now run it like any ROS node.
 ros2 run minot minot tui <file.mt>
 ~~~
 
-Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://uos.github.io/minot/installation.html).
+Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://stelzo.codeberg.page/minot/installation.html).
 
 ### VS Code Extension
 
@@ -68,7 +71,7 @@ More information about the extension can be found at the [Marketplace](https://m
 
 ### Tree-sitter Support
 
-Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://github.com/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
+Minot comes with support for Tree-sitter syntax highlighting outside of VS Code. See [this repository](https://codeberg.org/stelzo/tree-sitter-minot) for instructions on how to add Minot support to the Helix editor or use the repository for other editors that support Tree-sitter grammars.
 
 ### License
 

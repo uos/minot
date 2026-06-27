@@ -3,7 +3,7 @@
 For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
-curl -sSLf https://uos.github.io/minot/install | sh
+curl -sSLf https://stelzo.codeberg.page/minot/install | sh
 ~~~
 
 For ROS support, make sure to have your ROS environment sourced before running the script.
@@ -26,6 +26,7 @@ If the command could not be found, add your local binary folder to your `$PATH`:
 
 Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed when building from source:
 
+- `lyrical` - ROS2 publisher (C API, needs sourced ROS2)
 - `jazzy` - ROS2 publisher (C API, needs sourced ROS2)
 - `humble` - ROS2 publisher (C API, needs sourced ROS2)
 
@@ -37,6 +38,5 @@ Use the `--embed` option to specify which components to embed when building from
 - `ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
 
 ~~~bash title="Script arguments"
-curl -sSLf https://uos.github.io/minot/install | sh -s -- --help
+curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --help
 ~~~
-

@@ -139,7 +139,7 @@ There are 3 functions.
 
         This argument is currently needed for the C interop. So if you want to send a matrix to C or Minot sync, the underlying datatype for the matrix must be specified. If you share variables with other *rusty Rats*, you can set `VariableType::default()`.
 
-The [examples](https://github.com/uos/minot/tree/main/mt_rat/examples) on GitHub should give you enough code to get started with the library in an actual project.
+The [examples](https://codeberg.org/stelzo/minot/tree/main/mt_rat/examples) on Codeberg should give you enough code to get started with the library in an actual project.
 
 For a general description of data, the shared datatype in C is a 2D matrix, which is also the only supported format for the sync [Variable Viewer](./sync/overview.md#variable-sharing-log-and-compare). If you want to share more abstract data than  1D Vectors or 2D Arrays, you'll need to encode the data yourself. Either into a different typed Matrix or into raw bytes (unsigned char on non-ARM architectures). The `rows` argument then becomes `0` and `cols` is the length of your buffer.
 

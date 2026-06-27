@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+# Docs Workflow for Minot. The schema is used until there is one for Forgejo.
+
+name: Docs
+
+on:
+  push:
+    paths:
+      - docs/**
+    branches:
+      - master
+      - main
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - run: pip install zensical
+      - run: cd docs && zensical build --clean
+      - name: Deploy to Codeberg Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          SERVER="${FORGEJO_SERVER_URL:-https://codeberg.org}"
+          TMP="$(mktemp -d)"
+          cp -a docs/site/. "$TMP/"
+          git config --global user.email "$(git log -1 --pretty=format:'%ae')"
+          git config --global user.name "$(git log -1 --pretty=format:'%an')"
+          git checkout --orphan pages
+          git rm -rf .
+          cp -a "$TMP"/. .
+          touch .nojekyll
+          git add -A
+          git commit -m "docs: deploy ${FORGEJO_SHA:-${GITHUB_SHA}}" || exit 0
+          git push --force "https://oauth2:${GITHUB_TOKEN}@${SERVER#https://}/${REPO}.git" HEAD:pages

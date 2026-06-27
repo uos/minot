@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+# Release Workflow for Minot. The schema is used until there is one for Forgejo.
+
 name: release
 
 on:
@@ -71,7 +74,7 @@ jobs:
           shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-x86_64-unknown-linux-musl
           path: |
@@ -117,7 +120,8 @@ jobs:
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
@@ -135,7 +139,7 @@ jobs:
           shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-x86_64-unknown-linux-gnu
           path: |
@@ -180,7 +184,8 @@ jobs:
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
@@ -198,7 +203,7 @@ jobs:
           shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-aarch64-unknown-linux-gnu
           path: |
@@ -245,7 +250,8 @@ jobs:
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
@@ -263,12 +269,106 @@ jobs:
           shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-armv7-unknown-linux-gnueabihf
           path: |
             *.tar.gz
             *.sha256
+            *.deb
+
+  ppa-minot-rat-debs:
+    runs-on: ubuntu-latest
+    needs: [create-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - series: jammy
+            image: ubuntu:22.04
+            target: x86_64-unknown-linux-gnu
+            apt_deps: ""
+          - series: jammy
+            image: ubuntu:22.04
+            target: aarch64-unknown-linux-gnu
+            apt_deps: "gcc-aarch64-linux-gnu"
+          - series: jammy
+            image: ubuntu:22.04
+            target: armv7-unknown-linux-gnueabihf
+            apt_deps: "gcc-arm-linux-gnueabihf"
+          - series: noble
+            image: ubuntu:24.04
+            target: x86_64-unknown-linux-gnu
+            apt_deps: ""
+          - series: noble
+            image: ubuntu:24.04
+            target: aarch64-unknown-linux-gnu
+            apt_deps: "gcc-aarch64-linux-gnu"
+          - series: noble
+            image: ubuntu:24.04
+            target: armv7-unknown-linux-gnueabihf
+            apt_deps: "gcc-arm-linux-gnueabihf"
+          - series: resolute
+            image: ubuntu:26.04
+            target: x86_64-unknown-linux-gnu
+            apt_deps: ""
+          - series: resolute
+            image: ubuntu:26.04
+            target: aarch64-unknown-linux-gnu
+            apt_deps: "gcc-aarch64-linux-gnu"
+          - series: resolute
+            image: ubuntu:26.04
+            target: armv7-unknown-linux-gnueabihf
+            apt_deps: "gcc-arm-linux-gnueabihf"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native PPA debs
+        env:
+          IMAGE: ${{ matrix.image }}
+          RUST_TARGET: ${{ matrix.target }}
+          APT_DEPS: ${{ matrix.apt_deps }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e GITHUB_REF_NAME \
+            -e RUST_TARGET \
+            -e APT_DEPS \
+            "$IMAGE" \
+            bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y ca-certificates curl build-essential pkg-config git $APT_DEPS
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+              . "$HOME/.cargo/env"
+              rustup target add "$RUST_TARGET"
+              cargo install cargo-deb --locked
+
+              CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+              $CARGO_CMD --package minot --bin minot --features embed-coord,embed-mt-pubsub
+              $CARGO_CMD --package minot --bin minot-coord
+              $CARGO_CMD --package mt_rat --lib
+
+              VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+              VERSION="${VERSION#v}"
+              sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp
+              mv mt_rat/librat.pc.tmp mt_rat/librat.pc
+              sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp
+              mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
+
+              cargo deb --package mt_rat --target "$RUST_TARGET" --no-build --profile full-release
+              cargo deb --package minot --target "$RUST_TARGET" --no-build --profile full-release
+              find "target/$RUST_TARGET/debian" -name "*.deb" -exec cp {} . \;
+
+              owner="$(stat -c "%u:%g" /workspace)"
+              chown -R "$owner" target ./*.deb mt_rat/librat.pc mt_rat/libratConfig.cmake
+            '
+      - name: "Upload PPA debs"
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-ppa-minot-rat-${{ matrix.series }}-${{ matrix.target }}
+          path: |
             *.deb
 
   # -------------------------------------------------------------------------
@@ -313,7 +413,8 @@ jobs:
           cp mt_rat/rat.h dist/
 
           # Prepare pkg-config and cmake files
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > dist/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > dist/libratConfig.cmake
 
@@ -325,7 +426,7 @@ jobs:
           shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-aarch64-apple-darwin
           path: |
@@ -333,7 +434,7 @@ jobs:
             *.sha256
 
   # -------------------------------------------------------------------------
-  # ROS TARGETS (Jazzy / Humble)
+  # ROS TARGETS (Lyrical / Jazzy / Humble)
   # Builds: minimal, coord, mt_pubsub AND ros2, wind-ros2
   # -------------------------------------------------------------------------
 
@@ -383,7 +484,7 @@ jobs:
           shasum -a 256 minot-jazzy-$TARGET.tar.gz > minot-jazzy-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-jazzy-x86_64-unknown-linux-gnu
           path: |
@@ -419,7 +520,7 @@ jobs:
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-deb-jazzy-amd64
           path: |
@@ -454,9 +555,63 @@ jobs:
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-deb-jazzy-arm
+          path: |
+            *.deb
+
+  deb-lyrical:
+    runs-on: ${{ matrix.runner }}
+    needs: [rust-stable]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          set -euo pipefail
+          mkdir -p lyrical-debs
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$PWD/lyrical-debs:/out" \
+            -e GITHUB_REF_NAME \
+            ubuntu:26.04 \
+            bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y ca-certificates curl git unzip clang locales software-properties-common sudo
+              locale-gen en_US en_US.UTF-8
+              export LANG=en_US.UTF-8
+              add-apt-repository universe -y
+              apt-get update --assume-yes
+              curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" > /etc/apt/sources.list.d/ros2.list
+              apt-get update --assume-yes
+              apt-get install ros-dev-tools ros-lyrical-ros-base --assume-yes
+              rosdep init
+              rosdep update
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+              export PATH="$HOME/.cargo/bin:$PATH"
+              mkdir -p /build
+              cp -a /workspace/. /build/minot
+              cd /build/minot
+              source /opt/ros/lyrical/setup.bash
+              bash ./scripts/make-deb.bash
+              cp /build/*.deb /out/
+            '
+          cp lyrical-debs/*.deb .
+
+      - name: "Upload deb"
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-deb-lyrical-${{ matrix.arch }}
           path: |
             *.deb
 
@@ -489,7 +644,7 @@ jobs:
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-deb-humble-amd64
           path: |
@@ -524,7 +679,7 @@ jobs:
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-deb-humble-arm64
           path: |
@@ -573,7 +728,7 @@ jobs:
           shasum -a 256 minot-jazzy-$TARGET.tar.gz > minot-jazzy-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-jazzy-aarch64-unknown-linux-gnu
           path: |
@@ -631,7 +786,7 @@ jobs:
           shasum -a 256 minot-humble-$TARGET.tar.gz > minot-humble-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-humble-x86_64-unknown-linux-gnu
           path: |
@@ -686,7 +841,7 @@ jobs:
           shasum -a 256 minot-humble-$TARGET.tar.gz > minot-humble-$TARGET.tar.gz.sha256
 
       - name: "Upload binary"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts-humble-aarch64-unknown-linux-gnu
           path: |
@@ -779,7 +934,7 @@ jobs:
           EOF
           cat manifest.json
       - name: Upload manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: manifest
           path: manifest.json
@@ -812,7 +967,7 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
@@ -841,7 +996,7 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: wheels-musllinux-${{ matrix.platform.target }}
           path: dist
@@ -863,7 +1018,7 @@ jobs:
           args: --profile full-release --out dist --manifest-path minot/Cargo.toml
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
@@ -880,13 +1035,13 @@ jobs:
           command: sdist
           args: --out dist --manifest-path minot/Cargo.toml
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: wheels-sdist
           path: dist
 
   create-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs:
       [
         generate-manifest,
@@ -894,43 +1049,58 @@ jobs:
         deb-humble-arm64,
         deb-jazzy-amd64,
         deb-jazzy-arm64,
+        deb-lyrical,
         linux-pypi,
         musllinux-pypi,
         macos-pypi,
         sdist-pypi,
       ]
-    permissions:
-      # Use to sign the release artifacts
-      id-token: write
-      # Used to upload release artifacts
-      contents: write
-      # Used to generate artifact attestation
-      attestations: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           path: artifacts
       - name: List downloaded artifacts (for verification)
         run: ls -R artifacts
       - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: artifacts/**/*
-          draft: true
-          prerelease: false
-      - uses: actions/download-artifact@v4
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: "wheels-*/*"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          REPO="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          SERVER="${FORGEJO_SERVER_URL:-https://codeberg.org}"
+
+          tea login add --name codeberg --url "${SERVER}" --token "${GITHUB_TOKEN}"
+          tea release delete --repo "${REPO}" --confirm "${TAG}" || true
+
+          ASSET_FLAGS=""
+          while IFS= read -r f; do
+            ASSET_FLAGS="${ASSET_FLAGS} --asset ${f}"
+          done <<EOF
+          $(find artifacts -type f | sort)
+          EOF
+
+          tea release create \
+            --login codeberg \
+            --repo "${REPO}" \
+            --tag "${TAG}" \
+            --title "${TAG}" \
+            --note "Release ${TAG}
+
+          ### Artifacts
+          - Binary archives for Linux and macOS
+          - Debian packages published to the UOS PPA
+          - Python wheels published to PyPI" \
+            ${ASSET_FLAGS}
+      - uses: actions/download-artifact@v3
       - name: Publish to PyPI
         if: startsWith(github.ref, 'refs/tags/')
         uses: PyO3/maturin-action@v1
         env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
@@ -940,16 +1110,15 @@ jobs:
     needs: [create-release, deb-humble-arm64, deb-humble-amd64]
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v3
         with:
-          pattern: "artifacts-deb-humble-*"
-          merge-multiple: true
+          path: artifacts
       - name: Push to PPA
         if: startsWith(github.ref, 'refs/tags/')
         env:
           PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
           SERIES: "jammy"
-          DEB_PATH: "*.deb"
+          DEB_PATH: "artifacts/artifacts-deb-humble-*/*.deb"
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -968,7 +1137,9 @@ jobs:
           done
           git config --global user.email $(git log -1 --pretty=format:'%ae')
           git config --global user.name $(git log -1 --pretty=format:'%an')
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
+          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
+          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
           git push origin pages
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
           cd ..
@@ -979,16 +1150,15 @@ jobs:
       [create-release, deb-jazzy-arm64, deb-jazzy-amd64, humble-release-uos-ppa]
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v3
         with:
-          pattern: "artifacts-deb-jazzy-*"
-          merge-multiple: true
+          path: artifacts
       - name: Push to PPA
         if: startsWith(github.ref, 'refs/tags/')
         env:
           PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
           SERIES: "noble"
-          DEB_PATH: "*.deb"
+          DEB_PATH: "artifacts/artifacts-deb-jazzy-*/*.deb"
         run: |
           sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
@@ -1008,7 +1178,49 @@ jobs:
           done
           git config --global user.email $(git log -1 --pretty=format:'%ae')
           git config --global user.name $(git log -1 --pretty=format:'%an')
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
+          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
+          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
+          git push origin pages
+          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+          cd ..
+
+  lyrical-release-uos-ppa:
+    runs-on: ubuntu-latest
+    needs: [create-release, deb-lyrical, jazzy-release-uos-ppa]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: Push to PPA
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
+          SERIES: "resolute"
+          DEB_PATH: "artifacts/artifacts-deb-lyrical-*/*.deb"
+        run: |
+          sleep 120 # ensure previous PPA pushes are processed before and CI did run
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
+          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
+          cd ppa
+          git sparse-checkout init --cone
+          for s in $SERIES; do
+            git sparse-checkout set "ubuntu/pool/main/$s"
+            mkdir -p "ubuntu/pool/main/$s"
+            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
+            git add "ubuntu/pool/main/$s/"*.deb || true
+          done
+          git config --global user.email $(git log -1 --pretty=format:'%ae')
+          git config --global user.name $(git log -1 --pretty=format:'%an')
+          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
+          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
           git push origin pages
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
           cd ..
@@ -1016,34 +1228,82 @@ jobs:
   aur-publish-src:
     runs-on: ubuntu-latest
     needs: [create-release]
+    container:
+      image: archlinux:latest
     steps:
+      - name: Deps
+        run: |
+          pacman -Sy --noconfirm openssh git nodejs sudo base-devel
+          useradd -m build
+          echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
       - uses: actions/checkout@v4
-      - name: Publish AUR package
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.2
-        with:
-          pkgname: minot
-          pkgbuild: ./packaging/arch/PKGBUILD
-          commit_username: stelzo
-          commit_email: stelzo@steado.de
-          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
-          commit_message: Update AUR package
-          ssh_keyscan_types: rsa,ecdsa,ed25519
+      - name: Update AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          mkdir -p /home/build/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > /home/build/.ssh/aur_key
+          chmod 600 /home/build/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
+          chown -R build:build . /home/build/.ssh
+
+          sudo -u build env \
+            GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
+            FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
+            FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
+            bash << 'EOF'
+            set -euo pipefail
+            git config --global user.email "$(git log -1 --pretty=format:'%ae')"
+            git config --global user.name "$(git log -1 --pretty=format:'%an')"
+            git clone ssh://aur@aur.archlinux.org/minot.git minot-aur
+            cp packaging/arch/PKGBUILD minot-aur/
+            cd minot-aur
+            makepkg --printsrcinfo > .SRCINFO
+            git add -f .SRCINFO PKGBUILD
+            git commit -m "Update package from $FORGEJO_REPOSITORY@$FORGEJO_SHA" || echo "No changes"
+            git push origin
+          EOF
+          shred -u /home/build/.ssh/aur_key
 
   aur-publish-bin:
     runs-on: ubuntu-latest
     needs: [create-release]
+    container:
+      image: archlinux:latest
     steps:
+      - name: Deps
+        run: |
+          pacman -Sy --noconfirm openssh git nodejs sudo base-devel
+          useradd -m build
+          echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
       - uses: actions/checkout@v4
-      - name: Publish AUR package
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.2
-        with:
-          pkgname: minot-bin
-          pkgbuild: ./packaging/arch-bin/PKGBUILD
-          commit_username: stelzo
-          commit_email: stelzo@steado.de
-          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
-          commit_message: Update AUR package
-          ssh_keyscan_types: rsa,ecdsa,ed25519
+      - name: Update AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          mkdir -p /home/build/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > /home/build/.ssh/aur_key
+          chmod 600 /home/build/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
+          chown -R build:build . /home/build/.ssh
+
+          sudo -u build env \
+            GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
+            FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
+            FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
+            bash << 'EOF'
+            set -euo pipefail
+            git config --global user.email "$(git log -1 --pretty=format:'%ae')"
+            git config --global user.name "$(git log -1 --pretty=format:'%an')"
+            git clone ssh://aur@aur.archlinux.org/minot-bin.git minot-bin
+            cp packaging/arch-bin/PKGBUILD minot-bin/
+            cd minot-bin
+            makepkg --printsrcinfo > .SRCINFO
+            git add -f .SRCINFO PKGBUILD
+            git commit -m "Update package from $FORGEJO_REPOSITORY@$FORGEJO_SHA" || echo "No changes"
+            git push origin
+          EOF
+          shred -u /home/build/.ssh/aur_key
 
   homebrew-publish:
     runs-on: ubuntu-latest
@@ -1051,13 +1311,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           name: artifacts-aarch64-apple-darwin
-          merge-multiple: true
       - name: Compute checksum and update formula
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
           ARM_SHA=$(sha256sum minot-aarch64-apple-darwin.tar.gz | awk '{print $1}')
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g; \
                s/ARM_SHA256_PLACEHOLDER/${ARM_SHA}/g" \
@@ -1080,25 +1340,23 @@ jobs:
           git config user.email "stelzo@steado.de"
           git config user.name "stelzo"
           git add Formula/minot.rb
-          git commit -m "Update minot to ${GITHUB_REF_NAME}" || echo "No changes"
+          git commit -m "Update minot to ${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}" || echo "No changes"
           git push origin main
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
 
   minot-rat-release-uos-ppa:
     runs-on: ubuntu-latest
-    needs: [create-release, jazzy-release-uos-ppa]
+    needs: [lyrical-release-uos-ppa, ppa-minot-rat-debs]
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v3
         with:
-          pattern: "artifacts-*-unknown-linux-gnu*"
-          merge-multiple: true
+          path: ppa-debs
       - name: Push to PPA
         if: startsWith(github.ref, 'refs/tags/')
         env:
           PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "jammy noble"
-          DEB_PATH: "*.deb"
+          SERIES: "jammy noble resolute"
         run: |
           sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
@@ -1110,15 +1368,22 @@ jobs:
           git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
           cd ppa
           git sparse-checkout init --cone
+          git sparse-checkout set ubuntu/pool/main/jammy ubuntu/pool/main/noble ubuntu/pool/main/resolute
           for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
             mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
+            mapfile -t debs < <(find ../ppa-debs -path "../ppa-debs/artifacts-ppa-minot-rat-$s-*/*.deb" -type f)
+            if [ "${#debs[@]}" -eq 0 ]; then
+              echo "No PPA debs found for $s"
+              exit 1
+            fi
+            cp "${debs[@]}" "ubuntu/pool/main/$s/"
             git add "ubuntu/pool/main/$s/"*.deb || true
           done
           git config --global user.email $(git log -1 --pretty=format:'%ae')
           git config --global user.name $(git log -1 --pretty=format:'%an')
-          git commit -m "ci: add deb(s) from $GITHUB_REPOSITORY@$GITHUB_SHA" || echo "No changes"
+          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
+          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
           git push origin pages
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
           cd ..

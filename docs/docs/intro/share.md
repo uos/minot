@@ -2,7 +2,7 @@
 
 One of the main tasks of the ROS Pub/Sub system (excluding non-sensor pipelines with actions and service) is sharing a new value of something. At development time, when accuracy is at the highest priority, this async model might be in your way.
 
-With *librat*, you can share variables synchronously over the network. The library is written in Rust but targeted at C. It's built for the absolute minimal user footprint. You initialise it once and then give it any variables to cling to without changing anything else in your existing code. Just look at the [header file](https://github.com/uos/minot/blob/main/mt_rat/rat.h). You then explain the routes to the Minot Sync with intuitive syntax.
+With *librat*, you can share variables synchronously over the network. The library is written in Rust but targeted at C. It's built for the absolute minimal user footprint. You initialise it once and then give it any variables to cling to without changing anything else in your existing code. Just look at the [header file](https://codeberg.org/stelzo/minot/blob/main/mt_rat/rat.h). You then explain the routes to the Minot Sync with intuitive syntax.
 
 Variable sharing is a powerful building block and it can easily be used outside of the ROS context. Click [here](../features/varshare.md) to learn more.
 
@@ -19,7 +19,7 @@ We will need [a modern Rust compiler](https://www.rust-lang.org/tools/install) f
 Build and run the libraries and the Coordinator.
 
 ~~~bash
-git clone https://github.com/uos/minot && cd minot
+git clone https://codeberg.org/stelzo/minot && cd minot
 cargo build
 
 ./target/debug/minot-coord mt/varshare_demo.mt

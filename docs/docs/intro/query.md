@@ -15,7 +15,7 @@ mkdir minot-bagfile-demo && cd minot-bagfile-demo
 source /opt/ros/jazzy/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash
 
 # Get Minot with ROS2 publisher
-curl -sSLf https://uos.github.io/minot/install | sh -s -- --ros-distro $ROS_DISTRO
+curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro $ROS_DISTRO
 
 # Get a Bagfile
 curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
@@ -23,10 +23,10 @@ curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?d
     && rm dlg_cut.zip
 
 # Get the query
-curl -Lo demo.mt "https://uos.github.io/minot/assets/demo_publish.mt"
+curl -Lo demo.mt "https://stelzo.codeberg.page/minot/assets/demo_publish.mt"
 
 # Get the rviz demo preset
-curl -Lo demo.rviz "https://uos.github.io/minot/assets/demo_publish.rviz"
+curl -Lo demo.rviz "https://stelzo.codeberg.page/minot/assets/demo_publish.rviz"
 
 # Run rviz and wait for data
 rviz2 -d demo.rviz

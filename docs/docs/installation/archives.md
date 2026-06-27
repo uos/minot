@@ -1,6 +1,6 @@
 # Raw Archives
 
-Binaries for common system configurations are available [via GitHub Releases](https://github.com/uos/minot/releases).
+Binaries for common system configurations are available [via Codeberg Releases](https://codeberg.org/stelzo/minot/releases).
 
 The `minot-$ROS_DISTRO-*` archives will only give you ROS specific binaries:
 

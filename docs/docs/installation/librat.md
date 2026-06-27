@@ -25,7 +25,7 @@ sudo apt install librat-dev
 The PPA mentioned above is specific to Ubuntu the package itself does not require any system dependencies. Therefore it can be installed manually on all debian-based distros.
 
 ~~~bash title="Manual .deb Installation"
-curl -s https://api.github.com/repos/uos/minot/releases/latest \
+curl -s https://codeberg.org/api/v1/repos/stelzo/minot/releases/latest \
 | grep "browser_download_url" \
 | grep ".deb" \
 | grep "$(dpkg --print-architecture)" \
@@ -56,7 +56,7 @@ target_link_libraries(my_app PRIVATE ${RAT_LIBRARIES})
 Building from source generates a static and shared library in the `./target/release/` folder. You will need to clone the repository first.
 
 ~~~bash title="Build librat from source"
-git clone https://github.com/uos/minot
+git clone https://codeberg.org/stelzo/minot
 cd minot
 cargo build --package mt_rat --release
 ~~~

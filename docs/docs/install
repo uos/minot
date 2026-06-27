@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-REPO="uos/minot"
+REPO="stelzo/minot"
 INSTALL_DIR="${HOME}/.local/bin"
-GITHUB_API="https://api.github.com/repos/${REPO}"
-GITHUB_RELEASE="https://github.com/${REPO}/releases/download"
+FORGEJO_API="https://codeberg.org/api/v1/repos/${REPO}"
+FORGEJO_RELEASE="https://codeberg.org/${REPO}/releases/download"
 VERSION=""
 FEATURES=""
 EMBED_COMPONENTS=""
@@ -165,7 +165,7 @@ ${BOLD}OPTIONS:${NC}
     -d, --dir DIR             Installation directory (default: ~/.local/bin)
     -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, mt_pubsub)
     -f, --features FEATURES   Advanced: Raw cargo features (comma-separated)
-    -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (jazzy, humble). Requires ROS2 sourced.
+    -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (lyrical, jazzy, humble). Requires ROS2 sourced.
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
     -n, --no-default-embed    Do not enable the default 'coord' embed when building
@@ -191,7 +191,7 @@ ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Resolve to a semver compatible version${NC}
     ./install.sh --version 0.1
 
-For more information, visit: ${BLUE}https://uos.github.io/minot/installation.html${NC}
+For more information, visit: ${BLUE}https://stelzo.codeberg.page/minot/installation.html${NC}
 
 EOF
 }
@@ -200,16 +200,16 @@ get_latest_version() {
         info "Fetching latest release version..."
             if command -v curl >/dev/null 2>&1; then
                 # Keep silent for API calls but show a one-line info before
-                VERSION=$(curl -sSf "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+                VERSION=$(curl -sSf "${FORGEJO_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
             elif command -v wget >/dev/null 2>&1; then
-                VERSION=$(wget -qO- "${GITHUB_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+                VERSION=$(wget -qO- "${FORGEJO_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
             else
                 warn "Neither curl nor wget found. Will fall back to building from source."
                 return 1
             fi
 
         if [ -z "$VERSION" ]; then
-            warn "Failed to fetch latest version from GitHub. Will fall back to building from source."
+            warn "Failed to fetch latest version from Codeberg. Will fall back to building from source."
             return 1
         fi
 
@@ -327,7 +327,7 @@ detect_ros_from_env_and_prompt() {
     detected=$(echo "$detected" | tr '[:upper:]' '[:lower:]')
 
     case "$detected" in
-        jazzy|humble|galactic|foxy|iron|rolling)
+        lyrical|jazzy|humble|galactic|foxy|iron|rolling)
             ;; # supported
         *)
             warn "Detected ROS distro '$detected' is not in supported list; falling back to 'jazzy'."
@@ -422,7 +422,7 @@ is_in_range() {
 
 resolve_requested_version() {
     # If $VERSION is a prefix like '0.1', resolve it to the newest release
-    # tag from GitHub that matches that major/minor. If VERSION is empty or
+    # tag from Codeberg that matches that major/minor. If VERSION is empty or
     # already a full tag/semver, leave it as-is.
     if [ -z "$VERSION" ]; then
         return 0
@@ -440,9 +440,9 @@ resolve_requested_version() {
         while :; do
             local releases_json=""
             if command -v curl >/dev/null 2>&1; then
-                releases_json=$(curl -sSf "${GITHUB_API}/releases?per_page=${per_page}&page=${page}" 2>/dev/null || true)
+                releases_json=$(curl -sSf "${FORGEJO_API}/releases?per_page=${per_page}&page=${page}" 2>/dev/null || true)
             elif command -v wget >/dev/null 2>&1; then
-                releases_json=$(wget -qO- "${GITHUB_API}/releases?per_page=${per_page}&page=${page}" 2>/dev/null || true)
+                releases_json=$(wget -qO- "${FORGEJO_API}/releases?per_page=${per_page}&page=${page}" 2>/dev/null || true)
             else
                 warn "Neither curl nor wget found; cannot resolve version prefix '$VERSION'."
                 return 1
@@ -536,7 +536,7 @@ check_binary_exists() {
     ARCHIVE_NAME=$2
     VERSION=$3
     
-    URL="${GITHUB_RELEASE}/${VERSION}/${ARCHIVE_NAME}.tar.gz"
+    URL="${FORGEJO_RELEASE}/${VERSION}/${ARCHIVE_NAME}.tar.gz"
     
     if command -v curl >/dev/null 2>&1; then
         if curl -sSfI "$URL" >/dev/null 2>&1; then
@@ -553,7 +553,7 @@ check_binary_exists() {
 
 get_release_manifest() {
     VERSION=$1
-    MANIFEST_URL="${GITHUB_RELEASE}/${VERSION}/manifest.json"
+    MANIFEST_URL="${FORGEJO_RELEASE}/${VERSION}/manifest.json"
     
     if command -v curl >/dev/null 2>&1; then
         curl -sSfL "$MANIFEST_URL" 2>/dev/null || echo ""
@@ -748,7 +748,7 @@ download_and_install() {
     # Download and Extract BASE Archive first (if it exists)
     # This ensures libraries and standard tools are present
     if [ -n "$BASE_ARCH_NAME" ] && [ "$BASE_ARCH_NAME" != "$PRIMARY_ARCH_NAME" ]; then
-        BASE_URL="${GITHUB_RELEASE}/${VERSION}/${BASE_ARCH_NAME}.tar.gz"
+        BASE_URL="${FORGEJO_RELEASE}/${VERSION}/${BASE_ARCH_NAME}.tar.gz"
         info "Fetching base artifacts from ${BASE_ARCH_NAME}..."
         if ! download_and_extract "$BASE_URL" "$STAGE_DIR" "${BASE_ARCH_NAME}.tar.gz"; then
             warn "Failed to download base archive. Setup might be incomplete."
@@ -757,7 +757,7 @@ download_and_install() {
     fi
 
     # Download and Extract PRIMARY Archive (Overlay)
-    PRIMARY_URL="${GITHUB_RELEASE}/${VERSION}/${PRIMARY_ARCH_NAME}.tar.gz"
+    PRIMARY_URL="${FORGEJO_RELEASE}/${VERSION}/${PRIMARY_ARCH_NAME}.tar.gz"
     if [ -n "$BASE_ARCH_NAME" ]; then
         info "Fetching overlay artifacts from ${PRIMARY_ARCH_NAME}..."
     else
@@ -951,10 +951,9 @@ build_from_source() {
 
     if [ -n "$ROS_DISTRO" ]; then
         ROS_DISTRO_LC=$(echo "$ROS_DISTRO" | tr '[:upper:]' '[:lower:]')
-        if [ "$ROS_DISTRO_LC" = "jazzy" ]; then
-            ROS2_C_FEATURE="embed-ros2-c"
-        else
-            ROS2_C_FEATURE="embed-ros2-c-${ROS_DISTRO_LC}"
+        ROS2_C_FEATURE="embed-ros2-c"
+        if [ "$ROS_DISTRO_LC" = "humble" ]; then
+            ROS2_C_FEATURE="${ROS2_C_FEATURE}-${ROS_DISTRO_LC}"
         fi
         case ",$BUILD_FEATURES," in
             *,${ROS2_C_FEATURE},*|*,embed-ros,*|*,embed-ros2-c,*)
@@ -1057,11 +1056,11 @@ build_from_source() {
             *) TAG_TO_USE="v$TAG_TO_USE" ;;
         esac
 
-        if git clone --depth 1 --branch "$TAG_TO_USE" --single-branch "https://github.com/${REPO}.git" "$TMP_BUILD_DIR" 2>/dev/null; then
+        if git clone --depth 1 --branch "$TAG_TO_USE" --single-branch "https://codeberg.org/${REPO}.git" "$TMP_BUILD_DIR" 2>/dev/null; then
             : # success
         else
             warn "Could not clone branch/tag '$TAG_TO_USE' directly; attempting clone+checkout..."
-            if ! git clone --depth 1 "https://github.com/${REPO}.git" "$TMP_BUILD_DIR"; then
+            if ! git clone --depth 1 "https://codeberg.org/${REPO}.git" "$TMP_BUILD_DIR"; then
                 error "Failed to clone repository"
             fi
             (cd "$TMP_BUILD_DIR" && 
@@ -1074,7 +1073,7 @@ build_from_source() {
             ) || error "Failed to checkout tag: $TAG_TO_USE"
         fi
     else
-        if ! git clone --depth 1 "https://github.com/${REPO}.git" "$TMP_BUILD_DIR"; then
+        if ! git clone --depth 1 "https://codeberg.org/${REPO}.git" "$TMP_BUILD_DIR"; then
             error "Failed to clone repository"
         fi
     fi
