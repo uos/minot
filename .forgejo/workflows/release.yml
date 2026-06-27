@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   rust-stable:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -30,7 +30,7 @@ jobs:
   # -------------------------------------------------------------------------
 
   linux-x86_64-musl:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +82,7 @@ jobs:
             *.sha256
 
   linux-x86_64-gnu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -148,7 +148,7 @@ jobs:
             *.deb
 
   linux-aarch64-gnu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -212,7 +212,7 @@ jobs:
             *.deb
 
   linux-armv7-gnu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -278,92 +278,81 @@ jobs:
             *.deb
 
   ppa-minot-rat-debs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [create-release]
     strategy:
       fail-fast: false
       matrix:
         include:
           - series: jammy
-            image: ubuntu:22.04
+            image: docker.io/stelzo/ubuntu-dev:jammy
             target: x86_64-unknown-linux-gnu
             apt_deps: ""
           - series: jammy
-            image: ubuntu:22.04
+            image: docker.io/stelzo/ubuntu-dev:jammy
             target: aarch64-unknown-linux-gnu
             apt_deps: "gcc-aarch64-linux-gnu"
           - series: jammy
-            image: ubuntu:22.04
+            image: docker.io/stelzo/ubuntu-dev:jammy
             target: armv7-unknown-linux-gnueabihf
             apt_deps: "gcc-arm-linux-gnueabihf"
           - series: noble
-            image: ubuntu:24.04
+            image: docker.io/stelzo/ubuntu-dev:noble
             target: x86_64-unknown-linux-gnu
             apt_deps: ""
           - series: noble
-            image: ubuntu:24.04
+            image: docker.io/stelzo/ubuntu-dev:noble
             target: aarch64-unknown-linux-gnu
             apt_deps: "gcc-aarch64-linux-gnu"
           - series: noble
-            image: ubuntu:24.04
+            image: docker.io/stelzo/ubuntu-dev:noble
             target: armv7-unknown-linux-gnueabihf
             apt_deps: "gcc-arm-linux-gnueabihf"
           - series: resolute
-            image: ubuntu:26.04
+            image: docker.io/stelzo/ubuntu-dev:resolute
             target: x86_64-unknown-linux-gnu
             apt_deps: ""
           - series: resolute
-            image: ubuntu:26.04
+            image: docker.io/stelzo/ubuntu-dev:resolute
             target: aarch64-unknown-linux-gnu
             apt_deps: "gcc-aarch64-linux-gnu"
           - series: resolute
-            image: ubuntu:26.04
+            image: docker.io/stelzo/ubuntu-dev:resolute
             target: armv7-unknown-linux-gnueabihf
             apt_deps: "gcc-arm-linux-gnueabihf"
+    container:
+      image: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
       - name: Build native PPA debs
         env:
-          IMAGE: ${{ matrix.image }}
           RUST_TARGET: ${{ matrix.target }}
           APT_DEPS: ${{ matrix.apt_deps }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            -v "$PWD:/workspace" \
-            -w /workspace \
-            -e GITHUB_REF_NAME \
-            -e RUST_TARGET \
-            -e APT_DEPS \
-            "$IMAGE" \
-            bash -euxo pipefail -c '
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y ca-certificates curl build-essential pkg-config git $APT_DEPS
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-              . "$HOME/.cargo/env"
-              rustup target add "$RUST_TARGET"
-              cargo install cargo-deb --locked
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates curl build-essential pkg-config git $APT_DEPS
+          rustup toolchain install stable
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          cargo install cargo-deb --locked
 
-              CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
-              $CARGO_CMD --package minot --bin minot --features embed-coord,embed-mt-pubsub
-              $CARGO_CMD --package minot --bin minot-coord
-              $CARGO_CMD --package mt_rat --lib
+          CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          $CARGO_CMD --package minot --bin minot --features embed-coord,embed-mt-pubsub
+          $CARGO_CMD --package minot --bin minot-coord
+          $CARGO_CMD --package mt_rat --lib
 
-              VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
-              VERSION="${VERSION#v}"
-              sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp
-              mv mt_rat/librat.pc.tmp mt_rat/librat.pc
-              sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp
-              mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp
+          mv mt_rat/librat.pc.tmp mt_rat/librat.pc
+          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp
+          mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
-              cargo deb --package mt_rat --target "$RUST_TARGET" --no-build --profile full-release
-              cargo deb --package minot --target "$RUST_TARGET" --no-build --profile full-release
-              find "target/$RUST_TARGET/debian" -name "*.deb" -exec cp {} . \;
-
-              owner="$(stat -c "%u:%g" /workspace)"
-              chown -R "$owner" target ./*.deb mt_rat/librat.pc mt_rat/libratConfig.cmake
-            '
+          cargo deb --package mt_rat --target "$RUST_TARGET" --no-build --profile full-release
+          cargo deb --package minot --target "$RUST_TARGET" --no-build --profile full-release
+          find "target/$RUST_TARGET/debian" -name "*.deb" -exec cp {} . \;
       - name: "Upload PPA debs"
         uses: actions/upload-artifact@v3
         with:
@@ -439,7 +428,9 @@ jobs:
   # -------------------------------------------------------------------------
 
   jazzy-linux-x86_64-gnu:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-dev-resolute
+    container:
+      image: docker.io/stelzo/ubuntu-dev:jazzy
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -492,7 +483,9 @@ jobs:
             *.sha256
 
   deb-jazzy-amd64:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-dev-resolute
+    container:
+      image: docker.io/stelzo/ubuntu-dev:jazzy
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -527,7 +520,9 @@ jobs:
             *.deb
 
   deb-jazzy-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest-arm
+    container:
+      image: docker.io/stelzo/ubuntu-dev:jazzy
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -563,6 +558,8 @@ jobs:
 
   deb-lyrical:
     runs-on: ${{ matrix.runner }}
+    container:
+      image: docker.io/stelzo/ubuntu-dev:lyrical
     needs: [rust-stable]
     strategy:
       fail-fast: false
@@ -571,42 +568,17 @@ jobs:
           - arch: amd64
             runner: ubuntu-latest
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-latest-arm
     steps:
       - uses: actions/checkout@v4
       - name: Build
         run: |
           set -euo pipefail
-          mkdir -p lyrical-debs
-          docker run --rm \
-            -v "$PWD:/workspace:ro" \
-            -v "$PWD/lyrical-debs:/out" \
-            -e GITHUB_REF_NAME \
-            ubuntu:26.04 \
-            bash -euxo pipefail -c '
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y ca-certificates curl git unzip clang locales software-properties-common sudo
-              locale-gen en_US en_US.UTF-8
-              export LANG=en_US.UTF-8
-              add-apt-repository universe -y
-              apt-get update --assume-yes
-              curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" > /etc/apt/sources.list.d/ros2.list
-              apt-get update --assume-yes
-              apt-get install ros-dev-tools ros-lyrical-ros-base --assume-yes
-              rosdep init
-              rosdep update
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-              export PATH="$HOME/.cargo/bin:$PATH"
-              mkdir -p /build
-              cp -a /workspace/. /build/minot
-              cd /build/minot
-              source /opt/ros/lyrical/setup.bash
-              bash ./scripts/make-deb.bash
-              cp /build/*.deb /out/
-            '
-          cp lyrical-debs/*.deb .
+          ulimit -n 65536
+          rustup toolchain install stable
+          rustup default stable
+          source /opt/ros/lyrical/setup.bash
+          bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
         uses: actions/upload-artifact@v3
@@ -616,7 +588,9 @@ jobs:
             *.deb
 
   deb-humble-amd64:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-dev-resolute
+    container:
+      image: docker.io/stelzo/ubuntu-dev:humble
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -651,7 +625,9 @@ jobs:
             *.deb
 
   deb-humble-arm64:
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-latest-arm
+    container:
+      image: docker.io/stelzo/ubuntu-dev:humble
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -686,7 +662,9 @@ jobs:
             *.deb
 
   jazzy-linux-aarch64-gnu:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest-arm
+    container:
+      image: docker.io/stelzo/ubuntu-dev:jazzy
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -736,7 +714,9 @@ jobs:
             *.sha256
 
   humble-linux-x86_64-gnu:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-dev-resolute
+    container:
+      image: docker.io/stelzo/ubuntu-dev:humble
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -794,7 +774,9 @@ jobs:
             *.sha256
 
   humble-linux-aarch64-gnu:
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-latest-arm
+    container:
+      image: docker.io/stelzo/ubuntu-dev:humble
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
@@ -849,7 +831,7 @@ jobs:
             *.sha256
 
   generate-manifest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs:
       [
         macos-aarch64,
@@ -940,66 +922,63 @@ jobs:
           path: manifest.json
 
   linux-pypi:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     strategy:
       matrix:
         # omitting ppc64le and s390x since they do not compile and probably have other problems than running this software
-        platform:
-          - runner: ubuntu-22.04
-            target: x86_64
-          - runner: ubuntu-22.04
-            target: x86
-          - runner: ubuntu-22.04
-            target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
+        target:
+          - x86_64-unknown-linux-gnu
+          - i686-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
         env:
           # Manually define ARM architecture for ring 0.17+ on older GCC
           CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --profile full-release --out dist --manifest-path minot/Cargo.toml
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: auto
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          rustup toolchain install stable
+          rustup default stable
+          rustup target add "$TARGET"
+          maturin build --zig --manifest-path minot/Cargo.toml --profile full-release --target-dir wheels --target "$TARGET"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
-          name: wheels-linux-${{ matrix.platform.target }}
-          path: dist
+          name: wheels
+          path: target/wheels
 
   musllinux-pypi:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     strategy:
       matrix:
-        platform:
-          - runner: ubuntu-22.04
-            target: x86_64
-          - runner: ubuntu-22.04
-            target: x86
-          - runner: ubuntu-22.04
-            target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
+        target:
+          - x86_64-unknown-linux-musl
+          - i686-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - armv7-unknown-linux-musleabihf
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --profile full-release --out dist --manifest-path minot/Cargo.toml
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: musllinux_1_2
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          rustup toolchain install stable
+          rustup default stable
+          rustup target add "$TARGET"
+          maturin build --zig --manifest-path minot/Cargo.toml --profile full-release --target-dir wheels --target "$TARGET"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
-          name: wheels-musllinux-${{ matrix.platform.target }}
-          path: dist
+          name: wheels
+          path: target/wheels
 
   macos-pypi:
     runs-on: ${{ matrix.platform.runner }}
@@ -1008,37 +987,41 @@ jobs:
       matrix:
         platform:
           - runner: macos-14
-            target: aarch64
+            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --profile full-release --out dist --manifest-path minot/Cargo.toml
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable
+          rustup default stable
+          rustup target add "$TARGET"
+          maturin build --manifest-path minot/Cargo.toml --profile full-release --target-dir wheels --target "$TARGET"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
-          name: wheels-macos-${{ matrix.platform.target }}
-          path: dist
+          name: wheels
+          path: target/wheels
 
-  # Source code to wheel, pip will try to build from source.
+  # Source distribution, pip will try to build from source.
   sdist-pypi:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist --manifest-path minot/Cargo.toml
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable
+          rustup default stable
+          maturin sdist --manifest-path minot/Cargo.toml --out target/wheels
       - name: Upload sdist
         uses: actions/upload-artifact@v3
         with:
-          name: wheels-sdist
-          path: dist
+          name: wheels
+          path: target/wheels
 
   create-release:
     runs-on: ubuntu-dev-resolute
@@ -1095,18 +1078,41 @@ jobs:
           - Debian packages published to the UOS PPA
           - Python wheels published to PyPI" \
             ${ASSET_FLAGS}
-      - uses: actions/download-artifact@v3
-      - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  publish-pypi:
+    needs:
+      - create-release
+    runs-on: ubuntu-dev-resolute
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download wheels and sdist
+        uses: actions/download-artifact@v3
         with:
-          command: upload
-          args: --non-interactive --skip-existing wheels-*/*
+          name: wheels
+          path: dist
+      - name: Get twine
+        run: uv tool install twine
+      - name: Publish to PyPI
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "=== Python distributions to publish ==="
+          find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) -print -exec ls -lh {} \;
+
+          twine upload \
+            --username __token__ \
+            --password "${PYPI_TOKEN}" \
+            --non-interactive \
+            --skip-existing \
+            --verbose \
+            $(find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) | sort)
+
+          echo "Published to PyPI."
 
   humble-release-uos-ppa:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [create-release, deb-humble-arm64, deb-humble-amd64]
     steps:
       - name: Download artifacts
@@ -1145,7 +1151,7 @@ jobs:
           cd ..
 
   jazzy-release-uos-ppa:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs:
       [create-release, deb-jazzy-arm64, deb-jazzy-amd64, humble-release-uos-ppa]
     steps:
@@ -1186,7 +1192,7 @@ jobs:
           cd ..
 
   lyrical-release-uos-ppa:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [create-release, deb-lyrical, jazzy-release-uos-ppa]
     steps:
       - name: Download artifacts
@@ -1226,7 +1232,7 @@ jobs:
           cd ..
 
   aur-publish-src:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [create-release]
     container:
       image: archlinux:latest
@@ -1266,7 +1272,7 @@ jobs:
           shred -u /home/build/.ssh/aur_key
 
   aur-publish-bin:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [create-release]
     container:
       image: archlinux:latest
@@ -1306,7 +1312,7 @@ jobs:
           shred -u /home/build/.ssh/aur_key
 
   homebrew-publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [create-release]
     steps:
       - uses: actions/checkout@v4
@@ -1366,7 +1372,7 @@ jobs:
           fi
 
   minot-rat-release-uos-ppa:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-dev-resolute
     needs: [lyrical-release-uos-ppa, ppa-minot-rat-debs]
     steps:
       - name: Download artifacts
