@@ -566,8 +566,9 @@ jobs:
           ulimit -n 65536
           apt-get update
           apt-get install -y openssl
-          export AMENT_TRACE_SETUP_FILES="${AMENT_TRACE_SETUP_FILES:-}"
+          set +u
           source /opt/ros/lyrical/setup.bash
+          set -u
           bash ./scripts/make-deb.bash
 
       - name: "Upload deb"
