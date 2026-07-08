@@ -62,6 +62,16 @@ pub fn run_coordinator(
     rules: Rules,
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) {
+    run_coordinator_with_ready(locked_start, clients, rules, torpedo_tx, None);
+}
+
+fn run_coordinator_with_ready(
+    locked_start: bool,
+    clients: HashSet<String>,
+    rules: Rules,
+    torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+) {
     let coordinator_shutting_down = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let coordinator_shutting_down_in_coord = std::sync::Arc::clone(&coordinator_shutting_down);
     let coordinator_shutting_down_in_scope = std::sync::Arc::clone(&coordinator_shutting_down);
@@ -96,6 +106,34 @@ pub fn run_coordinator(
     tokio::spawn(async move {
         let coordinator =
             std::sync::Arc::new(CoordinatorImpl::new(None, clients_wait_for_ack).await);
+        if let Some(ready_tx) = ready_tx {
+            let _ = ready_tx.send(());
+        }
+        #[cfg(feature = "embed-scope")]
+        {
+            let coordinator_shutting_down_for_scope =
+                std::sync::Arc::clone(&coordinator_shutting_down_in_scope);
+            tokio::spawn(async move {
+                if let Err(e) = mt_scope::Scope::create(mt_scope::ScopeConfig {
+                    name: "minot_scope".to_string(),
+                    mode: mt_scope::Qos::Reliable,
+                })
+                .await
+                {
+                    if coordinator_shutting_down_for_scope.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        debug!("Embedded scope stopped during coordinator shutdown: {}", e);
+                    } else if e.to_string().contains("Receiver task failed to start") {
+                        debug!(
+                            "Embedded scope stopped (likely due to program shutdown): {}",
+                            e
+                        );
+                    } else {
+                        error!("Embedded scope exited with error: {}", e);
+                    }
+                }
+            });
+        }
         let coordinator_for_wind_dispatch = std::sync::Arc::clone(&coordinator);
         let wind_clients_for_dispatch = std::sync::Arc::clone(&wind_clients);
 
@@ -1072,27 +1110,6 @@ pub fn run_coordinator(
         }
         debug!("coord_rx closed");
     });
-
-    #[cfg(feature = "embed-scope")]
-    tokio::spawn(async move {
-        if let Err(e) = mt_scope::Scope::create(mt_scope::ScopeConfig {
-            name: "minot_scope".to_string(),
-            mode: mt_scope::Qos::Reliable,
-        })
-        .await
-        {
-            if coordinator_shutting_down_in_scope.load(std::sync::atomic::Ordering::SeqCst) {
-                debug!("Embedded scope stopped during coordinator shutdown: {}", e);
-            } else if e.to_string().contains("Receiver task failed to start") {
-                debug!(
-                    "Embedded scope stopped (likely due to program shutdown): {}",
-                    e
-                );
-            } else {
-                error!("Embedded scope exited with error: {}", e);
-            }
-        }
-    });
 }
 
 /// Attempt to start a coordinator with the given configuration.
@@ -1105,6 +1122,16 @@ pub fn try_start_with_rules(
     clients: HashSet<String>,
     rules: Rules,
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
+) -> bool {
+    try_start_with_rules_and_ready(locked_start, clients, rules, torpedo_tx, None)
+}
+
+fn try_start_with_rules_and_ready(
+    locked_start: bool,
+    clients: HashSet<String>,
+    rules: Rules,
+    torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> bool {
     let lock_file_path =
         std::env::temp_dir().join(format!("minot-coord_{}.lock", users::get_current_uid()));
@@ -1120,7 +1147,7 @@ pub fn try_start_with_rules(
         return false;
     }
     log::info!("Starting embedded coordinator...");
-    run_coordinator(locked_start, clients, rules, torpedo_tx);
+    run_coordinator_with_ready(locked_start, clients, rules, torpedo_tx, ready_tx);
     // Keep lock file alive until the tokio runtime exits
     tokio::spawn(async move {
         let _lock = lock_file;
@@ -1139,4 +1166,21 @@ pub fn start_default() {
 
 pub fn start_default_with_torpedo(torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>) {
     try_start_with_rules(false, HashSet::new(), Rules::new(), torpedo_tx);
+}
+
+pub async fn start_default_with_torpedo_ready(
+    torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
+) -> bool {
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let started = try_start_with_rules_and_ready(
+        false,
+        HashSet::new(),
+        Rules::new(),
+        torpedo_tx,
+        Some(ready_tx),
+    );
+    if started {
+        let _ = ready_rx.await;
+    }
+    started
 }

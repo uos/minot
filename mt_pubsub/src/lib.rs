@@ -366,13 +366,13 @@ impl Node {
                 .await?
             }
             CoordMode::AutoStart => {
-                mt_sea::ship::NetworkShipImpl::init_with_coord_start(
+                mt_sea::ship::NetworkShipImpl::init_with_coord_auto_start(
                     ShipKind::Rat(config.name.clone()),
                     rm_rules,
                     config.mode,
                     |torpedo_tx| async move {
                         log::info!("No coordinator found, starting embedded coordinator...");
-                        mt_coord::start_default_with_torpedo(torpedo_tx);
+                        mt_coord::start_default_with_torpedo_ready(torpedo_tx).await;
                     },
                 )
                 .await?
