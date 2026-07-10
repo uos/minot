@@ -7,6 +7,8 @@ use mt_sea::{coordinator::CoordinatorImpl, net::PacketKind};
 use mt_net::{ActionPlan, COMPARE_NODE_NAME, RatPubRegisterKind, Rules, VariableHuman};
 use mt_sea::{Coordinator, DISCONNECT_TIMEOUT_MS, Qos, ShipKind, WindData};
 
+const EMBEDDED_COORDINATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Debug)]
 enum MinotTask {
     AppendRule {
@@ -62,7 +64,7 @@ pub fn run_coordinator(
     rules: Rules,
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) {
-    run_coordinator_with_ready(locked_start, clients, rules, torpedo_tx, None);
+    run_coordinator_with_ready(locked_start, clients, rules, torpedo_tx, None, None);
 }
 
 fn run_coordinator_with_ready(
@@ -70,7 +72,8 @@ fn run_coordinator_with_ready(
     clients: HashSet<String>,
     rules: Rules,
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
-    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    startup_failed_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     let coordinator_shutting_down = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let coordinator_shutting_down_in_coord = std::sync::Arc::clone(&coordinator_shutting_down);
@@ -104,10 +107,21 @@ fn run_coordinator_with_ready(
     let coord_tx_new_client = coord_tx.clone();
     let cwa_write = std::sync::Arc::clone(&clients_wait_for_ack);
     tokio::spawn(async move {
-        let coordinator =
-            std::sync::Arc::new(CoordinatorImpl::new(None, clients_wait_for_ack).await);
+        let coordinator = match CoordinatorImpl::new(None, clients_wait_for_ack).await {
+            Ok(coordinator) => std::sync::Arc::new(coordinator),
+            Err(error) => {
+                if let Some(ready_tx) = ready_tx {
+                    let _ = ready_tx.send(Err(error.to_string()));
+                }
+                if let Some(startup_failed_tx) = startup_failed_tx {
+                    let _ = startup_failed_tx.send(());
+                }
+                error!("Failed to start coordinator: {error}");
+                return;
+            }
+        };
         if let Some(ready_tx) = ready_tx {
-            let _ = ready_tx.send(());
+            let _ = ready_tx.send(Ok(()));
         }
         #[cfg(feature = "embed-scope")]
         {
@@ -1131,7 +1145,7 @@ fn try_start_with_rules_and_ready(
     clients: HashSet<String>,
     rules: Rules,
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
-    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> bool {
     let lock_file_path =
         std::env::temp_dir().join(format!("minot-coord_{}.lock", users::get_current_uid()));
@@ -1147,11 +1161,20 @@ fn try_start_with_rules_and_ready(
         return false;
     }
     log::info!("Starting embedded coordinator...");
-    run_coordinator_with_ready(locked_start, clients, rules, torpedo_tx, ready_tx);
-    // Keep lock file alive until the tokio runtime exits
+    let (startup_failed_tx, startup_failed_rx) = tokio::sync::oneshot::channel();
+    run_coordinator_with_ready(
+        locked_start,
+        clients,
+        rules,
+        torpedo_tx,
+        ready_tx,
+        Some(startup_failed_tx),
+    );
+    // Keep the lock alive until runtime exit, but release it if coordinator
+    // initialization fails so a subsequent attempt can recover.
     tokio::spawn(async move {
         let _lock = lock_file;
-        std::future::pending::<()>().await
+        let _ = startup_failed_rx.await;
     });
     true
 }
@@ -1168,9 +1191,14 @@ pub fn start_default_with_torpedo(torpedo_tx: Option<tokio::sync::mpsc::Sender<(
     try_start_with_rules(false, HashSet::new(), Rules::new(), torpedo_tx);
 }
 
-pub async fn start_default_with_torpedo_ready(
+/// Ensure this process has started the default coordinator and wait until its
+/// network join subscriber can accept registrations.
+///
+/// Returns `Ok(false)` when another process already owns the coordinator lock.
+/// Callers should still retry registration: the lock owner may be finishing startup.
+pub async fn ensure_default_coordinator_ready(
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
-) -> bool {
+) -> anyhow::Result<bool> {
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let started = try_start_with_rules_and_ready(
         false,
@@ -1180,7 +1208,18 @@ pub async fn start_default_with_torpedo_ready(
         Some(ready_tx),
     );
     if started {
-        let _ = ready_rx.await;
+        tokio::time::timeout(EMBEDDED_COORDINATOR_READY_TIMEOUT, ready_rx)
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for embedded coordinator readiness"))?
+            .map_err(|_| anyhow::anyhow!("embedded coordinator exited before becoming ready"))?
+            .map_err(anyhow::Error::msg)?;
     }
-    started
+    Ok(started)
+}
+
+#[deprecated(note = "use ensure_default_coordinator_ready")]
+pub async fn start_default_with_torpedo_ready(
+    torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
+) -> anyhow::Result<bool> {
+    ensure_default_coordinator_ready(torpedo_tx).await
 }

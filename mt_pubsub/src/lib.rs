@@ -372,7 +372,9 @@ impl Node {
                     config.mode,
                     |torpedo_tx| async move {
                         log::info!("No coordinator found, starting embedded coordinator...");
-                        mt_coord::start_default_with_torpedo_ready(torpedo_tx).await;
+                        mt_coord::ensure_default_coordinator_ready(torpedo_tx)
+                            .await
+                            .map(|_| ())
                     },
                 )
                 .await?

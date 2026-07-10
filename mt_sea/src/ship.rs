@@ -567,14 +567,19 @@ impl NetworkShipImpl {
             kind,
             rm_rules_on_disconnect,
             node_mode,
-            start_coord,
-            false,
+            move |tx| async move {
+                start_coord(tx).await;
+                Ok(())
+            },
         )
         .await
     }
 
-    /// Like `init_with_coord_start`, but also starts the coordinator and retries once
-    /// if the initial client session cannot be opened.
+    /// Like `init_with_coord_start`, retained as the explicit auto-start entry point.
+    ///
+    /// Coordinator startup is triggered only by registration timeout. A failure to
+    /// open the client session may be unrelated to coordinator availability and is
+    /// therefore returned unchanged.
     pub async fn init_with_coord_auto_start<F, Fut>(
         kind: ShipKind,
         rm_rules_on_disconnect: bool,
@@ -583,10 +588,9 @@ impl NetworkShipImpl {
     ) -> anyhow::Result<Self>
     where
         F: FnOnce(Option<tokio::sync::mpsc::Sender<()>>) -> Fut,
-        Fut: std::future::Future<Output = ()>,
+        Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
-        Self::init_with_coord_start_impl(kind, rm_rules_on_disconnect, node_mode, start_coord, true)
-            .await
+        Self::init_with_coord_start_impl(kind, rm_rules_on_disconnect, node_mode, start_coord).await
     }
 
     async fn init_with_coord_start_impl<F, Fut>(
@@ -594,11 +598,10 @@ impl NetworkShipImpl {
         rm_rules_on_disconnect: bool,
         node_mode: Qos,
         start_coord: F,
-        retry_client_init_with_coord_start: bool,
     ) -> anyhow::Result<Self>
     where
         F: FnOnce(Option<tokio::sync::mpsc::Sender<()>>) -> Fut,
-        Fut: std::future::Future<Output = ()>,
+        Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
         let mut start_coord = Some(start_coord);
 
@@ -606,22 +609,7 @@ impl NetworkShipImpl {
         // the coordinator can signal this node to shut down via the torpedo mechanism.
         let (torpedo_tx, mut torpedo_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-        let client = match Client::init(kind.clone(), rm_rules_on_disconnect, node_mode).await {
-            Ok(client) => client,
-            Err(first_error) if retry_client_init_with_coord_start => {
-                if let Some(start_coord) = start_coord.take() {
-                    start_coord(Some(torpedo_tx.clone())).await;
-                }
-                Client::init(kind.clone(), rm_rules_on_disconnect, node_mode)
-                    .await
-                    .map_err(|retry_error| {
-                        anyhow!(
-                            "failed to initialize client before and after starting coordinator: {first_error}; retry failed: {retry_error}"
-                        )
-                    })?
-            }
-            Err(error) => return Err(error),
-        };
+        let client = Client::init(kind.clone(), rm_rules_on_disconnect, node_mode).await?;
         let client = Arc::new(tokio::sync::Mutex::new(client));
 
         info!("{:?} Registering for network...", &kind);
@@ -642,7 +630,7 @@ impl NetworkShipImpl {
             Err(_elapsed) => {
                 // No coordinator found — call the provided startup function and retry
                 if let Some(start_coord) = start_coord.take() {
-                    start_coord(Some(torpedo_tx)).await;
+                    start_coord(Some(torpedo_tx)).await?;
                 }
                 tokio::time::sleep(Duration::from_millis(COORDINATOR_STARTUP_WAIT_MS)).await;
                 match try_register().await {

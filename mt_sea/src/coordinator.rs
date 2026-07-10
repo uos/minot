@@ -357,8 +357,8 @@ impl CoordinatorImpl {
     pub async fn new(
         external_ip: Option<[u8; 4]>,
         clients_wait_for_ack: std::sync::Arc<std::sync::RwLock<bool>>,
-    ) -> Self {
-        let sea = crate::net::Sea::init(external_ip, clients_wait_for_ack).await;
+    ) -> anyhow::Result<Self> {
+        let sea = crate::net::Sea::init(external_ip, clients_wait_for_ack).await?;
 
         let rat_queues = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let (new_rat_note, _) = tokio::sync::broadcast::channel::<String>(128);
@@ -407,13 +407,13 @@ impl CoordinatorImpl {
             }
         });
 
-        Self {
+        Ok(Self {
             sea,
             rat_qs: rat_queues,
             new_rat_note,
             new_client_notify,
             be_subscriptions: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
             be_publisher_vars: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
-        }
+        })
     }
 }

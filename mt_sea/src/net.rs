@@ -180,7 +180,7 @@ impl Sea {
     pub async fn init(
         _external_ip: Option<[u8; 4]>,
         clients_wait_for_ack: std::sync::Arc<std::sync::RwLock<bool>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let domain_id = get_domain_id();
         if domain_id > 0 {
             info!("Coordinator using domain ID {}", domain_id);
@@ -190,7 +190,7 @@ impl Sea {
         let config = crate::network::zenoh_config(crate::network::NetworkRole::Coordinator);
         let session = zenoh::open(config)
             .wait()
-            .expect("Failed to open Zenoh session");
+            .map_err(|e| anyhow::anyhow!("Failed to open coordinator Zenoh session: {e}"))?;
         let session = std::sync::Arc::new(session);
 
         let (clients_tx, _clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(64);
@@ -203,13 +203,12 @@ impl Sea {
         let session_clone = std::sync::Arc::clone(&session);
         let clwa = std::sync::Arc::clone(&clients_wait_for_ack);
         let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let subscriber = session
+            .declare_subscriber(join_key.clone())
+            .wait()
+            .map_err(|e| anyhow::anyhow!("Failed to create coordinator join subscriber: {e}"))?;
 
         tokio::spawn(async move {
-            let subscriber = session_clone
-                .declare_subscriber(join_key.clone())
-                .wait()
-                .expect("Failed to create join subscriber");
-
             info!("Sea coordinator listening on {}", join_key);
 
             loop {
@@ -406,11 +405,11 @@ impl Sea {
             }
         });
 
-        Self {
+        Ok(Self {
             network_clients_chan: clients_tx,
             session,
             domain_id,
-        }
+        })
     }
 
     pub fn pad_string(input: &str) -> String {
