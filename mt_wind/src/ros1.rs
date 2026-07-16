@@ -199,6 +199,9 @@ pub async fn run_dyn_wind(
                         "Any-Types are not supported for ROS1 due to different message encodings."
                     )
                 }
+                mt_net::SensorTypeMapped::Clock(_) => {
+                    error!("Synthetic ROS2 /clock messages are not supported by ROS1 wind.")
+                }
                 mt_net::SensorTypeMapped::Odometry(odom_msg) => {
                     let mut existing_pubber = odom_publishers.get(&data.topic);
                     if existing_pubber.is_none() {

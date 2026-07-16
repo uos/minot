@@ -30,6 +30,8 @@ use std::fmt;
 pub mod qos;
 pub use mt_net::Qos::*;
 
+const CLOCK_ROS2_TYPE: &str = "rosgraph_msgs/msg/Clock";
+
 #[cfg(feature = "db3")]
 struct Db3State {
     conn: std::sync::Mutex<Connection>,
@@ -364,6 +366,12 @@ fn deserialize_message(
                     cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
                 let d: Odometry = unsafe { std::mem::transmute(dec) };
                 Ok(SensorTypeMapped::Odometry(d))
+            }
+            CLOCK_ROS2_TYPE => {
+                let dec: ros2_interfaces_jazzy_serde::rosgraph_msgs::msg::Clock =
+                    cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+                let d: mt_net::Clock = unsafe { std::mem::transmute(dec) };
+                Ok(SensorTypeMapped::Clock(d))
             }
             _ => Ok(SensorTypeMapped::Any(data.to_vec())),
         },
@@ -1085,10 +1093,16 @@ impl Bagfile {
         Ok(())
     }
 
-    /// Returns the next message from the bag in chronological order, or `None` at end of bag.
-    /// The `u64` is nanoseconds since the start of the bag (relative timestamp).
-    /// O(1) memory — exactly one message is deserialized per call.
     pub fn next_message(&mut self) -> anyhow::Result<Option<(u64, BagMsg)>> {
+        Ok(self
+            .next_message_with_timestamp()?
+            .map(|(relative_ns, _absolute_ns, msg)| (relative_ns, msg)))
+    }
+
+    /// Returns the next message from the bag in chronological order, or `None` at end of bag.
+    /// The first `u64` is nanoseconds since the start of the bag, the second is the bag timestamp.
+    /// O(1) memory — exactly one message is deserialized per call.
+    pub fn next_message_with_timestamp(&mut self) -> anyhow::Result<Option<(u64, u64, BagMsg)>> {
         if let Some(reader) = self.reader.as_mut() {
             let file = self.file.as_mut().ok_or_else(|| anyhow!("file not open"))?;
             let buf = &mut self.read_buffer;
@@ -1131,6 +1145,7 @@ impl Bagfile {
 
                         return Ok(Some((
                             relative_ns,
+                            header.log_time,
                             BagMsg {
                                 topic: channel.topic.clone(),
                                 msg_type: topic_type,
@@ -1188,6 +1203,7 @@ impl Bagfile {
 
                     Ok(Some((
                         relative_ns,
+                        ts,
                         BagMsg {
                             topic: topic_name,
                             msg_type: topic_type,

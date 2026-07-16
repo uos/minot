@@ -9,9 +9,9 @@ Minot is on [crates.io](https://crates.io/crates/minot), so Rustaceans can just 
 Since this method builds Minot from source, we can fully leverage the `--features` flags for selecting our embedded components:
 
 - `embed-coord` - Coordinator (default)
+- `embed-mt-pubsub` - MtPubSub publisher (default non-ROS backend)
 - `embed-ros2-c` - ROS 2 publisher - needs sourced ROS environment
 - `embed-ros2-c-humble` - ROS 2 Humble publisher - needs sourced ROS environment. *Required for Humble because of changes in QoS.*
-- `embed-mt-pubsub` - MtPubSub publisher
 - `embed-ros1-native` - ROS1 publisher (native, no system dependencies)
 - `embed-ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
 
@@ -72,4 +72,3 @@ brew install minot
 ~~~
 
 ---
-

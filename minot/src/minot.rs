@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 mod runner;
 use clap_complete::Shell;
 use log::{error, info, warn};
@@ -100,6 +100,22 @@ pub struct AsyncPlayArgs {
     /// Playback rate multiplier (1.0 = real-time, 2.0 = 2× speed, 0.5 = half speed)
     #[arg(long, default_value_t = 1.0)]
     pub rate: f64,
+
+    /// Publish simulated time on /clock, like `ros2 bag play --clock`
+    #[arg(long)]
+    pub clock: bool,
+
+    /// QoS to use when a bag publisher has no recorded QoS profile.
+    #[arg(long, value_enum, default_value = "system-default")]
+    pub missing_qos: AsyncMissingQos,
+}
+
+#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+pub enum AsyncMissingQos {
+    Sensor,
+    Reliable,
+    #[default]
+    SystemDefault,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -605,7 +621,56 @@ fn has_feature(feature_name: &str) -> bool {
     }
 }
 
-async fn async_play(path: PathBuf, rate: f64) -> anyhow::Result<()> {
+fn clock_msg(timestamp_ns: u64) -> anyhow::Result<mt_net::BagMsg> {
+    let mut clock = mt_net::Clock::default();
+    clock.clock.sec = i32::try_from(timestamp_ns / 1_000_000_000)?;
+    clock.clock.nanosec = u32::try_from(timestamp_ns % 1_000_000_000)?;
+
+    Ok(mt_net::BagMsg {
+        topic: "/clock".to_string(),
+        msg_type: "rosgraph_msgs/msg/Clock".to_string(),
+        data: mt_net::SensorTypeMapped::Clock(clock),
+        qos: Some(mt_net::Qos::SystemDefault),
+    })
+}
+
+fn reliable_qos_profile() -> mt_net::QosProfile {
+    mt_net::QosProfile {
+        history: "keep_last".to_string(),
+        depth: 10,
+        reliability: "reliable".to_string(),
+        durability: "volatile".to_string(),
+        deadline: mt_net::QosTime {
+            sec: 9223372036,
+            nsec: 854775807,
+        },
+        lifespan: mt_net::QosTime {
+            sec: 9223372036,
+            nsec: 854775807,
+        },
+        liveliness: "automatic".to_string(),
+        liveliness_lease_duration: mt_net::QosTime {
+            sec: 9223372036,
+            nsec: 854775807,
+        },
+        avoid_ros_namespace_conventions: false,
+    }
+}
+
+fn missing_qos_profile(qos: AsyncMissingQos) -> mt_net::Qos {
+    match qos {
+        AsyncMissingQos::Sensor => mt_net::Qos::Sensor,
+        AsyncMissingQos::Reliable => mt_net::Qos::Custom(reliable_qos_profile()),
+        AsyncMissingQos::SystemDefault => mt_net::Qos::SystemDefault,
+    }
+}
+
+async fn async_play(
+    path: PathBuf,
+    rate: f64,
+    publish_clock: bool,
+    missing_qos: AsyncMissingQos,
+) -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("zenoh", log::LevelFilter::Warn)
         .filter_module("zenoh::api::admin", log::LevelFilter::Off)
@@ -711,13 +776,14 @@ async fn async_play(path: PathBuf, rate: f64) -> anyhow::Result<()> {
     info!("Playing bag: {}", path.display());
 
     let mut first_ts: Option<u64> = None;
+    let mut last_clock_ts: Option<u64> = None;
     let wall_start = tokio::time::Instant::now();
 
     let disconnect = ship.disconnect.clone();
     loop {
-        let msg_opt = tokio::task::block_in_place(|| bagfile.next_message())?;
+        let msg_opt = tokio::task::block_in_place(|| bagfile.next_message_with_timestamp())?;
 
-        let (ts, msg) = match msg_opt {
+        let (ts, absolute_ts, mut msg) = match msg_opt {
             Some(m) => m,
             None => break,
         };
@@ -743,11 +809,24 @@ async fn async_play(path: PathBuf, rate: f64) -> anyhow::Result<()> {
             return Ok(());
         }
 
-        ship.send_wind(vec![mt_sea::net::WindAt {
+        if msg.qos.is_none() {
+            msg.qos = Some(missing_qos_profile(missing_qos));
+        }
+
+        let mut wind = Vec::with_capacity(if publish_clock { 2 } else { 1 });
+        if publish_clock && msg.topic != "/clock" && last_clock_ts != Some(absolute_ts) {
+            wind.push(mt_sea::net::WindAt {
+                data: clock_msg(absolute_ts)?,
+                at_var: None,
+            });
+            last_clock_ts = Some(absolute_ts);
+        }
+        wind.push(mt_sea::net::WindAt {
             data: msg,
             at_var: None,
-        }])
-        .await?;
+        });
+
+        ship.send_wind(wind).await?;
     }
 
     info!("Bag playback complete.");
@@ -1642,7 +1721,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::Sync(tui_args) => tui(tui_args.file).await,
-        Commands::AsyncPlay(args) => async_play(args.path, args.rate).await.map_err(|e| e.into()),
+        Commands::AsyncPlay(args) => async_play(args.path, args.rate, args.clock, args.missing_qos)
+            .await
+            .map_err(|e| e.into()),
         Commands::Serve => serve().await,
         Commands::Headless(headless_args) => {
             runner::run(

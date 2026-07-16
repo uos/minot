@@ -137,6 +137,7 @@ pub async fn run_dyn_wind(
     let mut cloud_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
+    let mut clock_publishers = HashMap::new();
     let mut any_type_warned = false;
 
     let mut wind_receiver = wind(wind_name).await?;
@@ -251,6 +252,34 @@ pub async fn run_dyn_wind(
 
                     pubber.async_publish(odom_msg).await?;
                     debug!("published odometry");
+                }
+                mt_net::SensorTypeMapped::Clock(clock_msg) => {
+                    let mut existing_pubber = clock_publishers.get(&topic_parse);
+                    if existing_pubber.is_none() {
+                        let pubber = node
+                            .create_publisher::<ros2_interfaces_jazzy_serde::rosgraph_msgs::msg::Clock>(
+                                &node.create_topic(&wanted_topic, pub_type, &qos).unwrap(),
+                                None,
+                            )
+                            .unwrap();
+                        clock_publishers.insert(topic_parse.clone(), pubber);
+                        existing_pubber = Some(
+                            clock_publishers
+                                .get(&topic_parse)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    let clock_msg = unsafe {
+                        std::mem::transmute::<
+                            ros2_interfaces_jazzy_rkyv::rosgraph_msgs::msg::Clock,
+                            _,
+                        >(clock_msg)
+                    };
+
+                    pubber.async_publish(clock_msg).await?;
+                    debug!("published clock");
                 }
             }
         }

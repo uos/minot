@@ -1,4 +1,5 @@
 pub use ros2_interfaces_jazzy_rkyv::nav_msgs::msg::Odometry;
+pub use ros2_interfaces_jazzy_rkyv::rosgraph_msgs::msg::Clock;
 pub use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -158,6 +159,7 @@ pub enum SensorTypeMapped {
     Lidar(PointCloud2),
     Imu(Imu),
     Odometry(Odometry),
+    Clock(Clock),
     Any(Vec<u8>),
 }
 

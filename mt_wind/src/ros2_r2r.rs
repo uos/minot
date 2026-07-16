@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Mutex;
 
@@ -22,6 +22,7 @@ use mt_sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use r2r::nav_msgs::msg::Odometry;
+use r2r::rosgraph_msgs::msg::Clock;
 use r2r::sensor_msgs::msg::{Imu, PointCloud2};
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
@@ -158,6 +159,8 @@ pub async fn run_dyn_wind(
     let node = std::sync::Arc::new(Mutex::new(node));
 
     let mut publishers: HashMap<String, r2r::PublisherUntyped> = HashMap::new();
+    let mut unsupported_publishers: HashSet<(String, String)> = HashSet::new();
+    let mut missing_qos_warned: HashSet<(String, String)> = HashSet::new();
 
     let mut wind_receiver = wind(wind_name).await?;
 
@@ -167,18 +170,36 @@ pub async fn run_dyn_wind(
 
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
+            let publisher_key = (data.topic.clone(), data.msg_type.clone());
             let qos = match data.qos {
                 Some(qos) => QosR2RMap::try_from(qos)?.0,
                 None => {
-                    warn!("Received message without QOS, choosing system default");
-                    // TODO debounce warning or only use info
+                    if missing_qos_warned.insert(publisher_key.clone()) {
+                        warn!(
+                            "Received message without QOS for topic {} with type {}, choosing system default",
+                            data.topic, data.msg_type
+                        );
+                    }
                     Qos::default().into()
                 }
             };
+            if unsupported_publishers.contains(&publisher_key) {
+                continue;
+            }
             let mut existing_pubber = publishers.get(&data.topic);
             if existing_pubber.is_none() {
                 let mut lock = node.lock().unwrap();
-                let pubber = lock.create_publisher_untyped(&data.topic, &data.msg_type, qos)?;
+                let pubber = match lock.create_publisher_untyped(&data.topic, &data.msg_type, qos) {
+                    Ok(pubber) => pubber,
+                    Err(e) => {
+                        warn!(
+                            "Skipping ROS2-C publication for topic {} with type {}: {}",
+                            data.topic, data.msg_type, e
+                        );
+                        unsupported_publishers.insert(publisher_key);
+                        continue;
+                    }
+                };
 
                 publishers.insert(data.topic.clone(), pubber);
                 existing_pubber = Some(
@@ -263,6 +284,20 @@ pub async fn run_dyn_wind(
                 mt_net::SensorTypeMapped::Any(raw_data) => {
                     pubber.publish_raw(&raw_data)?;
                     debug!("published raw");
+                }
+                mt_net::SensorTypeMapped::Clock(clock_msg) => {
+                    let native_t = Clock {
+                        clock: Time {
+                            sec: clock_msg.clock.sec,
+                            nanosec: clock_msg.clock.nanosec,
+                        },
+                    };
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding CDR")?;
+
+                    pubber.publish_raw(&raw)?;
+                    debug!("published clock");
                 }
                 mt_net::SensorTypeMapped::Odometry(odometry) => {
                     let native_t = Odometry {

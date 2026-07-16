@@ -48,6 +48,7 @@ pub async fn run_dyn_wind(
     let mut odom_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
     let mut any_type_warned = false;
+    let mut clock_warned = false;
     if ready.send(()).is_err() {
         warn!("mt_pubsub could not signal to be ready to handle requests");
     }
@@ -115,6 +116,12 @@ pub async fn run_dyn_wind(
                         existing_pubber.expect("Should be inserted manually if not exists.");
                     pubber.publish(&odom_msg).await?;
                     debug!("published odometry");
+                }
+                SensorTypeMapped::Clock(_) => {
+                    if !clock_warned {
+                        warn!("Synthetic /clock is only published by ROS winds, skipping.");
+                        clock_warned = true;
+                    }
                 }
             }
         }

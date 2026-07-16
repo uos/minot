@@ -168,11 +168,11 @@ ${BOLD}OPTIONS:${NC}
     -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (lyrical, jazzy, humble). Requires ROS2 sourced.
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
-    -n, --no-default-embed    Do not enable the default 'coord' embed when building
+    -n, --no-default-embed    Do not enable the default embedded backend when building
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
-    mt_pubsub     MtPubsub publisher
+    mt_pubsub     MtPubsub publisher (default non-ROS backend)
     ros2-c        ROS2 publisher using the C bindings of rclc (needs sourced ROS)
     ros2-c-humble ROS2 publisher with specific handling of Humble using the C bindings of rclc (needs sourced ROS Humble)
     ros1-native   ROS1 publisher (native, no system dependencies)
@@ -185,8 +185,8 @@ ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Install with ROS2 Jazzy support${NC}
     ./install.sh --ros-distro jazzy
 
-    ${CYAN}# Build with multiple embedded components and force build from source${NC}
-    ./install.sh --build --embed jazzy,mt_pubsub
+    ${CYAN}# Build the default non-ROS backend from source${NC}
+    ./install.sh --build
 
     ${CYAN}# Resolve to a semver compatible version${NC}
     ./install.sh --version 0.1
@@ -783,7 +783,7 @@ download_and_install() {
         req="$2"
         case "$binname" in
             minot|minot-coord) return 0 ;;
-            wind-mt-pubsub*|wind-ratpub*) echo "$req" | grep -Eq '(\bembed-mt-pubsub\b|\bembed-ros\b)' && return 0 || return 1 ;;
+            wind-mt-pubsub*|wind-ratpub*) echo "$req" | grep -Eq '\bembed-mt-pubsub\b' && return 0 || return 1 ;;
             wind-ros1*)   echo "$req" | grep -Eq '(\bembed-ros1-native\b|\bembed-ros\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
             wind-ros2-native*) echo "$req" | grep -Eq '(\bembed-ros2-native\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
             wind-ros2-c*) echo "$req" | grep -Eq '(\bembed-ros2-c\b|\bembed-ros2-c-[a-z]+\b|\bembed-ros\b)' && return 0 || return 1 ;;
@@ -807,7 +807,10 @@ download_and_install() {
         
         if [ -z "$best_path" ]; then
             case ",$req," in
-                *,embed-mt-pubsub,*|*,embed-ratpub,*) [ -x "$root/mt_pubsub/minot" ] && best_path="$root/mt_pubsub/minot" ;;
+                *,embed-mt-pubsub,*|*,embed-ratpub,*)
+                    [ -x "$root/min/minot" ] && best_path="$root/min/minot"
+                    [ -z "$best_path" ] && [ -x "$root/rat/minot" ] && best_path="$root/rat/minot"
+                    ;;
                 *,embed-coord,*)  [ -x "$root/co/minot" ] && best_path="$root/co/minot" ;;
             esac
         fi
@@ -933,20 +936,29 @@ build_from_source() {
 
     BUILD_FEATURES="$FEATURES"
     
+    DEFAULT_FEATURES="embed-coord"
+    case ",$BUILD_FEATURES," in
+        *,embed-ros,*|*,embed-ros1-native,*|*,embed-ros2-native,*|*,embed-ros2-c,*|*,embed-ros2-c-*,*) ;;
+        *)
+            if [ -z "$ROS_DISTRO" ]; then
+                DEFAULT_FEATURES="$DEFAULT_FEATURES embed-mt-pubsub"
+            fi
+            ;;
+    esac
+
     if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
-        case ",$BUILD_FEATURES," in
-            *,embed-coord,*)
-                # already present, do nothing
-                ;;
-            *)
-                # Add embed-coord to the features
-                if [ -n "$BUILD_FEATURES" ]; then
-                    BUILD_FEATURES="embed-coord,${BUILD_FEATURES}"
-                else
-                    BUILD_FEATURES="embed-coord"
-                fi
-                ;;
-        esac
+        for default_feat in $DEFAULT_FEATURES; do
+            case ",$BUILD_FEATURES," in
+                *,${default_feat},*) ;;
+                *)
+                    if [ -n "$BUILD_FEATURES" ]; then
+                        BUILD_FEATURES="${BUILD_FEATURES},${default_feat}"
+                    else
+                        BUILD_FEATURES="${default_feat}"
+                    fi
+                    ;;
+            esac
+        done
     fi
 
     if [ -n "$ROS_DISTRO" ]; then
@@ -966,8 +978,25 @@ build_from_source() {
                     BUILD_FEATURES="${ROS2_C_FEATURE}"
                 fi
                 ;;
-        esac
+            esac
     fi
+
+    DISABLE_CARGO_DEFAULTS="$NO_DEFAULT_EMBED"
+    case ",$BUILD_FEATURES," in
+        *,embed-ros,*|*,embed-ros1-native,*|*,embed-ros2-native,*|*,embed-ros2-c,*|*,embed-ros2-c-*,*)
+            DISABLE_CARGO_DEFAULTS=1
+            case ",$BUILD_FEATURES," in
+                *,db3,*) ;;
+                *)
+                    if [ -n "$BUILD_FEATURES" ]; then
+                        BUILD_FEATURES="${BUILD_FEATURES},db3"
+                    else
+                        BUILD_FEATURES="db3"
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
 
     info "Building with features: ${CYAN}$BUILD_FEATURES${NC}"
 
@@ -1081,7 +1110,7 @@ build_from_source() {
     cd "$TMP_BUILD_DIR" || error "Failed to enter build directory"
 
     BUILD_CMD="cargo build --release --locked"
-    if [ "$NO_DEFAULT_EMBED" -eq 1 ]; then
+    if [ "$DISABLE_CARGO_DEFAULTS" -eq 1 ]; then
         BUILD_CMD="$BUILD_CMD --no-default-features"
     fi
     if [ -n "$BUILD_FEATURES" ]; then
@@ -1484,6 +1513,11 @@ main() {
         warn "Could not determine a prebuilt target triple; will build from source"
         FORCE_BUILD=1
     fi
+
+    if [ "$NO_DEFAULT_EMBED" -eq 1 ] && [ "$FORCE_BUILD" -eq 0 ]; then
+        info "--no-default-embed requested; building from source."
+        FORCE_BUILD=1
+    fi
     
     if [ $FORCE_BUILD -eq 0 ]; then
         if [ -z "$VERSION" ]; then
@@ -1519,17 +1553,29 @@ main() {
             REQUESTED_FEATURES="$FEATURES"
         fi
 
+        DEFAULT_FEATURES="embed-coord"
+        case ",$REQUESTED_FEATURES," in
+            *,embed-ros,*|*,embed-ros1-native,*|*,embed-ros2-native,*|*,embed-ros2-c,*|*,embed-ros2-c-*,*) ;;
+            *)
+                if [ -z "$ROS_DISTRO" ]; then
+                    DEFAULT_FEATURES="$DEFAULT_FEATURES embed-mt-pubsub"
+                fi
+                ;;
+        esac
+
         if [ "$NO_DEFAULT_EMBED" -eq 0 ]; then
-             case ",$REQUESTED_FEATURES," in
-                *,embed-coord,*) ;;
-                *)
-                    if [ -n "$REQUESTED_FEATURES" ]; then
-                        REQUESTED_FEATURES="embed-coord,${REQUESTED_FEATURES}"
-                    else
-                        REQUESTED_FEATURES="embed-coord"
-                    fi
-                    ;;
-            esac
+            for default_feat in $DEFAULT_FEATURES; do
+                case ",$REQUESTED_FEATURES," in
+                    *,${default_feat},*) ;;
+                    *)
+                        if [ -n "$REQUESTED_FEATURES" ]; then
+                            REQUESTED_FEATURES="${REQUESTED_FEATURES},${default_feat}"
+                        else
+                            REQUESTED_FEATURES="${default_feat}"
+                        fi
+                        ;;
+                esac
+            done
         fi
 
         if [ -n "$ROS_DISTRO" ]; then
