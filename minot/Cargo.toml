@@ -65,6 +65,9 @@ embed-ros2-c-humble = ["embed-ros2-c-turbine", "mt_wind/humble"]
 # Use a native Rust implementation of ROS2 (ros2-client crate). Not stable for publishing the "any" type.
 embed-ros2-native = ["embed-ros2-turbine"]
 
+# Publish ROS 2 messages through ZettaScaleLabs Hiroz.
+embed-hiroz = ["embed-hiroz-turbine"]
+
 # Use a native Rust ROS implementation so no ROS installation needed. Can only publish non-any typed topics.
 embed-ros1-native = ["embed-ros1-turbine"]
 
@@ -75,6 +78,7 @@ embed-mt-pubsub = ["embed-mt-pubsub-turbine"]
 embed-coord = []
 embed-ros2-turbine = ["dep:mt_wind", "mt_wind/ros2-native"]
 embed-ros2-c-turbine = ["dep:mt_wind", "mt_wind/ros2-c"]
+embed-hiroz-turbine = ["dep:mt_wind", "mt_wind/hiroz"]
 embed-ros1-turbine = ["dep:mt_wind", "mt_wind/ros1-native"]
 embed-mt-pubsub-turbine = ["dep:mt_wind", "mt_wind/mt_pubsub"]
 
@@ -86,6 +90,7 @@ features = [
   "embed-ros2-c",
   "embed-ros2-c-humble",
   "embed-ros2-native",
+  "embed-hiroz",
 ]
 default-target = "x86_64-unknown-linux-gnu"
 rustdoc-args = ["--cfg", "docsrs"]

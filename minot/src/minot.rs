@@ -32,6 +32,8 @@ use crate::{
 const EMBED_ROS2_TURBINE_NAME: &'static str = "embedded_ros2_turbine";
 #[cfg(feature = "embed-ros2-c-turbine")]
 const EMBED_ROS2_C_TURBINE_NAME: &'static str = "embedded_ros2_c_turbine";
+#[cfg(feature = "embed-hiroz-turbine")]
+const EMBED_HIROZ_TURBINE_NAME: &'static str = "embedded_hiroz_turbine";
 #[cfg(feature = "embed-ros1-turbine")]
 const EMBED_ROS1_TURBINE_NAME: &'static str = "embedded_ros1_turbine";
 #[cfg(feature = "embed-mt-pubsub-turbine")]
@@ -275,6 +277,13 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             clients.insert(wind_name);
         }
 
+        #[cfg(feature = "embed-hiroz-turbine")]
+        {
+            let wind_name =
+                mt_wind::get_env_or_default("wind_hiroz_name", &EMBED_HIROZ_TURBINE_NAME)?;
+            clients.insert(wind_name);
+        }
+
         #[cfg(feature = "embed-ros1-turbine")]
         {
             let wind_name =
@@ -335,6 +344,27 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                     error!(
                         "Error in embedded ROS2-C turbine. Reload the App after the fix. Maybe you haven't sourced the message type you tried to publish. {e}"
                     )
+                }
+            }
+        });
+    }
+
+    #[cfg(feature = "embed-hiroz-turbine")]
+    {
+        let wind_name = mt_wind::get_env_or_default("wind_hiroz_name", &EMBED_HIROZ_TURBINE_NAME)?;
+
+        tokio::spawn(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            tokio::spawn(async move {
+                // dump ready answer
+                _ = rx.await;
+            });
+            let res = mt_wind::hiroz::run_dyn_wind(&wind_name, tx).await;
+            match res {
+                Ok(_) => {} // will never return
+                Err(e) => {
+                    error!("Error in embedded Hiroz turbine. Reload the App. {e}")
                 }
             }
         });
@@ -574,6 +604,9 @@ fn get_compiled_features() -> Vec<String> {
     #[cfg(feature = "embed-ros2-c-turbine")]
     features.push("ros2-c".to_string());
 
+    #[cfg(feature = "embed-hiroz-turbine")]
+    features.push("hiroz".to_string());
+
     features
 }
 
@@ -617,6 +650,12 @@ fn has_feature(feature_name: &str) -> bool {
             #[cfg(not(feature = "embed-ros2-c-humble"))]
             return false;
         }
+        "hiroz" => {
+            #[cfg(feature = "embed-hiroz-turbine")]
+            return true;
+            #[cfg(not(feature = "embed-hiroz-turbine"))]
+            return false;
+        }
         _ => false,
     }
 }
@@ -629,6 +668,7 @@ fn clock_msg(timestamp_ns: u64) -> anyhow::Result<mt_net::BagMsg> {
     Ok(mt_net::BagMsg {
         topic: "/clock".to_string(),
         msg_type: "rosgraph_msgs/msg/Clock".to_string(),
+        type_description_hash: None,
         data: mt_net::SensorTypeMapped::Clock(clock),
         qos: Some(mt_net::Qos::SystemDefault),
     })
@@ -723,6 +763,20 @@ async fn async_play(
             match mt_wind::ros2_r2r::run_dyn_wind(&wind_name, tx).await {
                 Ok(_) => {}
                 Err(e) => error!("Error in embedded ROS2-C turbine: {e}"),
+            }
+        });
+    }
+
+    #[cfg(feature = "embed-hiroz-turbine")]
+    {
+        let wind_name = mt_wind::get_env_or_default("wind_hiroz_name", &EMBED_HIROZ_TURBINE_NAME)?;
+        clients.insert(wind_name.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        ready_rxs.push(rx);
+        tokio::spawn(async move {
+            match mt_wind::hiroz::run_dyn_wind(&wind_name, tx).await {
+                Ok(_) => {}
+                Err(e) => error!("Error in embedded Hiroz turbine: {e}"),
             }
         });
     }
@@ -1181,6 +1235,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 clients.insert(wind_name);
                             }
 
+                            #[cfg(feature = "embed-hiroz-turbine")]
+                            {
+                                let wind_name = mt_wind::get_env_or_default(
+                                    "wind_hiroz_name",
+                                    &EMBED_HIROZ_TURBINE_NAME,
+                                )?;
+                                clients.insert(wind_name);
+                            }
+
                             #[cfg(feature = "embed-ros1-turbine")]
                             {
                                 let wind_name = mt_wind::get_env_or_default(
@@ -1289,6 +1352,32 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         };
                         #[cfg(not(feature = "embed-ros2-c-turbine"))]
                         let ros2_c_ready_rx: Option<
+                            tokio::sync::oneshot::Receiver<()>,
+                        > = None;
+
+                        #[cfg(feature = "embed-hiroz-turbine")]
+                        let hiroz_ready_rx = {
+                            let wind_name = mt_wind::get_env_or_default(
+                                "wind_hiroz_name",
+                                &EMBED_HIROZ_TURBINE_NAME,
+                            )?;
+
+                            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                            tokio::spawn(async move {
+                                let res = mt_wind::hiroz::run_dyn_wind(&wind_name, ready_tx).await;
+                                match res {
+                                    Ok(_) => {} // will never return
+                                    Err(e) => {
+                                        error!(
+                                            "Error in embedded Hiroz turbine. Reload the App. {e}"
+                                        )
+                                    }
+                                }
+                            });
+                            Some(ready_rx)
+                        };
+                        #[cfg(not(feature = "embed-hiroz-turbine"))]
+                        let hiroz_ready_rx: Option<
                             tokio::sync::oneshot::Receiver<()>,
                         > = None;
 
@@ -1510,6 +1599,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 match rx.await {
                                     Ok(_) => info!("ros2-c wind ready"),
                                     Err(_) => warn!("ros2-c wind ready signal dropped"),
+                                }
+                            }));
+                        }
+                        if let Some(rx) = hiroz_ready_rx {
+                            ready_futures.push(tokio::spawn(async move {
+                                match rx.await {
+                                    Ok(_) => info!("hiroz wind ready"),
+                                    Err(_) => warn!("hiroz wind ready signal dropped"),
                                 }
                             }));
                         }

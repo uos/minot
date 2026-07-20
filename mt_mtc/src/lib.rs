@@ -1132,7 +1132,7 @@ where
     .or(variable)
     .labelled("term");
 
-    let range = choice((numberrange, timerange.clone(), wayrange));
+    let range = choice((numberrange, timerange.clone(), wayrange)).boxed();
 
     let rhs_array = recursive(|rhs_array| {
         choice((term, range.clone(), value, rhs_array))
@@ -1141,9 +1141,10 @@ where
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen))
             .map(|arr: Vec<Rhs>| Rhs::Array(arr.into_iter().map(Box::new).collect::<Vec<_>>()))
-    });
+    })
+    .boxed();
 
-    let rhs = choice((term, range, value, rhs_array));
+    let rhs = choice((term, range, value, rhs_array)).boxed();
 
     // parse a comma-separated list of terms (the left-hand side).
     let comma = just(Token::Comma).then_ignore(just(Token::NewLine).repeated());
@@ -1152,7 +1153,8 @@ where
         .separated_by(comma)
         .at_least(1)
         .collect::<Vec<_>>()
-        .labelled("rule term");
+        .labelled("rule term")
+        .boxed();
 
     let op = select! {
         Token::OpAssignToRight => Operator::Right,
@@ -1262,7 +1264,8 @@ where
                 }
             }))
         })
-        .labelled("statement");
+        .labelled("statement")
+        .boxed();
 
     let rule_header = just(Token::FnRule)
         .ignore_then(just(Token::BracketOpen))
@@ -1285,7 +1288,8 @@ where
                 .collect::<Vec<_>>();
             StatementKindPass1::Rule(Rule { variable, stmts })
         })
-        .labelled("rule");
+        .labelled("rule")
+        .boxed();
 
     let wind_reset_fn = just(Token::FnReset)
         .ignore_then(
@@ -1296,7 +1300,8 @@ where
             .labelled("bagfile"),
         )
         .map(|expr| StatementKindPass1::Reset(expr.to_owned()))
-        .labelled("reset");
+        .labelled("reset")
+        .boxed();
 
     let str_only = select! {
             Token::String(s) => s.to_owned(),
@@ -1312,15 +1317,20 @@ where
             Ok(name)
         }
         _ => Err(Rich::custom(span, "Expected implicit string.")),
-    }));
+    }))
+    .boxed();
     let str_array = str_only
+        .clone()
         .separated_by(just(Token::Comma).then_ignore(just(Token::NewLine).repeated()))
         .at_least(1)
         .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen));
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .boxed();
 
     let str_only_as_vec = str_only.map(|single| vec![single]).labelled("string");
-    let one_or_more_str = choice((str_only_as_vec, str_array)).labelled("at least one string");
+    let one_or_more_str = choice((str_only_as_vec, str_array))
+        .labelled("at least one string")
+        .boxed();
     let playfn_with_conditions = just(Token::FnPlayFrames)
         .labelled("play_frames")
         .ignore_then(one_or_more_str.clone())
@@ -1344,7 +1354,8 @@ where
                         .collect::<Vec<_>>(),
                 },
             },
-        );
+        )
+        .boxed();
 
     let wind_play_frames_fn = playfn_with_conditions
         .boxed()
@@ -1627,7 +1638,8 @@ where
                 StatementKindPass1::SendFrames(pku)
             },
         )
-        .labelled("play_frames");
+        .labelled("play_frames")
+        .boxed();
 
     let include = just(Token::OpAssignToLeft)
         .ignore_then(select! {
@@ -1637,7 +1649,8 @@ where
         .map(|path| StatementKindPass1::Include {
             namespace: vec![],
             path,
-        });
+        })
+        .boxed();
 
     let namespace_block = recursive(|nsb| {
         select! {
@@ -1661,7 +1674,8 @@ where
                 stmts: stmts.into_iter().map(Box::new).collect::<Vec<_>>(),
             }
         })
-    });
+    })
+    .boxed();
 
     let loop_stmt = recursive(|loop_stmt_rec| {
         just(Token::KwLoop)
@@ -1692,7 +1706,8 @@ where
                     stmts: stmts.into_iter().map(Box::new).collect::<Vec<_>>(),
                 },
             )
-    });
+    })
+    .boxed();
 
     let one_of_wind_fns = choice((
         statement,
@@ -1702,7 +1717,8 @@ where
         namespace_block,
         loop_stmt,
         include,
-    ));
+    ))
+    .boxed();
     let newlines = just(Token::NewLine).repeated();
 
     newlines

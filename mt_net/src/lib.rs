@@ -167,6 +167,7 @@ pub enum SensorTypeMapped {
 pub struct BagMsg {
     pub topic: String,
     pub msg_type: String,
+    pub type_description_hash: Option<String>,
     pub data: SensorTypeMapped,
     pub qos: Option<Qos>,
 }

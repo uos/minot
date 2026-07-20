@@ -27,6 +27,8 @@ async-trait.workspace = true
 
 roslibrust = { workspace = true, optional = true }
 r2r = { workspace = true, optional = true }
+hiroz = { workspace = true, optional = true }
+hiroz-msgs = { workspace = true, optional = true }
 ros2-client = { workspace = true, optional = true }
 ros2-interfaces-jazzy-serde = { workspace = true, optional = true }
 ros2-interfaces-jazzy-rkyv.workspace = true
@@ -39,6 +41,7 @@ shm = ["mt_sea/shm", "mt_pubsub?/shm"]
 humble = ["mt_bagread/humble"]
 ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy-serde"]
 ros2-native = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]
+hiroz = ["dep:hiroz", "dep:hiroz-msgs"]
 ros1-native = ["dep:roslibrust"]
 mt_pubsub = ["dep:mt_pubsub"]
 
@@ -56,6 +59,11 @@ required-features = ["ros2-native"]
 name = "wind-ros2-c"
 path = "src/ros2_r2r.rs"
 required-features = ["ros2-c"]
+
+[[bin]]
+name = "wind-hiroz"
+path = "src/hiroz.rs"
+required-features = ["hiroz"]
 
 [[bin]]
 name = "wind-mt-pubsub"

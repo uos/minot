@@ -110,7 +110,7 @@ pub struct TopicMetadata {
     pub serialization_format: String,
     #[serde(deserialize_with = "deserialize_qos_profiles")]
     pub offered_qos_profiles: Vec<QosProfile>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_nonempty_string")]
     pub type_description_hash: Option<String>,
 }
 
@@ -151,6 +151,17 @@ where
     }
 
     deserializer.deserialize_any(QosProfilesVisitor)
+}
+
+fn deserialize_optional_nonempty_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() { None } else { Some(value) }
+    }))
 }
 
 fn validate_support(data: &Metadata) -> anyhow::Result<()> {
@@ -558,6 +569,7 @@ where
                         BagMsg {
                             topic: topic_meta.name.clone(),
                             msg_type: topic_meta.topic_type.clone(),
+                            type_description_hash: topic_meta.type_description_hash.clone(),
                             data: mapped,
                             qos,
                         },
@@ -761,6 +773,7 @@ fn collect_until_db3(
                 BagMsg {
                     topic: topic_name,
                     msg_type: topic_type,
+                    type_description_hash: None,
                     data: mapped,
                     qos,
                 },
@@ -1149,6 +1162,10 @@ impl Bagfile {
                             BagMsg {
                                 topic: channel.topic.clone(),
                                 msg_type: topic_type,
+                                type_description_hash: metadata
+                                    .as_ref()
+                                    .and_then(|m| m.get_topic_meta(&channel.topic))
+                                    .and_then(|t| t.type_description_hash.clone()),
                                 data: mapped,
                                 qos,
                             },
@@ -1207,6 +1224,7 @@ impl Bagfile {
                         BagMsg {
                             topic: topic_name,
                             msg_type: topic_type,
+                            type_description_hash: None,
                             data: mapped,
                             qos,
                         },
@@ -1316,7 +1334,7 @@ mod tests {
             .expect("Lidar topic not found");
         assert_eq!(lidar_topic.name, "/velodyne_points");
         assert_eq!(lidar_topic.topic_type, "sensor_msgs/msg/PointCloud2");
-        assert_eq!(lidar_topic.type_description_hash, Some("".to_string()));
+        assert_eq!(lidar_topic.type_description_hash, None);
         assert!(!lidar_topic.offered_qos_profiles.is_empty());
 
         let qos = &lidar_topic.offered_qos_profiles[0];
@@ -1465,12 +1483,8 @@ mod tests {
                 topic_meta.name
             );
 
-            // Verify type_description_hash field exists (v9 feature)
-            assert!(
-                topic_meta.type_description_hash.is_some(),
-                "Topic {} should have type_description_hash field",
-                topic_meta.name
-            );
+            // Empty type_description_hash values are normalized away.
+            assert_eq!(topic_meta.type_description_hash, None);
         }
 
         // Test /tf topic has 3 QoS profiles
@@ -1514,6 +1528,57 @@ mod tests {
         let joint_states = metadata.get_topic_meta("/joint_states").unwrap();
         assert_eq!(joint_states.offered_qos_profiles.len(), 1);
         assert_eq!(joint_states.offered_qos_profiles[0].depth, 10);
+    }
+
+    #[test]
+    fn type_description_hash_preserves_nonempty_and_normalizes_empty() {
+        let metadata_contents = r#"
+rosbag2_bagfile_information:
+  version: 9
+  storage_identifier: mcap
+  duration:
+    nanoseconds: 1
+  starting_time:
+    nanoseconds_since_epoch: 0
+  message_count: 1
+  compression_format: ""
+  compression_mode: ""
+  relative_file_paths: []
+  topics_with_message_count:
+    - topic_metadata:
+        name: /with_hash
+        type: custom_msgs/msg/Thing
+        serialization_format: cdr
+        offered_qos_profiles: []
+        type_description_hash: "RIHS01_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      message_count: 1
+    - topic_metadata:
+        name: /empty_hash
+        type: custom_msgs/msg/Empty
+        serialization_format: cdr
+        offered_qos_profiles: []
+        type_description_hash: ""
+      message_count: 0
+  files: []
+"#;
+        let metadata: Metadata =
+            serde_yml::from_str(metadata_contents).expect("Failed to parse metadata");
+
+        assert_eq!(
+            metadata
+                .get_topic_meta("/with_hash")
+                .unwrap()
+                .type_description_hash
+                .as_deref(),
+            Some("RIHS01_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            metadata
+                .get_topic_meta("/empty_hash")
+                .unwrap()
+                .type_description_hash,
+            None
+        );
     }
 
     #[test]
