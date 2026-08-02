@@ -11,6 +11,9 @@ minot-coord --local-only
 ```
 
 This still uses loopback networking so local Minot processes can communicate.
+If a Zenoh router is already listening on the local Minot endpoint
+(`127.0.0.1:7447`), Minot warns and ignores `--local-only` so it can use the
+existing router instead.
 Without the option, Minot retains its default network-wide discovery behavior.
 
 Minot is a highly versatile toolset for debugging and verifying stateful robot perception software. Some common use cases are:

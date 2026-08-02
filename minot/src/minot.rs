@@ -1804,6 +1804,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     mt_sea::network::set_local_only(args.local_only);
+    let local_only = mt_sea::network::is_local_only();
 
     // Set SHM environment variables for mt_sea to read
     // SHM is enabled by default, --no-shm disables it
@@ -1827,7 +1828,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 headless_args.file,
                 headless_args.minot_path,
                 headless_args.sync,
-                args.local_only,
+                local_only,
             )
             .await
         }

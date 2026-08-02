@@ -1,10 +1,13 @@
+use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use log::{info, warn};
 
 pub const LOCAL_COORD_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 
 static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
+static LOCAL_ONLY_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkRole {
@@ -12,11 +15,14 @@ pub enum NetworkRole {
     Coordinator,
 }
 
-/// Restrict subsequently created Minot Zenoh sessions to IPv4 loopback.
+/// Restrict subsequently created Minot Zenoh sessions to IPv4 loopback unless
+/// a router is already listening on the local coordinator endpoint.
 ///
 /// This must be called before starting any clients or coordinators.
 pub fn set_local_only(enabled: bool) {
-    LOCAL_ONLY.store(enabled, Ordering::SeqCst);
+    let router_running = enabled && local_router_is_running();
+    LOCAL_ONLY.store(enabled && !router_running, Ordering::SeqCst);
+    LOCAL_ONLY_OVERRIDDEN.store(router_running, Ordering::SeqCst);
 }
 
 pub fn is_local_only() -> bool {
@@ -24,11 +30,29 @@ pub fn is_local_only() -> bool {
 }
 
 pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
+    if LOCAL_ONLY_OVERRIDDEN.swap(false, Ordering::SeqCst) {
+        warn!(
+            "A Zenoh router is already running on {}; ignoring --local-only",
+            LOCAL_COORD_ENDPOINT
+        );
+    }
+
     config_for(
         role,
         is_local_only(),
         std::env::var("MINOT_COORD_ADDR").ok(),
     )
+}
+
+fn local_router_is_running() -> bool {
+    let address: SocketAddr = "127.0.0.1:7447"
+        .parse()
+        .expect("the local coordinator address must be valid");
+    endpoint_is_listening(address)
+}
+
+fn endpoint_is_listening(address: SocketAddr) -> bool {
+    TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
 }
 
 fn config_for(
@@ -88,6 +112,7 @@ fn config_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     fn value(config: &zenoh::Config, key: &str) -> String {
         config.get_json(key).expect("config key should exist")
@@ -135,5 +160,15 @@ mod tests {
         );
         assert!(value(&config, "connect/endpoints").contains("tcp/192.0.2.1:7447"));
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
+    }
+
+    #[test]
+    fn detects_a_listening_local_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("test listener should have an address");
+
+        assert!(endpoint_is_listening(address));
     }
 }
