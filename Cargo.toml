@@ -79,6 +79,7 @@ serde_yml = "0.0.12"
 cdr = "0.2.4"
 rand = "0.8"
 fs2 = "0.4"
+libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
 tokio-util = { version = "0.7", features = ["full"] }
 cdr-encoding = "0.10"

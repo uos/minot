@@ -1207,8 +1207,10 @@ fn try_start_with_rules_and_ready(
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
     ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> bool {
-    let lock_file_path =
-        std::env::temp_dir().join(format!("minot-coord_{}.lock", users::get_current_uid()));
+    let lock_file_path = std::env::temp_dir().join(format!(
+        "minot-coord_{}.lock",
+        current_user_id()
+    ));
     let lock_file = match std::fs::File::create(&lock_file_path) {
         Ok(f) => f,
         Err(e) => {
@@ -1237,6 +1239,19 @@ fn try_start_with_rules_and_ready(
         let _ = startup_failed_rx.await;
     });
     true
+}
+
+fn current_user_id() -> u64 {
+    #[cfg(unix)]
+    {
+        // SAFETY: `getuid` takes no arguments and has no preconditions.
+        unsafe { libc::getuid() as u64 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        0
+    }
 }
 
 /// Start a coordinator with empty rules.
