@@ -32,24 +32,47 @@ fn align_bytes(bytes: &[u8]) -> AlignedVec {
     aligned
 }
 
-struct BeSendTask {
-    session: std::sync::Arc<zenoh::Session>,
-    domain_id: u16,
-    id: u32,
-    data: AlignedVec,
-    variable_type: VariableType,
-    variable_name: String,
+struct BeSendGuard {
     target_ship_name: String,
+    in_flight: Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+impl BeSendGuard {
+    fn try_acquire(
+        in_flight: Arc<std::sync::Mutex<HashSet<String>>>,
+        target_ship_name: String,
+    ) -> Option<Self> {
+        if !in_flight.lock().unwrap().insert(target_ship_name.clone()) {
+            return None;
+        }
+        Some(Self {
+            target_ship_name,
+            in_flight,
+        })
+    }
+}
+
+impl Drop for BeSendGuard {
+    fn drop(&mut self) {
+        self.in_flight
+            .lock()
+            .unwrap()
+            .remove(&self.target_ship_name);
+    }
 }
 
 #[derive(Debug)]
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
     pub last_send: Arc<tokio::sync::Mutex<Instant>>,
+    /// Runtime captured during initialization because `shoot` can be invoked
+    /// from an ordinary worker thread with no entered Tokio context.
+    runtime_handle: tokio::runtime::Handle,
     /// Cancelled when the coordinator connection is lost.
     pub disconnect: CancellationToken,
-    /// Sync sender for fire-and-forget BE deliveries (background task spawned at init).
-    be_send_tx: tokio::sync::mpsc::UnboundedSender<BeSendTask>,
+    /// Targets that already have one best-effort delivery in progress. New
+    /// messages for a busy target are dropped before serialization.
+    be_sends_in_flight: Arc<std::sync::Mutex<HashSet<String>>>,
     /// Cached routing decisions pushed by the coordinator.
     route_cache: Arc<std::sync::RwLock<HashMap<String, (crate::Action, bool)>>>,
     /// Active peer-monitor tasks: ship_name → abort handle.
@@ -70,29 +93,59 @@ impl crate::Cannon for NetworkShipImpl {
         variable_name: &str,
     ) -> anyhow::Result<()> {
         for target in targets.iter() {
-            let data_bytes =
-                to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data");
             let target_ship_name = match &target.kind {
                 ShipKind::Rat(name) => name.clone(),
                 ShipKind::Wind(name) => name.clone(),
             };
 
             if target.node_mode == Qos::BestEffort {
+                let Some(send_guard) = BeSendGuard::try_acquire(
+                    Arc::clone(&self.be_sends_in_flight),
+                    target_ship_name.clone(),
+                ) else {
+                    debug!(
+                        "Dropping best-effort message '{}' for '{}': send already in progress",
+                        variable_name, target_ship_name
+                    );
+                    continue;
+                };
+                let data_bytes =
+                    to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data");
                 let (session, domain_id) = {
                     let c = self.client.lock().await;
                     (c.session(), c.domain_id())
                 };
-                // UnboundedSender::send is sync — safe to call from any context.
-                let _ = self.be_send_tx.send(BeSendTask {
-                    session,
-                    domain_id,
-                    id,
-                    data: data_bytes,
-                    variable_type,
-                    variable_name: variable_name.to_string(),
-                    target_ship_name,
+                let variable_name = variable_name.to_string();
+                self.runtime_handle.spawn(async move {
+                    let result = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        Client::send_raw_network(
+                            session,
+                            domain_id,
+                            id,
+                            data_bytes,
+                            variable_type,
+                            variable_name.clone(),
+                            target_ship_name.clone(),
+                        ),
+                    )
+                    .await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => warn!(
+                            "Best-effort send '{}' to '{}' failed: {e}",
+                            variable_name, target_ship_name
+                        ),
+                        Err(_) => warn!(
+                            "Best-effort send '{}' to '{}' timed out",
+                            variable_name, target_ship_name
+                        ),
+                    }
+                    drop(send_guard);
                 });
             } else {
+                let data_bytes =
+                    to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data");
                 let client = self.client.lock().await;
                 client
                     .send_raw_to_other_client(
@@ -105,7 +158,6 @@ impl crate::Cannon for NetworkShipImpl {
                     .await?;
             }
         }
-        *self.last_send.lock().await = Instant::now();
         Ok(())
     }
 
@@ -396,11 +448,15 @@ fn extract_peers(action: &crate::Action) -> HashSet<String> {
         crate::Action::Sail => HashSet::new(),
         crate::Action::Shoot { target, .. } => target
             .iter()
+            .filter(|addr| addr.node_mode == Qos::Reliable)
             .map(|addr| match &addr.kind {
                 crate::ShipKind::Rat(name) | crate::ShipKind::Wind(name) => unpad(name),
             })
             .collect(),
         crate::Action::Catch { source, .. } => {
+            if source.node_mode == Qos::BestEffort {
+                return HashSet::new();
+            }
             let name = match &source.kind {
                 crate::ShipKind::Rat(name) | crate::ShipKind::Wind(name) => unpad(name),
             };
@@ -665,28 +721,7 @@ impl NetworkShipImpl {
             }
         });
 
-        // Spawn background worker for BE fire-and-forget sends.
-        // Spawned here where the runtime is guaranteed; shoot() just pushes to the channel.
-        let (be_send_tx, mut be_send_rx) = tokio::sync::mpsc::unbounded_channel::<BeSendTask>();
-        tokio::spawn(async move {
-            while let Some(task) = be_send_rx.recv().await {
-                tokio::spawn(async move {
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        Client::send_raw_network(
-                            task.session,
-                            task.domain_id,
-                            task.id,
-                            task.data,
-                            task.variable_type,
-                            task.variable_name,
-                            task.target_ship_name,
-                        ),
-                    )
-                    .await;
-                });
-            }
-        });
+        let be_sends_in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
 
         let route_cache = Arc::new(std::sync::RwLock::new(HashMap::<
             String,
@@ -701,12 +736,13 @@ impl NetworkShipImpl {
 
         let ship = Self {
             client,
+            runtime_handle: tokio::runtime::Handle::current(),
             // Initialize far enough in the past so the first heartbeat fires immediately
             last_send: Arc::new(tokio::sync::Mutex::new(
                 Instant::now() - Duration::from_millis(REGISTRATION_TIMEOUT_MS),
             )),
             disconnect,
-            be_send_tx,
+            be_sends_in_flight,
             route_cache,
             peer_monitor,
             bypass_cache,
@@ -848,5 +884,77 @@ impl NetworkShipImpl {
         }
 
         Ok(ship)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(name: &str, node_mode: Qos) -> crate::NetworkShipAddress {
+        crate::NetworkShipAddress {
+            ip: [127, 0, 0, 1],
+            port: 0,
+            ship: 0,
+            kind: crate::ShipKind::Rat(name.to_string()),
+            node_mode,
+        }
+    }
+
+    #[test]
+    fn peer_monitors_exclude_best_effort_shoot_targets() {
+        let action = crate::Action::Shoot {
+            target: vec![
+                peer("reliable################", Qos::Reliable),
+                peer("scope################", Qos::BestEffort),
+            ],
+            id: 1,
+        };
+
+        assert_eq!(
+            extract_peers(&action),
+            HashSet::from(["reliable".to_string()])
+        );
+    }
+
+    #[test]
+    fn peer_monitors_exclude_best_effort_catch_sources() {
+        let action = crate::Action::Catch {
+            source: peer("scope", Qos::BestEffort),
+            id: 1,
+        };
+
+        assert!(extract_peers(&action).is_empty());
+    }
+
+    #[test]
+    fn best_effort_send_guard_allows_only_one_message_per_target() {
+        let in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let first = BeSendGuard::try_acquire(Arc::clone(&in_flight), "scope".to_string())
+            .expect("first send should start");
+
+        assert!(BeSendGuard::try_acquire(Arc::clone(&in_flight), "scope".to_string()).is_none());
+        assert!(BeSendGuard::try_acquire(Arc::clone(&in_flight), "other".to_string()).is_some());
+
+        drop(first);
+        assert!(BeSendGuard::try_acquire(Arc::clone(&in_flight), "scope".to_string()).is_some());
+    }
+
+    #[test]
+    fn captured_runtime_handle_spawns_from_plain_thread() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let handle = runtime.handle().clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            handle.spawn(async move {
+                tx.send(()).expect("test receiver should still exist");
+            });
+        })
+        .join()
+        .expect("plain worker thread should not panic");
+
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("task spawned through the captured runtime should run");
     }
 }

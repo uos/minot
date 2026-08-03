@@ -355,6 +355,17 @@ impl Node {
     }
 
     pub async fn create(config: NodeConfig) -> anyhow::Result<Self> {
+        // Zenoh 1.9 fails while opening an explicit local client endpoint if no
+        // router is listening yet. Start the embedded coordinator before opening
+        // that client; waiting for a registration timeout would be too late.
+        if matches!(config.coord_mode, CoordMode::AutoStart)
+            && mt_sea::network::is_local_only()
+            && !mt_sea::network::local_router_is_running()
+        {
+            log::info!("No local coordinator found, starting embedded coordinator...");
+            mt_coord::ensure_default_coordinator_ready(None).await?;
+        }
+
         let rm_rules = config.mode == Qos::Reliable;
         let ship = match config.coord_mode {
             CoordMode::External => {
@@ -390,6 +401,21 @@ impl Node {
     ) -> anyhow::Result<Self> {
         let shutdown = ship.disconnect.clone();
         let ship = Arc::new(ship);
+        let heartbeat_ship = Arc::clone(&ship);
+        let heartbeat_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_millis(mt_sea::HEARTBEAT_INTERVAL_MS);
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        if let Err(e) = heartbeat_ship.send_heartbeat().await {
+                            debug!("Failed to send node heartbeat: {e}");
+                        }
+                    }
+                    _ = heartbeat_shutdown.cancelled() => return,
+                }
+            }
+        });
         Ok(Self {
             name,
             mode,

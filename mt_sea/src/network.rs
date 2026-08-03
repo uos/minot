@@ -7,7 +7,6 @@ use log::{info, warn};
 pub const LOCAL_COORD_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 
 static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
-static LOCAL_ONLY_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkRole {
@@ -15,50 +14,41 @@ pub enum NetworkRole {
     Coordinator,
 }
 
-/// Restrict subsequently created Minot Zenoh sessions to IPv4 loopback unless
-/// a router is already listening on the local coordinator endpoint.
+/// Restrict subsequently created Minot Zenoh sessions to IPv4 loopback.
 ///
 /// This must be called before starting any clients or coordinators.
 pub fn set_local_only(enabled: bool) {
-    let router_running = enabled && local_router_is_running();
-    LOCAL_ONLY.store(enabled && !router_running, Ordering::SeqCst);
-    LOCAL_ONLY_OVERRIDDEN.store(router_running, Ordering::SeqCst);
+    LOCAL_ONLY.store(enabled, Ordering::SeqCst);
 }
 
 pub fn is_local_only() -> bool {
     LOCAL_ONLY.load(Ordering::SeqCst)
 }
 
-pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
-    if LOCAL_ONLY_OVERRIDDEN.swap(false, Ordering::SeqCst) {
-        warn!(
-            "A Zenoh router is already running on {}; ignoring --local-only",
-            LOCAL_COORD_ENDPOINT
-        );
-    }
+/// Return whether something is accepting connections on the local coordinator endpoint.
+/// This is used to decide whether an auto-start node must create the router before
+/// opening its client session; it never changes local-only configuration.
+pub fn local_router_is_running() -> bool {
+    let address: SocketAddr = "127.0.0.1:7447"
+        .parse()
+        .expect("the local coordinator address must be valid");
+    TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
+}
 
+pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
     config_for(
         role,
         is_local_only(),
         std::env::var("MINOT_COORD_ADDR").ok(),
+        role == NetworkRole::Coordinator && local_router_is_running(),
     )
-}
-
-fn local_router_is_running() -> bool {
-    let address: SocketAddr = "127.0.0.1:7447"
-        .parse()
-        .expect("the local coordinator address must be valid");
-    endpoint_is_listening(address)
-}
-
-fn endpoint_is_listening(address: SocketAddr) -> bool {
-    TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
 }
 
 fn config_for(
     role: NetworkRole,
     local_only: bool,
     coordinator_addr: Option<String>,
+    local_router_running: bool,
 ) -> zenoh::Config {
     if local_only {
         if coordinator_addr.is_some() {
@@ -68,12 +58,14 @@ fn config_for(
             );
         }
 
-        let json5 = match role {
-            NetworkRole::Coordinator => format!(
+        let json5 = match (role, local_router_running) {
+            (NetworkRole::Coordinator, false) => format!(
                 r#"{{mode:"router",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},listen:{{endpoints:["{}"]}}}}"#,
                 LOCAL_COORD_ENDPOINT
             ),
-            NetworkRole::Client => format!(
+            // An external Zenoh router owns the endpoint. Run the Minot
+            // coordinator logic on a client session connected to that router.
+            (NetworkRole::Coordinator, true) | (NetworkRole::Client, _) => format!(
                 r#"{{mode:"client",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
                 LOCAL_COORD_ENDPOINT
             ),
@@ -112,7 +104,6 @@ fn config_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
 
     fn value(config: &zenoh::Config, key: &str) -> String {
         config.get_json(key).expect("config key should exist")
@@ -120,7 +111,7 @@ mod tests {
 
     #[test]
     fn local_coordinator_only_listens_on_loopback() {
-        let config = config_for(NetworkRole::Coordinator, true, None);
+        let config = config_for(NetworkRole::Coordinator, true, None, false);
         let endpoints = value(&config, "listen/endpoints");
         assert_eq!(value(&config, "mode"), r#""router""#);
         assert!(endpoints.contains(LOCAL_COORD_ENDPOINT));
@@ -131,7 +122,7 @@ mod tests {
 
     #[test]
     fn local_client_connects_to_loopback_and_retries() {
-        let config = config_for(NetworkRole::Client, true, None);
+        let config = config_for(NetworkRole::Client, true, None, false);
         assert_eq!(value(&config, "mode"), r#""client""#);
         assert!(value(&config, "connect/endpoints").contains(LOCAL_COORD_ENDPOINT));
         assert_eq!(value(&config, "connect/exit_on_failure"), "false");
@@ -145,6 +136,7 @@ mod tests {
             NetworkRole::Client,
             true,
             Some("tcp/192.0.2.1:7447".to_owned()),
+            false,
         );
         let endpoints = value(&config, "connect/endpoints");
         assert!(endpoints.contains(LOCAL_COORD_ENDPOINT));
@@ -157,18 +149,24 @@ mod tests {
             NetworkRole::Client,
             false,
             Some("tcp/192.0.2.1:7447".to_owned()),
+            false,
         );
         assert!(value(&config, "connect/endpoints").contains("tcp/192.0.2.1:7447"));
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
     }
 
     #[test]
-    fn detects_a_listening_local_endpoint() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
-        let address = listener
-            .local_addr()
-            .expect("test listener should have an address");
+    fn enabling_local_only_is_not_overridden() {
+        set_local_only(true);
+        assert!(is_local_only());
+    }
 
-        assert!(endpoint_is_listening(address));
+    #[test]
+    fn local_coordinator_joins_an_existing_router() {
+        let config = config_for(NetworkRole::Coordinator, true, None, true);
+
+        assert_eq!(value(&config, "mode"), r#""client""#);
+        assert!(value(&config, "connect/endpoints").contains(LOCAL_COORD_ENDPOINT));
+        assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
     }
 }

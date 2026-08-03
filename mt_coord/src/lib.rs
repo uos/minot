@@ -9,6 +9,19 @@ use mt_sea::{Coordinator, DISCONNECT_TIMEOUT_MS, Qos, ShipKind, WindData};
 
 const EMBEDDED_COORDINATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+fn take_best_effort_subscription_vars(
+    subscriptions: &mut HashSet<(String, String)>,
+    disconnected_ship: &str,
+) -> Vec<String> {
+    let vars = subscriptions
+        .iter()
+        .filter(|(ship, _)| ship == disconnected_ship)
+        .map(|(_, var)| var.clone())
+        .collect::<Vec<_>>();
+    subscriptions.retain(|(ship, _)| ship != disconnected_ship);
+    vars
+}
+
 #[derive(Debug)]
 enum MinotTask {
     AppendRule {
@@ -242,6 +255,7 @@ fn run_coordinator_with_ready(
         let minot_client_connected = std::sync::Arc::new(std::sync::RwLock::new(false));
         let tasks_minot_connect = std::sync::Arc::clone(&minot_client_connected);
         let rules_change_for_disconnect = std::sync::Arc::clone(&rules_changer);
+        let be_subscriptions_for_disconnect = std::sync::Arc::clone(&coordinator.be_subscriptions);
         let cc_for_spawn = std::sync::Arc::clone(&connected_clients);
         let be_for_spawn = std::sync::Arc::clone(&best_effort_clients);
         let wind_clients_for_spawn = std::sync::Arc::clone(&wind_clients);
@@ -281,6 +295,8 @@ fn run_coordinator_with_ready(
                                 let winds_inner = std::sync::Arc::clone(&winds_changer);
                                 let rules_change_for_disconnect_inner =
                                     std::sync::Arc::clone(&rules_change_for_disconnect);
+                                let be_subscriptions_for_disconnect_inner =
+                                    std::sync::Arc::clone(&be_subscriptions_for_disconnect);
                                 let connected_clients_inner = std::sync::Arc::clone(&cc_for_spawn);
                                 let best_effort_clients_inner =
                                     std::sync::Arc::clone(&be_for_spawn);
@@ -438,8 +454,15 @@ fn run_coordinator_with_ready(
                                         },
                                         _ => {
                                             loop {
-                                                match client_news.recv().await {
-                                                    Ok((packet, _)) => {
+                                                match tokio::time::timeout(
+                                                    tokio::time::Duration::from_millis(
+                                                        DISCONNECT_TIMEOUT_MS,
+                                                    ),
+                                                    client_news.recv(),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(Ok((packet, _))) => {
                                                         match packet.data {
                                                             PacketKind::RegisterShipAtVar {
                                                                 ship,
@@ -682,23 +705,47 @@ fn run_coordinator_with_ready(
                                                             }
                                                         }
                                                     }
-                                                    Err(
+                                                    Ok(Err(
                                                         tokio::sync::broadcast::error::RecvError::Closed,
-                                                    ) => {
-                                                        if client.remove_rules_on_disconnect {
-                                                            let affected_vars = rules_change_for_disconnect_inner
+                                                    ))
+                                                    | Err(_) => {
+                                                        let best_effort_vars =
+                                                            be_subscriptions_for_disconnect_inner
                                                                 .read()
                                                                 .unwrap()
-                                                                .all_vars_for_ship(&inner_name);
+                                                                .iter()
+                                                                .filter(|(ship, _)| ship == &inner_name)
+                                                                .map(|(_, var)| var.clone())
+                                                                .collect::<Vec<_>>();
+
+                                                        let mut affected_vars =
+                                                            best_effort_vars.clone();
+                                                        if client.remove_rules_on_disconnect
+                                                            || !best_effort_vars.is_empty()
+                                                        {
+                                                            affected_vars.extend(
+                                                                rules_change_for_disconnect_inner
+                                                                .read()
+                                                                .unwrap()
+                                                                .all_vars_for_ship(&inner_name),
+                                                            );
                                                             rules_change_for_disconnect_inner
                                                                 .write()
                                                                 .unwrap()
                                                                 .remove_client(&inner_name);
-                                                            for var in affected_vars {
-                                                                rat_coord_tx
-                                                                    .send(MinotTask::PushRoutesForVar { var })
-                                                                    .ok();
-                                                            }
+                                                        }
+                                                        take_best_effort_subscription_vars(
+                                                            &mut be_subscriptions_for_disconnect_inner
+                                                                .write()
+                                                                .unwrap(),
+                                                            &inner_name,
+                                                        );
+                                                        affected_vars.sort();
+                                                        affected_vars.dedup();
+                                                        for var in affected_vars {
+                                                            rat_coord_tx
+                                                                .send(MinotTask::PushRoutesForVar { var })
+                                                                .ok();
                                                         }
                                                         connected_clients_inner
                                                             .write()
@@ -710,11 +757,11 @@ fn run_coordinator_with_ready(
                                                             .remove(&inner_name);
                                                         return;
                                                     }
-                                                    Err(
+                                                    Ok(Err(
                                                         tokio::sync::broadcast::error::RecvError::Lagged(
                                                             n,
                                                         ),
-                                                    ) => {
+                                                    )) => {
                                                         warn!(
                                                             "Client {} receiver lagged by {} messages",
                                                             inner_name, n
@@ -1090,6 +1137,10 @@ fn run_coordinator_with_ready(
                     let is_reliable = !best_effort_clients.read().unwrap().contains(&ship);
                     let affected_vars = rules_changer.read().unwrap().all_vars_for_ship(&ship);
                     rules_changer.write().unwrap().remove_client(&ship);
+                    take_best_effort_subscription_vars(
+                        &mut coordinator.be_subscriptions.write().unwrap(),
+                        &ship,
+                    );
                     let rules_snapshot = rules_changer.read().unwrap().clone();
                     for var in &affected_vars {
                         coordinator
@@ -1231,4 +1282,27 @@ pub async fn start_default_with_torpedo_ready(
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> anyhow::Result<bool> {
     ensure_default_coordinator_ready(torpedo_tx).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnect_removes_only_the_dead_clients_best_effort_subscriptions() {
+        let mut subscriptions = HashSet::from([
+            ("scope".to_string(), "registered".to_string()),
+            ("scope".to_string(), "map".to_string()),
+            ("monitor".to_string(), "registered".to_string()),
+        ]);
+
+        let mut affected = take_best_effort_subscription_vars(&mut subscriptions, "scope");
+        affected.sort();
+
+        assert_eq!(affected, ["map", "registered"]);
+        assert_eq!(
+            subscriptions,
+            HashSet::from([("monitor".to_string(), "registered".to_string())])
+        );
+    }
 }

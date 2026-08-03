@@ -320,9 +320,13 @@ impl CoordinatorImpl {
                 let mut targets = Vec::with_capacity(target.len());
                 for client_name in target.iter() {
                     let rat = self.rat_qs.read().await;
-                    let client_info = rat
-                        .get(client_name)
-                        .ok_or_else(|| anyhow!("Unknown client: {}", client_name))?;
+                    let Some(client_info) = rat.get(client_name) else {
+                        debug!(
+                            "Skipping disconnected target '{}' while routing '{}'",
+                            client_name, variable
+                        );
+                        continue;
+                    };
                     let mut addr = client_info.network.clone();
                     // Override with per-subscription BE mode if registered
                     if self
@@ -334,6 +338,10 @@ impl CoordinatorImpl {
                         addr.node_mode = crate::net::Qos::BestEffort;
                     }
                     targets.push(addr);
+                }
+
+                if targets.is_empty() {
+                    return Ok(crate::Action::Sail);
                 }
 
                 crate::Action::Shoot {

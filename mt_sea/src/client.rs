@@ -852,28 +852,24 @@ impl Client {
         payload.extend_from_slice(&padded_name);
         payload.extend_from_slice(&data);
 
-        loop {
-            let replies = session
-                .get(&data_key)
-                .payload(&payload)
-                .priority(zenoh::qos::Priority::Background)
-                .wait()
-                .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
+        // Best-effort delivery is a single attempt. Set the timeout on the
+        // Zenoh query itself so Zenoh promptly releases its pending query state
+        // and the large payload when the target queryable has disappeared.
+        let replies = session
+            .get(&data_key)
+            .payload(&payload)
+            .priority(zenoh::qos::Priority::Background)
+            .timeout(std::time::Duration::from_millis(250))
+            .wait()
+            .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
 
-            match replies.recv_async().await {
-                Ok(reply) => match reply.result() {
-                    Ok(_) => return Ok(()),
-                    Err(_) => {
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-                },
-                Err(_) => {
-                    tokio::task::yield_now().await;
-                    continue;
-                }
-            }
-        }
+        let reply = replies.recv_async().await.map_err(|e| {
+            anyhow::anyhow!("Best-effort data query completed without a reply: {e}")
+        })?;
+        reply
+            .result()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("Best-effort receiver rejected data: {e:?}"))
     }
 
     /// Send raw data to another client via Zenoh query (request-reply).
