@@ -5,6 +5,7 @@ use std::time::Duration;
 use log::{info, warn};
 
 pub const LOCAL_COORD_ENDPOINT: &str = "tcp/127.0.0.1:7447";
+pub const NETWORK_COORD_ENDPOINT: &str = "tcp/0.0.0.0:7447";
 
 static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
 
@@ -76,26 +77,37 @@ fn config_for(
             .expect("internal local-only Zenoh configuration must be valid");
     }
 
-    if role == NetworkRole::Client {
-        if let Some(addr) = coordinator_addr {
-            let json5 = format!(
-                r#"{{mode:"peer",scouting:{{multicast:{{enabled:false}}}},connect:{{endpoints:["{}"]}}}}"#,
-                addr
-            );
-            return match zenoh::Config::from_json5(&json5) {
-                Ok(config) => {
-                    info!("Client using unicast coordinator: {}", addr);
-                    config
-                }
-                Err(error) => {
-                    warn!(
-                        "MINOT_COORD_ADDR '{}' produced invalid config: {}, falling back to multicast",
-                        addr, error
-                    );
-                    zenoh::Config::default()
-                }
-            };
-        }
+    if role == NetworkRole::Coordinator {
+        let json5 = format!(
+            r#"{{mode:"router",scouting:{{multicast:{{enabled:true}}}},listen:{{endpoints:["{}"]}}}}"#,
+            NETWORK_COORD_ENDPOINT
+        );
+        info!(
+            "Using network coordinator endpoint on {}",
+            NETWORK_COORD_ENDPOINT
+        );
+        return zenoh::Config::from_json5(&json5)
+            .expect("internal network coordinator Zenoh configuration must be valid");
+    }
+
+    if let Some(addr) = coordinator_addr {
+        let json5 = format!(
+            r#"{{mode:"peer",scouting:{{multicast:{{enabled:false}}}},connect:{{endpoints:["{}"]}}}}"#,
+            addr
+        );
+        return match zenoh::Config::from_json5(&json5) {
+            Ok(config) => {
+                info!("Client using unicast coordinator: {}", addr);
+                config
+            }
+            Err(error) => {
+                warn!(
+                    "MINOT_COORD_ADDR '{}' produced invalid config: {}, falling back to multicast",
+                    addr, error
+                );
+                zenoh::Config::default()
+            }
+        };
     }
 
     zenoh::Config::default()
@@ -118,6 +130,16 @@ mod tests {
         assert!(!endpoints.contains("0.0.0.0"));
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
         assert_eq!(value(&config, "scouting/gossip/enabled"), "false");
+    }
+
+    #[test]
+    fn network_coordinator_listens_on_all_ipv4_interfaces() {
+        let config = config_for(NetworkRole::Coordinator, false, None, false);
+        let endpoints = value(&config, "listen/endpoints");
+        assert_eq!(value(&config, "mode"), r#""router""#);
+        assert!(endpoints.contains(NETWORK_COORD_ENDPOINT));
+        assert!(!endpoints.contains(LOCAL_COORD_ENDPOINT));
+        assert_eq!(value(&config, "scouting/multicast/enabled"), "true");
     }
 
     #[test]
