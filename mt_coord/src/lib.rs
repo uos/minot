@@ -328,16 +328,25 @@ fn run_coordinator_with_ready(
                                                     }
                                                     PacketKind::WindDynamic(var) => {
                                                         let mut w = winds_inner.write().unwrap();
-                                                        let ty = WindTask {
-                                                            already_seen: false,
-                                                            kind: WindTaskKind::Dynamic,
-                                                        };
                                                         match w.get_mut(&var) {
                                                             Some(wts) => {
-                                                                wts.push(ty);
+                                                                if !wts.iter().any(|task| {
+                                                                    matches!(task.kind, WindTaskKind::Dynamic)
+                                                                }) {
+                                                                    wts.push(WindTask {
+                                                                        already_seen: false,
+                                                                        kind: WindTaskKind::Dynamic,
+                                                                    });
+                                                                }
                                                             }
                                                             None => {
-                                                                w.insert(var, vec![ty]);
+                                                                w.insert(
+                                                                    var,
+                                                                    vec![WindTask {
+                                                                        already_seen: false,
+                                                                        kind: WindTaskKind::Dynamic,
+                                                                    }],
+                                                                );
                                                             }
                                                         }
                                                     }
@@ -511,36 +520,36 @@ fn run_coordinator_with_ready(
                                                                         winds.get_mut(&variable)
                                                                     {
                                                                         for wte in wt.iter_mut() {
-                                                                            if !wte.already_seen {
-                                                                                match &mut wte.kind {
-                                                                                    WindTaskKind::Fix(wind_datas) => {
-                                                                                        pending_fixed.push(wind_datas.clone());
+                                                                            match &mut wte.kind {
+                                                                                WindTaskKind::Fix(wind_datas)
+                                                                                    if !wte.already_seen =>
+                                                                                {
+                                                                                    pending_fixed.push(wind_datas.clone());
+                                                                                    wte.already_seen = true;
+                                                                                }
+                                                                                WindTaskKind::Dynamic => {
+                                                                                    if asked_for_dynamic {
+                                                                                        continue;
                                                                                     }
-                                                                                    WindTaskKind::Dynamic => {
-                                                                                        if asked_for_dynamic {
-                                                                                            wte.already_seen = true;
-                                                                                            continue;
-                                                                                        }
-                                                                                        asked_for_dynamic = true;
+                                                                                    asked_for_dynamic = true;
 
-                                                                                        info!(
-                                                                                            "asking Minot TUI for dyn for {}",
-                                                                                            &variable
-                                                                                        );
-                                                                                        let ret = rat_coord_tx.send(
+                                                                                    info!(
+                                                                                        "asking Minot TUI for dyn for {}",
+                                                                                        &variable
+                                                                                    );
+                                                                                    let ret = rat_coord_tx.send(
                                                                                             MinotTask::WindDynamicVarReq(
                                                                                                 variable.clone(),
                                                                                             ),
                                                                                         );
-                                                                                        match ret {
-                                                                                            Ok(_) => {}
-                                                                                            Err(e) => {
-                                                                                                error!("Could not find connected Minot TUI for asking dynamic wind. {e}");
-                                                                                            }
+                                                                                    match ret {
+                                                                                        Ok(_) => {}
+                                                                                        Err(e) => {
+                                                                                            error!("Could not find connected Minot TUI for asking dynamic wind. {e}");
                                                                                         }
                                                                                     }
-                                                                                };
-                                                                                wte.already_seen = true;
+                                                                                }
+                                                                                WindTaskKind::Fix(_) => {}
                                                                             }
                                                                         }
                                                                     }

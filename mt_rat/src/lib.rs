@@ -18,7 +18,7 @@ pub use rkyv::{Archive, Deserialize, Serialize};
 
 pub struct Rat {
     name: String,
-    ship: Option<NetworkShipImpl>,
+    ship: Option<Arc<NetworkShipImpl>>,
 }
 
 pub fn rfalse() -> NetArray<u8> {
@@ -37,32 +37,46 @@ static RT: LazyLock<Mutex<Option<Arc<tokio::runtime::Runtime>>>> =
 static RAT: LazyLock<Mutex<Option<Rat>>> = LazyLock::new(|| Mutex::new(None));
 
 impl Rat {
-    fn create(
-        name: &str,
-        timeout: Option<std::time::Duration>,
-        rt: Arc<tokio::runtime::Runtime>,
-    ) -> anyhow::Result<Self> {
-        let ship = rt.block_on(async {
-            let init_future = mt_sea::ship::NetworkShipImpl::init(
-                ShipKind::Rat(name.to_string()),
-                false,
-                mt_sea::Qos::Reliable,
-            );
+    async fn create(name: &str, timeout: Option<std::time::Duration>) -> anyhow::Result<Self> {
+        let init_future = mt_sea::ship::NetworkShipImpl::init(
+            ShipKind::Rat(name.to_string()),
+            false,
+            mt_sea::Qos::Reliable,
+        );
 
-            match timeout {
-                None => Ok(Some(init_future.await?)),
-                Some(t) => match tokio::time::timeout(t, init_future).await {
-                    Err(_) => Ok::<Option<NetworkShipImpl>, anyhow::Error>(None),
-                    Ok(t) => Ok(Some(t?)),
-                },
-            }
-        })?;
+        let ship = match timeout {
+            None => Some(init_future.await?),
+            Some(t) => match tokio::time::timeout(t, init_future).await {
+                Err(_) => None,
+                Ok(ship) => Some(ship?),
+            },
+        };
 
         Ok(Self {
             name: name.to_string(),
-            ship,
+            ship: ship.map(Arc::new),
         })
     }
+}
+
+fn store_rat(new_rat: Rat) -> anyhow::Result<()> {
+    let mut rat = RAT
+        .lock()
+        .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
+    if rat.is_some() {
+        return Err(anyhow::anyhow!("Rat already initialized"));
+    }
+    rat.replace(new_rat);
+    Ok(())
+}
+
+/// Initialize a Rat using the caller's active Tokio runtime.
+pub async fn init_async(
+    node_name: &str,
+    timeout: Option<std::time::Duration>,
+) -> anyhow::Result<()> {
+    let new_rat = Rat::create(node_name, timeout).await?;
+    store_rat(new_rat)
 }
 
 pub fn init(
@@ -70,12 +84,10 @@ pub fn init(
     timeout: Option<std::time::Duration>,
     runtime: Option<Arc<tokio::runtime::Runtime>>,
 ) -> anyhow::Result<()> {
-    let mut rat_arc = RAT
-        .lock()
-        .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
-
-    if rat_arc.is_some() {
-        return Err(anyhow::anyhow!("Rat already initialized"));
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(anyhow!(
+            "init() cannot be called from a Tokio runtime; use init_async().await"
+        ));
     }
 
     let mut srt = RT.lock().unwrap();
@@ -93,10 +105,9 @@ pub fn init(
     }
 
     let rt = srt.as_ref().expect("just set").clone();
-    let new_rat = Rat::create(node_name, timeout, rt)?;
-    rat_arc.replace(new_rat);
-
-    Ok(())
+    drop(srt);
+    let new_rat = rt.block_on(Rat::create(node_name, timeout))?;
+    store_rat(new_rat)
 }
 
 pub fn deinit() -> anyhow::Result<()> {
@@ -128,125 +139,147 @@ where
     T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>,
     T: Send + Sync,
 {
-    let rat_arc = RAT
-        .lock()
-        .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
-
-    let rat = rat_arc
-        .as_ref()
-        .ok_or(anyhow::anyhow!("Rat not initialized"))?;
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(anyhow!(
+            "bacon() cannot be called from a Tokio runtime; use bacon_async().await"
+        ));
+    }
 
     let srt = RT.lock().unwrap();
-    let rt = srt.as_ref().ok_or(anyhow!(
+    let rt = srt.as_ref().cloned().ok_or(anyhow!(
         "Async Runtime not initialized. Call init() before calling bacon()."
     ))?;
+    drop(srt);
 
-    if let Some(rat_ship) = rat.ship.as_ref() {
-        rt.block_on(async move {
-            match rat_ship.ask_for_action(variable_name).await {
-                Ok((mt_sea::Action::Sail, lock_until_ack)) => {
-                    info!("Rat {} sails for variable {}", rat.name, variable_name);
-                    let receiver = lock_until_ack.then_some({
-                        let client = rat_ship.client.lock().await;
-                        let sender = client.coordinator_receive.read().unwrap();
-                        sender
-                            .as_ref()
-                            .expect("How are we receiving anything in the client? :)")
-                            .subscribe()
-                    });
+    rt.block_on(bacon_async(variable_name, data, variable_type))
+}
 
-                    if let Some(mut receiver) = receiver {
-                        info!("Locked...");
-                        loop {
-                            let (packet, _) = receiver.recv().await?;
-                            if matches!(packet.data, net::PacketKind::Acknowledge) {
-                                break;
-                            }
+/// Synchronize a watched variable using the caller's active Tokio runtime.
+pub async fn bacon_async<T>(
+    variable_name: &str,
+    data: &mut T,
+    variable_type: VariableType,
+) -> anyhow::Result<()>
+where
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+        + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
+    T: 'static + Send,
+    T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>,
+    T: Send + Sync,
+{
+    let (rat_name, rat_ship) = {
+        let rat = RAT
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock rat: {}", e))?;
+        let rat = rat.as_ref().ok_or(anyhow::anyhow!("Rat not initialized"))?;
+        (rat.name.clone(), rat.ship.clone())
+    };
+
+    if let Some(rat_ship) = rat_ship {
+        match rat_ship.ask_for_action(variable_name).await {
+            Ok((mt_sea::Action::Sail, lock_until_ack)) => {
+                info!("Rat {} sails for variable {}", rat_name, variable_name);
+                let receiver = lock_until_ack.then_some({
+                    let client = rat_ship.client.lock().await;
+                    let sender = client.coordinator_receive.read().unwrap();
+                    sender
+                        .as_ref()
+                        .expect("How are we receiving anything in the client? :)")
+                        .subscribe()
+                });
+
+                if let Some(mut receiver) = receiver {
+                    info!("Locked...");
+                    loop {
+                        let (packet, _) = receiver.recv().await?;
+                        if matches!(packet.data, net::PacketKind::Acknowledge) {
+                            break;
                         }
-                        info!("Unlocked");
                     }
-
-                    Ok(())
+                    info!("Unlocked");
                 }
-                Ok((mt_sea::Action::Shoot { target, id }, lock_until_ack)) => {
-                    info!("Rat {} shoots {} at {:?}", rat.name, variable_name, target);
 
-                    let receiver = lock_until_ack.then_some({
-                        let client = rat_ship.client.lock().await;
-                        let sender = client.coordinator_receive.read().unwrap();
-                        sender
-                            .as_ref()
-                            .expect("How are we receiving anything in the client? :)")
-                            .subscribe()
-                    });
-
-                    rat_ship
-                        .get_cannon()
-                        .shoot(&target, id, data, variable_type, variable_name)
-                        .await?;
-
-                    if let Some(mut receiver) = receiver {
-                        info!("Locked...");
-                        loop {
-                            let (packet, _) = receiver.recv().await?;
-                            if matches!(packet.data, net::PacketKind::Acknowledge) {
-                                break;
-                            }
-                        }
-                        info!("Unlocked");
-                    }
-
-                    info!(
-                        "Rat {} finished shooting {} at {:?}",
-                        rat.name, variable_name, target
-                    );
-
-                    Ok(())
-                }
-                Ok((mt_sea::Action::Catch { source, id }, lock_until_ack)) => {
-                    info!(
-                        "Rat {} catches {} from {:?}",
-                        rat.name, variable_name, source
-                    );
-
-                    let receiver = lock_until_ack.then_some({
-                        let client = rat_ship.client.lock().await;
-                        let sender = client.coordinator_receive.read().unwrap();
-                        sender
-                            .as_ref()
-                            .expect("How are we receiving anything in the client? :)")
-                            .subscribe()
-                    });
-
-                    let mut recv_data = rat_ship.get_cannon().catch::<T>(id).await?;
-
-                    info!(
-                        "Rat {} finished catching {} from {:?}",
-                        rat.name, variable_name, source
-                    );
-
-                    // The first index is the newest
-                    *data = recv_data.remove(0);
-
-                    if let Some(mut receiver) = receiver {
-                        info!("Locked...");
-                        loop {
-                            let (packet, _) = receiver.recv().await?;
-                            if matches!(packet.data, net::PacketKind::Acknowledge) {
-                                break;
-                            }
-                        }
-                        info!("Unlocked");
-                    }
-
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("Failed to get action: {}", e);
-                    Err(e)
-                }
+                Ok(())
             }
-        })
+            Ok((mt_sea::Action::Shoot { target, id }, lock_until_ack)) => {
+                info!("Rat {} shoots {} at {:?}", rat_name, variable_name, target);
+
+                let receiver = lock_until_ack.then_some({
+                    let client = rat_ship.client.lock().await;
+                    let sender = client.coordinator_receive.read().unwrap();
+                    sender
+                        .as_ref()
+                        .expect("How are we receiving anything in the client? :)")
+                        .subscribe()
+                });
+
+                rat_ship
+                    .get_cannon()
+                    .shoot(&target, id, data, variable_type, variable_name)
+                    .await?;
+
+                if let Some(mut receiver) = receiver {
+                    info!("Locked...");
+                    loop {
+                        let (packet, _) = receiver.recv().await?;
+                        if matches!(packet.data, net::PacketKind::Acknowledge) {
+                            break;
+                        }
+                    }
+                    info!("Unlocked");
+                }
+
+                info!(
+                    "Rat {} finished shooting {} at {:?}",
+                    rat_name, variable_name, target
+                );
+
+                Ok(())
+            }
+            Ok((mt_sea::Action::Catch { source, id }, lock_until_ack)) => {
+                info!(
+                    "Rat {} catches {} from {:?}",
+                    rat_name, variable_name, source
+                );
+
+                let receiver = lock_until_ack.then_some({
+                    let client = rat_ship.client.lock().await;
+                    let sender = client.coordinator_receive.read().unwrap();
+                    sender
+                        .as_ref()
+                        .expect("How are we receiving anything in the client? :)")
+                        .subscribe()
+                });
+
+                let mut recv_data = rat_ship.get_cannon().catch::<T>(id).await?;
+
+                info!(
+                    "Rat {} finished catching {} from {:?}",
+                    rat_name, variable_name, source
+                );
+
+                // The first index is the newest
+                *data = recv_data.remove(0);
+
+                if let Some(mut receiver) = receiver {
+                    info!("Locked...");
+                    loop {
+                        let (packet, _) = receiver.recv().await?;
+                        if matches!(packet.data, net::PacketKind::Acknowledge) {
+                            break;
+                        }
+                    }
+                    info!("Unlocked");
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to get action: {}", e);
+                Err(e)
+            }
+        }
     } else {
         Ok(())
     }
