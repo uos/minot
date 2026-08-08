@@ -62,16 +62,82 @@ pub(crate) struct Args {
     #[arg(long, global = true)]
     pub no_shm: bool,
 
-    /// Size of the shared memory buffer pool (e.g., "7mb", "64MiB", "1gb").
-    /// Default is 7MB which is within typical Linux /dev/shm limits.
+    /// Size of the shared memory buffer pool (e.g., "16MiB", "64MiB", "1GiB").
     #[cfg(feature = "shm")]
-    #[arg(long, global = true, default_value = "7mb", value_parser = parse_bytesize)]
+    #[arg(long, global = true, default_value = "16MiB", value_parser = parse_bytesize)]
     pub shm_size: ByteSize,
+
+    /// Largest message to attempt through SHM before falling back to network transport.
+    #[cfg(feature = "shm")]
+    #[arg(long, global = true, default_value = "64MiB", value_parser = parse_bytesize)]
+    pub shm_max_message_size: ByteSize,
+
+    /// Maximum time to wait for an SHM allocation before falling back to network transport.
+    #[cfg(feature = "shm")]
+    #[arg(long, global = true, default_value_t = 250)]
+    pub shm_allocation_timeout_ms: u64,
 }
 
 #[cfg(feature = "shm")]
 fn parse_bytesize(s: &str) -> Result<ByteSize, String> {
     s.parse::<ByteSize>().map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "shm")]
+fn spawn_shm_stats_logger() {
+    const DEFAULT_INTERVAL_SECS: u64 = 30;
+
+    let interval_secs = std::env::var("MINOT_SHM_STATS_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_INTERVAL_SECS)
+        .max(1);
+
+    tokio::spawn(async move {
+        let mut previous = mt_sea::client::shm_transfer_stats();
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+            let current = mt_sea::client::shm_transfer_stats();
+            let delta = current.since(previous);
+            previous = current;
+
+            if !delta.has_traffic() {
+                continue;
+            }
+
+            let tx_total = delta.send_bytes + delta.network_send_bytes;
+            let rx_total = delta.receive_bytes + delta.network_receive_bytes;
+            let tx_shm_percent = if tx_total == 0 {
+                0.0
+            } else {
+                delta.send_bytes as f64 * 100.0 / tx_total as f64
+            };
+            let rx_shm_percent = if rx_total == 0 {
+                0.0
+            } else {
+                delta.receive_bytes as f64 * 100.0 / rx_total as f64
+            };
+
+            info!(
+                "Payload transport over last {interval_secs}s: TX shm={} ({} msgs), non-shm={} ({} msgs), {:.1}% via SHM; RX shm={} ({} msgs), non-shm={} ({} msgs), {:.1}% via SHM; SHM fallbacks={}",
+                ByteSize::b(delta.send_bytes),
+                delta.send_successes,
+                ByteSize::b(delta.network_send_bytes),
+                delta.network_sends,
+                tx_shm_percent,
+                ByteSize::b(delta.receive_bytes),
+                delta.receives,
+                ByteSize::b(delta.network_receive_bytes),
+                delta.network_receives,
+                rx_shm_percent,
+                delta.send_fallbacks,
+            );
+        }
+    });
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -509,7 +575,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             match sub.recv().await {
                 Ok((packet, _)) => match packet.data {
                     mt_sea::net::PacketKind::VariableTaskRequest(var) => {
-                        info!("received var request: {var}");
+                        log::debug!("received var request: {var}");
                         match dyn_wind_tx.send(var).await {
                             Ok(_) => {}
                             Err(e) => {
@@ -1523,7 +1589,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 match sub.recv().await {
                                     Ok((packet, _)) => match packet.data {
                                         mt_sea::net::PacketKind::VariableTaskRequest(var) => {
-                                            info!("received var request: {var}");
+                                            log::debug!("received var request: {var}");
                                             match dyn_wind_tx.send(var).await {
                                                 Ok(_) => {}
                                                 Err(e) => {
@@ -1815,7 +1881,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::set_var("MINOT_SHM_DISABLED", "1");
         }
         std::env::set_var("MINOT_SHM_SIZE", args.shm_size.as_u64().to_string());
+        std::env::set_var(
+            "MINOT_SHM_MAX_MESSAGE_SIZE",
+            args.shm_max_message_size.as_u64().to_string(),
+        );
+        std::env::set_var(
+            "MINOT_SHM_ALLOCATION_TIMEOUT_MS",
+            args.shm_allocation_timeout_ms.to_string(),
+        );
     }
+
+    #[cfg(feature = "shm")]
+    spawn_shm_stats_logger();
 
     match args.command {
         Commands::Sync(tui_args) => tui(tui_args.file).await,

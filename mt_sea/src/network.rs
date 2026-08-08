@@ -9,6 +9,9 @@ pub const NETWORK_COORD_ENDPOINT: &str = "tcp/0.0.0.0:7447";
 
 static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "shm")]
+static SHM_RUNTIME_AVAILABLE: AtomicBool = AtomicBool::new(true);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkRole {
     Client,
@@ -24,6 +27,16 @@ pub fn set_local_only(enabled: bool) {
 
 pub fn is_local_only() -> bool {
     LOCAL_ONLY.load(Ordering::SeqCst)
+}
+
+#[cfg(feature = "shm")]
+pub(crate) fn is_shm_runtime_available() -> bool {
+    SHM_RUNTIME_AVAILABLE.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "shm")]
+pub(crate) fn disable_shm_runtime() {
+    SHM_RUNTIME_AVAILABLE.store(false, Ordering::Release);
 }
 
 /// Return whether something is accepting connections on the local coordinator endpoint.
@@ -43,6 +56,79 @@ pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
         std::env::var("MINOT_COORD_ADDR").ok(),
         role == NetworkRole::Coordinator && local_router_is_running(),
     )
+}
+
+/// Open a Zenoh session, retrying without shared memory if SHM initialization fails.
+pub(crate) fn open_zenoh_session(role: NetworkRole) -> anyhow::Result<zenoh::Session> {
+    use zenoh::Wait;
+
+    let config = zenoh_config(role);
+    #[cfg(feature = "shm")]
+    let config = {
+        let mut config = config;
+        if is_shm_runtime_available() {
+            disable_implicit_shm_transport(&mut config)?;
+        } else {
+            disable_shm_in_config(&mut config)?;
+        }
+        config
+    };
+
+    match zenoh::open(config).wait() {
+        Ok(session) => Ok(session),
+        Err(error) => {
+            #[cfg(feature = "shm")]
+            {
+                if !is_shm_initialization_error(&error.to_string()) {
+                    return Err(anyhow::anyhow!("Failed to open Zenoh session: {error}"));
+                }
+                warn!("Zenoh SHM initialization failed: {error}; retrying without shared memory");
+                disable_shm_runtime();
+                let mut fallback = zenoh_config(role);
+                disable_shm_in_config(&mut fallback)?;
+                return zenoh::open(fallback)
+                    .wait()
+                    .map_err(|fallback_error| {
+                        anyhow::anyhow!(
+                            "Failed to open Zenoh session with SHM ({error}) and without SHM ({fallback_error})"
+                        )
+                    });
+            }
+
+            #[cfg(not(feature = "shm"))]
+            Err(anyhow::anyhow!("Failed to open Zenoh session: {error}"))
+        }
+    }
+}
+
+#[cfg(feature = "shm")]
+fn is_shm_initialization_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("shared memory")
+        || error.contains("shared-memory")
+        || error.contains("posix shm")
+        || error.contains("shm segment")
+}
+
+#[cfg(feature = "shm")]
+fn disable_shm_in_config(config: &mut zenoh::Config) -> anyhow::Result<()> {
+    config
+        .insert_json5("transport/shared_memory/enabled", "false")
+        .map_err(|error| anyhow::anyhow!("Failed to disable Zenoh shared memory: {error}"))?;
+    disable_implicit_shm_transport(config)?;
+    Ok(())
+}
+
+#[cfg(feature = "shm")]
+fn disable_implicit_shm_transport(config: &mut zenoh::Config) -> anyhow::Result<()> {
+    config
+        .insert_json5(
+            "transport/shared_memory/transport_optimization/enabled",
+            "false",
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("Failed to disable Zenoh SHM transport optimization: {error}")
+        })
 }
 
 fn config_for(
@@ -119,6 +205,20 @@ mod tests {
 
     fn value(config: &zenoh::Config, key: &str) -> String {
         config.get_json(key).expect("config key should exist")
+    }
+
+    #[cfg(feature = "shm")]
+    #[test]
+    fn classifies_only_shm_startup_errors_for_fallback() {
+        assert!(is_shm_initialization_error(
+            "Unable to create POSIX shm segment: OS error 1"
+        ));
+        assert!(is_shm_initialization_error(
+            "shared memory initialization failed"
+        ));
+        assert!(!is_shm_initialization_error(
+            "Unable to connect to tcp/127.0.0.1:7447"
+        ));
     }
 
     #[test]

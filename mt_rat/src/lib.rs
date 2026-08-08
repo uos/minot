@@ -179,7 +179,7 @@ where
     if let Some(rat_ship) = rat_ship {
         match rat_ship.ask_for_action(variable_name).await {
             Ok((mt_sea::Action::Sail, lock_until_ack)) => {
-                info!("Rat {} sails for variable {}", rat_name, variable_name);
+                log::debug!("Rat {} sails for variable {}", rat_name, variable_name);
                 let receiver = lock_until_ack.then_some({
                     let client = rat_ship.client.lock().await;
                     let sender = client.coordinator_receive.read().unwrap();

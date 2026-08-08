@@ -187,10 +187,7 @@ impl Sea {
         }
 
         // Initialize Zenoh session
-        let config = crate::network::zenoh_config(crate::network::NetworkRole::Coordinator);
-        let session = zenoh::open(config)
-            .wait()
-            .map_err(|e| anyhow::anyhow!("Failed to open coordinator Zenoh session: {e}"))?;
+        let session = crate::network::open_zenoh_session(crate::network::NetworkRole::Coordinator)?;
         let session = std::sync::Arc::new(session);
 
         let (clients_tx, _clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(64);

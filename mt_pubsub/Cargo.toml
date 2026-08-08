@@ -29,7 +29,7 @@ ros2-interfaces-jazzy-rkyv.workspace = true
 futures-lite = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["shm"]
 shm = ["mt_sea/shm"]
 smol = ["dep:futures-lite"]
 

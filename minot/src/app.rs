@@ -1846,7 +1846,7 @@ impl App {
                                     Arc::clone(&wc.bagfile)
                                 };
                                 let start_bag_read = Instant::now();
-                                info!("iterating on bagfile...");
+                                log::debug!("iterating on bagfile...");
                                 let (res_tx, res_rx) = tokio::sync::oneshot::channel();
                                 let ka = kind.clone();
                                 std::thread::spawn(move || {
@@ -1867,7 +1867,7 @@ impl App {
                                         continue;
                                     }
                                 };
-                                info!(
+                                log::debug!(
                                     "got {} msg{} in {:?}",
                                     bagmsgs.messages.len(),
                                     if bagmsgs.messages.len() > 1 { "s" } else { "" },

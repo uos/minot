@@ -556,7 +556,7 @@ fn run_coordinator_with_ready(
                                                                                     }
                                                                                     asked_for_dynamic = true;
 
-                                                                                    info!(
+                                                                                    debug!(
                                                                                         "asking Minot TUI for dyn for {}",
                                                                                         &variable
                                                                                     );

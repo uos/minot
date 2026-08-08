@@ -50,12 +50,12 @@ name = "minot-coord"
 path = "src/coord.rs"
 
 [features]
-default = ["embed-coord", "embed-mt-pubsub", "db3"]
+default = ["embed-coord", "embed-mt-pubsub", "db3", "shm"]
 db3 = ["mt_bagread/db3"]
 
 default-hiroz = ["embed-coord", "embed-hiroz", "db3"]
 
-# Experimental: Enable shared memory for zero-copy transfer of large messages (same-machine only)
+# Enable shared memory for large same-machine messages, with automatic network fallback.
 shm = ["mt_sea/shm", "mt_wind?/shm"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
