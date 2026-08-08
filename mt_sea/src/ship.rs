@@ -19,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 use zenoh::Wait;
 
 use crate::{
-    COORDINATOR_STARTUP_WAIT_MS, HEARTBEAT_SUPPRESS_MS, PEER_DEAD_THRESHOLD,
-    REGISTRATION_TIMEOUT_MS, Sendable, ShipKind, VariableType,
+    HEARTBEAT_SUPPRESS_MS, PEER_DEAD_THRESHOLD, REGISTRATION_TIMEOUT_MS, Sendable, ShipKind,
+    VariableType,
     client::Client,
     net::{PacketKind, Qos, sanitize_key},
 };
@@ -688,7 +688,10 @@ impl NetworkShipImpl {
                 if let Some(start_coord) = start_coord.take() {
                     start_coord(Some(torpedo_tx)).await?;
                 }
-                tokio::time::sleep(Duration::from_millis(COORDINATOR_STARTUP_WAIT_MS)).await;
+                // The startup callback does not return until a coordinator started by this
+                // process has installed its join subscriber. If another process owns the
+                // coordinator lock, retrying registration itself is the readiness wait.
+                // A fixed sleep here only adds latency and cannot close any race.
                 match try_register().await {
                     Ok(Ok(handle)) => {
                         info!("{:?} Registered.", &kind);

@@ -34,10 +34,6 @@ pub const PEER_DEAD_THRESHOLD: u32 = 3;
 /// truly isolated or zombie clients that sent no packet for this long.
 pub const COORD_CLIENT_IDLE_TIMEOUT_MS: u64 = 30_000;
 
-/// [registration] How long to wait for an embedded coordinator to start before
-/// retrying registration.
-pub const COORDINATOR_STARTUP_WAIT_MS: u64 = 1000;
-
 use mt_net::{ActionPlan, BagMsg, Rules, VariableHuman};
 
 /// Initialize logging with zenoh logs filtered to warn level regardless of RUST_LOG setting.

@@ -12,6 +12,11 @@ pub enum CoordMode {
     /// Auto-start an embedded coordinator if none is reachable (default).
     #[default]
     AutoStart,
+    /// Start an embedded coordinator before opening the client session.
+    ///
+    /// Use this when the process is the designated coordinator owner. If another
+    /// process already owns the coordinator lock, this node connects to it instead.
+    Start,
     /// Fail immediately if no coordinator is reachable. Requires an external coordinator.
     External,
 }
@@ -41,7 +46,7 @@ impl NodeConfig {
         self
     }
 
-    /// Set the coordinator mode (AutoStart or External).
+    /// Set the coordinator startup behavior.
     pub fn coord_mode(mut self, coord_mode: CoordMode) -> Self {
         self.coord_mode = coord_mode;
         self
@@ -355,14 +360,15 @@ impl Node {
     }
 
     pub async fn create(config: NodeConfig) -> anyhow::Result<Self> {
-        // Zenoh 1.9 fails while opening an explicit local client endpoint if no
-        // router is listening yet. Start the embedded coordinator before opening
-        // that client; waiting for a registration timeout would be too late.
-        if matches!(config.coord_mode, CoordMode::AutoStart)
-            && mt_sea::network::is_local_only()
-            && !mt_sea::network::local_router_is_running()
-        {
-            log::info!("No local coordinator found, starting embedded coordinator...");
+        // A designated owner starts the coordinator without paying discovery time.
+        // AutoStart also does this for local-only mode, where the TCP endpoint gives
+        // us a deterministic and cheap existence check.
+        let start_before_client = matches!(config.coord_mode, CoordMode::Start)
+            || (matches!(config.coord_mode, CoordMode::AutoStart)
+                && mt_sea::network::is_local_only()
+                && !mt_sea::network::local_router_is_running());
+        if start_before_client {
+            log::info!("Starting embedded coordinator before client initialization...");
             mt_coord::ensure_default_coordinator_ready(None).await?;
         }
 
@@ -376,7 +382,7 @@ impl Node {
                 )
                 .await?
             }
-            CoordMode::AutoStart => {
+            CoordMode::AutoStart | CoordMode::Start => {
                 mt_sea::ship::NetworkShipImpl::init_with_coord_auto_start(
                     ShipKind::Rat(config.name.clone()),
                     rm_rules,
