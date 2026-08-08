@@ -67,6 +67,11 @@ pub(crate) struct Args {
     #[arg(long, global = true, default_value = "16MiB", value_parser = parse_bytesize)]
     pub shm_size: ByteSize,
 
+    /// Minimum payload size to send through SHM instead of ordinary Zenoh transport.
+    #[cfg(feature = "shm")]
+    #[arg(long, global = true, default_value = "1MiB", value_parser = parse_bytesize)]
+    pub shm_threshold: ByteSize,
+
     /// Largest message to attempt through SHM before falling back to network transport.
     #[cfg(feature = "shm")]
     #[arg(long, global = true, default_value = "64MiB", value_parser = parse_bytesize)]
@@ -1881,6 +1886,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::set_var("MINOT_SHM_DISABLED", "1");
         }
         std::env::set_var("MINOT_SHM_SIZE", args.shm_size.as_u64().to_string());
+        std::env::set_var(
+            "MINOT_SHM_THRESHOLD",
+            args.shm_threshold.as_u64().to_string(),
+        );
         std::env::set_var(
             "MINOT_SHM_MAX_MESSAGE_SIZE",
             args.shm_max_message_size.as_u64().to_string(),

@@ -26,7 +26,7 @@ pub type RecvBuffer = HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>;
 const DEFAULT_SHM_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 
 #[cfg(feature = "shm")]
-const SHM_SIZE_THRESHOLD: usize = 8 * 1024;
+const DEFAULT_SHM_SIZE_THRESHOLD: usize = 1024 * 1024;
 
 #[cfg(feature = "shm")]
 const DEFAULT_SHM_MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
@@ -152,6 +152,14 @@ fn get_shm_buffer_size() -> usize {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(DEFAULT_SHM_BUFFER_SIZE)
+}
+
+#[cfg(feature = "shm")]
+fn get_shm_size_threshold() -> usize {
+    std::env::var("MINOT_SHM_THRESHOLD")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_SHM_SIZE_THRESHOLD)
 }
 
 #[cfg(feature = "shm")]
@@ -1078,7 +1086,7 @@ impl Client {
         padded_name[..len].copy_from_slice(&name_bytes[..len]);
 
         #[cfg(feature = "shm")]
-        if total_len >= SHM_SIZE_THRESHOLD {
+        if total_len >= get_shm_size_threshold() {
             SHM_SEND_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // Try SHM transfer with dynamic pool growth
             if let Some(result) = self

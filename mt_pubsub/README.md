@@ -48,21 +48,22 @@ If you have multiple Minot networks on the same physical network, use the `MINOT
 
 ## Shared memory
 
-The default feature set uses Zenoh shared memory for same-device messages of at least 8 KiB.
+The default feature set uses Zenoh shared memory for same-device messages of at least 1 MiB.
 If SHM initialization, pool growth, or allocation fails, Minot logs a warning and sends the
 message through the regular Zenoh transport instead.
 
 Defaults can be changed with:
 
 - `MINOT_SHM_SIZE` — initial pool size in bytes (default: 16 MiB)
+- `MINOT_SHM_THRESHOLD` — minimum message size attempted through SHM (default: 1 MiB)
 - `MINOT_SHM_MAX_MESSAGE_SIZE` — largest message attempted through SHM (default: 64 MiB)
 - `MINOT_SHM_ALLOCATION_TIMEOUT_MS` — allocation deadline before fallback (default: 250 ms)
 - `MINOT_SHM_STATS_INTERVAL_SECS` — interval for non-empty SHM/non-SHM traffic summaries
   from the `minot` binary (default: 30 seconds)
 - `MINOT_SHM_DISABLED=1` — always use regular Zenoh transport
 
-The `minot` binary exposes the same controls as `--shm-size`, `--shm-max-message-size`,
-`--shm-allocation-timeout-ms`, and `--no-shm`.
+The `minot` binary exposes the same controls as `--shm-size`, `--shm-threshold`,
+`--shm-max-message-size`, `--shm-allocation-timeout-ms`, and `--no-shm`.
 
 Run the reliability suite and manual benchmark with:
 
