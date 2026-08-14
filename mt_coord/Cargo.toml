@@ -14,8 +14,9 @@ homepage.workspace = true
 exclude.workspace = true
 
 [features]
-default = ["embed-scope"]
+default = []
 embed-scope = ["dep:mt_scope"]
+shm = ["mt_sea/shm", "mt_scope?/shm"]
 
 [dependencies]
 anyhow.workspace = true

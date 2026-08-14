@@ -13,6 +13,10 @@ documentation.workspace = true
 homepage.workspace = true
 exclude.workspace = true
 
+[features]
+default = []
+shm = ["mt_sea/shm", "mt_pubsub/shm"]
+
 [dependencies]
 anyhow.workspace = true
 log.workspace = true

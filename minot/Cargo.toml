@@ -37,7 +37,7 @@ regex.workspace = true
 once_cell.workspace = true
 rust_decimal.workspace = true
 bytesize.workspace = true
-mt_coord.workspace = true
+mt_coord = { workspace = true, features = ["embed-scope"] }
 syn = { version = "2.0.117", features = ["full", "extra-traits"] }
 heck = "0.5.0"
 
@@ -53,10 +53,11 @@ path = "src/coord.rs"
 default = ["embed-coord", "embed-mt-pubsub", "db3", "shm"]
 db3 = ["mt_bagread/db3"]
 
-default-hiroz = ["embed-coord", "embed-hiroz", "db3"]
+default-hiroz = ["embed-coord", "embed-hiroz", "db3", "shm"]
 
 # Enable shared memory for large same-machine messages, with automatic network fallback.
-shm = ["mt_sea/shm", "mt_wind?/shm"]
+# `minot` is the only crate that turns this on by default; every library crate leaves it off.
+shm = ["mt_sea/shm", "mt_coord/shm", "mt_wind?/shm"]
 
 # Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
 embed-ros2-c = ["embed-ros2-c-turbine"]

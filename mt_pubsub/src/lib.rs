@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::Arc};
 use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
 use tokio_util::sync::CancellationToken;
 
-pub use mt_sea::Qos;
+pub use mt_sea::{ArchivedMessage, Qos};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum CoordMode {
@@ -108,11 +108,48 @@ impl<T: Sendable> Publisher<T> {
 
 #[derive(Debug)]
 pub struct Subscriber<T: Sendable> {
-    chan: tokio::sync::mpsc::Receiver<T>,
+    chan: tokio::sync::mpsc::Receiver<ArchivedMessage<T>>,
+    /// What it takes to tell the coordinator to stop sending. Held so a
+    /// subscriber can be given up without keeping the node around.
+    ship: String,
+    topic: String,
+    coord_tx: tokio::sync::mpsc::Sender<Packet>,
 }
 
 impl<T: Sendable> Subscriber<T> {
+    /// Stop delivery of this topic to this node.
+    ///
+    /// Dropping a subscriber only stops it being read; the coordinator carries
+    /// on sending, which for a large stream is most of the cost. Call this to
+    /// actually get rid of the traffic.
+    pub async fn unsubscribe(self) -> anyhow::Result<()> {
+        self.coord_tx
+            .send(Packet {
+                header: mt_sea::net::Header::default(),
+                data: net::PacketKind::UnregisterShipAtVar {
+                    ship: self.ship.clone(),
+                    var: self.topic.clone(),
+                    kind: net::RatPubRegisterKind::Subscribe,
+                },
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Receive and deserialize the next message into an owned `T`.
     pub async fn next(&mut self) -> Option<T> {
+        self.next_archived().await.map(|message| {
+            message
+                .deserialize()
+                .expect("validated message must deserialize")
+        })
+    }
+
+    /// Receive the next message as a validated archived view.
+    ///
+    /// The returned owner keeps its backing buffer alive. Use
+    /// [`ArchivedMessage::archived`] to inspect it without creating an owned `T`.
+    pub async fn next_archived(&mut self) -> Option<ArchivedMessage<T>> {
         self.chan.recv().await
     }
 }
@@ -250,6 +287,10 @@ impl Node {
             .await
             .map_err(|_| anyhow!("Receiver task failed to start"))?;
 
+        // Kept for the unsubscribe, which needs the topic after the loop below
+        // has taken ownership of it.
+        let subscriber_topic = topic.clone();
+
         // Request
         coord_tx
             .send(Packet {
@@ -317,7 +358,10 @@ impl Node {
                                 Ok(None)
                             }
                             Ok((mt_sea::Action::Catch { source, id }, _)) => {
-                                let recv_data = rat_ship.get_cannon().catch::<T>(id).await?;
+                                let recv_data = rat_ship
+                                    .get_cannon()
+                                    .catch_archived::<T>(id)
+                                    .await?;
                                 debug!("Finished catching {} from {:?}", &topic, source);
                                 Ok(Some(recv_data))
                             }
@@ -356,7 +400,12 @@ impl Node {
             }
         });
 
-        Ok(Subscriber { chan: rx })
+        Ok(Subscriber {
+            chan: rx,
+            ship: self.name.to_owned(),
+            topic: subscriber_topic,
+            coord_tx,
+        })
     }
 
     pub async fn create(config: NodeConfig) -> anyhow::Result<Self> {
@@ -407,21 +456,7 @@ impl Node {
     ) -> anyhow::Result<Self> {
         let shutdown = ship.disconnect.clone();
         let ship = Arc::new(ship);
-        let heartbeat_ship = Arc::clone(&ship);
-        let heartbeat_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let interval = std::time::Duration::from_millis(mt_sea::HEARTBEAT_INTERVAL_MS);
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(interval) => {
-                        if let Err(e) = heartbeat_ship.send_heartbeat().await {
-                            debug!("Failed to send node heartbeat: {e}");
-                        }
-                    }
-                    _ = heartbeat_shutdown.cancelled() => return,
-                }
-            }
-        });
+        ship.spawn_heartbeat();
         Ok(Self {
             name,
             mode,

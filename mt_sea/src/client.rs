@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>;
-pub type RecvBuffer = HashMap<u32, Vec<(Vec<u8>, VariableType, String)>>;
+pub type RecvBuffer = HashMap<u32, Vec<(AlignedVec, VariableType, String)>>;
 
 #[cfg(feature = "shm")]
 /// Large enough for common image payloads while remaining conservative for 64 MiB containers.
@@ -139,10 +139,7 @@ pub fn reset_shm_transfer_stats() {
 
 #[cfg(feature = "shm")]
 fn is_shm_enabled() -> bool {
-    crate::network::is_shm_runtime_available()
-        && !std::env::var("MINOT_SHM_DISABLED")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(false)
+    crate::network::is_shm_runtime_available() && !crate::network::is_shm_disabled()
 }
 
 /// Get SHM buffer size from environment variable, falling back to default
@@ -597,7 +594,7 @@ impl Client {
                 match queryable.recv_async().await {
                     Ok(query) => {
                         // Get payload bytes, with SHM support when feature is enabled
-                        let payload_bytes = match query.payload() {
+                        let payload_bytes: std::borrow::Cow<'_, [u8]> = match query.payload() {
                             Some(p) => {
                                 #[cfg(feature = "shm")]
                                 {
@@ -610,7 +607,7 @@ impl Client {
                                             std::sync::atomic::Ordering::Relaxed,
                                         );
                                         debug!("Received SHM payload");
-                                        shm_buf.to_vec()
+                                        std::borrow::Cow::Borrowed(&shm_buf[..])
                                     } else {
                                         NETWORK_RECEIVES
                                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -618,12 +615,12 @@ impl Client {
                                             p.len() as u64,
                                             std::sync::atomic::Ordering::Relaxed,
                                         );
-                                        p.to_bytes().to_vec()
+                                        p.to_bytes()
                                     }
                                 }
                                 #[cfg(not(feature = "shm"))]
                                 {
-                                    p.to_bytes().to_vec()
+                                    p.to_bytes()
                                 }
                             }
                             None => {
@@ -659,7 +656,10 @@ impl Client {
                         )
                         .to_string();
 
-                        let data = payload_bytes[69..].to_vec();
+                        // Copy only the archived data into its final, rkyv-aligned receive
+                        // buffer. The previous implementation copied the complete payload,
+                        // sliced it into another Vec, then copied it once more for alignment.
+                        let data = align_bytes(&payload_bytes[69..]);
 
                         {
                             let mut lock = raw_recv_buff_clone.write().unwrap();
@@ -1023,7 +1023,7 @@ impl Client {
         session: std::sync::Arc<zenoh::Session>,
         domain_id: u16,
         id: u32,
-        data: rkyv::util::AlignedVec,
+        data: std::sync::Arc<rkyv::util::AlignedVec>,
         variable_type: VariableType,
         variable_name: String,
         target_ship_name: String,
@@ -1043,13 +1043,14 @@ impl Client {
         payload.push(variable_type.into());
         payload.extend_from_slice(&padded_name);
         payload.extend_from_slice(&data);
+        let payload = zenoh::bytes::ZBytes::from(payload);
 
         // Best-effort delivery is a single attempt. Set the timeout on the
         // Zenoh query itself so Zenoh promptly releases its pending query state
         // and the large payload when the target queryable has disappeared.
         let replies = session
             .get(&data_key)
-            .payload(&payload)
+            .payload(payload)
             .priority(zenoh::qos::Priority::Background)
             .timeout(std::time::Duration::from_millis(250))
             .wait()
@@ -1068,7 +1069,7 @@ impl Client {
     pub async fn send_raw_to_other_client(
         &self,
         id: u32,
-        data: rkyv::util::AlignedVec,
+        data: &[u8],
         variable_type: VariableType,
         variable_name: &str,
         target_ship_name: &str,
@@ -1113,12 +1114,15 @@ impl Client {
         payload.push(variable_type.into());
         payload.extend_from_slice(&padded_name);
         payload.extend_from_slice(&data);
+        // Moving the Vec into ZBytes transfers ownership to Zenoh. Passing &Vec here
+        // invokes Zenoh's cloning conversion and copies the entire payload.
+        let payload = zenoh::bytes::ZBytes::from(payload);
 
         loop {
             let replies = self
                 .session
                 .get(&data_key)
-                .payload(&payload)
+                .payload(payload.clone())
                 .wait()
                 .map_err(|e| anyhow!("Failed to send data query: {}", e))?;
 

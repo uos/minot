@@ -13,6 +13,10 @@ homepage.workspace = true
 rust-version.workspace = true
 exclude.workspace = true
 
+[features]
+default = []
+shm = ["mt_sea/shm"]
+
 [dependencies]
 mt_sea.workspace = true
 env_logger.workspace = true

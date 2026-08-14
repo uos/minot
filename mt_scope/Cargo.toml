@@ -15,10 +15,9 @@ exclude.workspace = true
 
 [features]
 default = []
-shm = ["zenoh/shared-memory"]
+shm = ["mt_sea/shm"]
 
 [dependencies]
-zenoh.workspace = true
 tokio.workspace = true
 mt_sea.workspace = true
 anyhow.workspace = true

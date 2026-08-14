@@ -14,6 +14,7 @@ Since this method builds Minot from source, we can fully leverage the `--feature
 - `embed-ros2-c-humble` - ROS 2 Humble publisher - needs sourced ROS environment. *Required for Humble because of changes in QoS.*
 - `embed-ros1-native` - ROS1 publisher (native, no system dependencies)
 - `embed-ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
+- `shm` - Shared memory transport for large same-machine messages, with automatic network fallback (default)
 
 ~~~bash
 cargo install minot --locked

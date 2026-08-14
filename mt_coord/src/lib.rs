@@ -45,6 +45,11 @@ enum MinotTask {
         kind: net::RatPubRegisterKind,
         node_mode: Qos,
     },
+    UnregisterShipAtVar {
+        ship: String,
+        var: String,
+        kind: net::RatPubRegisterKind,
+    },
     /// A peer monitor on another node declared this ship dead.
     PeerDead {
         ship: String,
@@ -90,6 +95,7 @@ fn run_coordinator_with_ready(
 ) {
     let coordinator_shutting_down = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let coordinator_shutting_down_in_coord = std::sync::Arc::clone(&coordinator_shutting_down);
+    #[cfg(feature = "embed-scope")]
     let coordinator_shutting_down_in_scope = std::sync::Arc::clone(&coordinator_shutting_down);
 
     // Zenoh handles coordinator discovery and port management
@@ -473,6 +479,13 @@ fn run_coordinator_with_ready(
                                                                 // Acknowledge is sent by coord_rx after validation
                                                                 rat_coord_tx.send(MinotTask::RegisterShipAtVar {ship,var,kind,node_mode},).unwrap();
                                                             }
+                                                            PacketKind::UnregisterShipAtVar {
+                                                                ship,
+                                                                var,
+                                                                kind,
+                                                            } => {
+                                                                rat_coord_tx.send(MinotTask::UnregisterShipAtVar {ship,var,kind},).unwrap();
+                                                            }
                                                             PacketKind::VariableTaskRequest(
                                                                 variable,
                                                             ) => {
@@ -705,10 +718,27 @@ fn run_coordinator_with_ready(
                                                             }
                                                         }
                                                     }
-                                                    Ok(Err(
+                                                    result @ (Ok(Err(
                                                         tokio::sync::broadcast::error::RecvError::Closed,
                                                     ))
-                                                    | Err(_) => {
+                                                    | Err(_)) => {
+                                                        if result.is_err() {
+                                                            // The client stopped speaking for
+                                                            // DISCONNECT_TIMEOUT_MS. Its handler is
+                                                            // the only thing answering variable
+                                                            // requests, so tearing it down silently
+                                                            // makes the client hang on its next
+                                                            // bacon() with no diagnostic.
+                                                            warn!(
+                                                                "Client {} timed out (no packet or heartbeat within {}ms), treating as disconnected",
+                                                                inner_name, DISCONNECT_TIMEOUT_MS
+                                                            );
+                                                        } else {
+                                                            info!(
+                                                                "Client {} disconnected",
+                                                                inner_name
+                                                            );
+                                                        }
                                                         let best_effort_vars =
                                                             be_subscriptions_for_disconnect_inner
                                                                 .read()
@@ -981,6 +1011,44 @@ fn run_coordinator_with_ready(
                         std::process::exit(1);
                     }
                 }
+                MinotTask::UnregisterShipAtVar { ship, var, kind } => {
+                    let mt_net_kind = match kind {
+                        net::RatPubRegisterKind::Publish => RatPubRegisterKind::Publish,
+                        net::RatPubRegisterKind::Subscribe | net::RatPubRegisterKind::Scope => {
+                            RatPubRegisterKind::Subscribe
+                        }
+                    };
+                    let removed = {
+                        let mut current_rules = rules_changer.write().unwrap();
+                        current_rules.unregister(&var, &ship, mt_net_kind.clone())
+                    };
+                    if !removed {
+                        debug!("Ship {ship} was not registered for var {var}, nothing to remove");
+                        let _ = coordinator
+                            .rat_send(ship, net::PacketKind::Acknowledge)
+                            .await;
+                        continue;
+                    }
+                    // A best-effort subscription is tracked separately, so it
+                    // has to be forgotten too or the topic stays marked as
+                    // having a best-effort subscriber that no longer exists.
+                    coordinator
+                        .be_subscriptions
+                        .write()
+                        .unwrap()
+                        .remove(&(ship.clone(), var.clone()));
+                    info!(
+                        "Unregistering from topics ({:?}, {:?}, {:?})",
+                        &ship, &var, &mt_net_kind
+                    );
+                    let rules_snapshot = rules_changer.read().unwrap().clone();
+                    if let Err(e) = coordinator.push_routes_for_var(&var, &rules_snapshot).await {
+                        error!("Failed to push routes after unregistering {var}: {e}");
+                    }
+                    let _ = coordinator
+                        .rat_send(ship, net::PacketKind::Acknowledge)
+                        .await;
+                }
                 MinotTask::RegisterShipAtVar {
                     ship,
                     var,
@@ -1207,10 +1275,8 @@ fn try_start_with_rules_and_ready(
     torpedo_tx: Option<tokio::sync::mpsc::Sender<()>>,
     ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> bool {
-    let lock_file_path = std::env::temp_dir().join(format!(
-        "minot-coord_{}.lock",
-        current_user_id()
-    ));
+    let lock_file_path =
+        std::env::temp_dir().join(format!("minot-coord_{}.lock", current_user_id()));
     let lock_file = match std::fs::File::create(&lock_file_path) {
         Ok(f) => f,
         Err(e) => {

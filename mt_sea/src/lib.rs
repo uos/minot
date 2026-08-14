@@ -36,6 +36,76 @@ pub const COORD_CLIENT_IDLE_TIMEOUT_MS: u64 = 30_000;
 
 use mt_net::{ActionPlan, BagMsg, Rules, VariableHuman};
 
+/// An immutable, validated rkyv message that owns its backing byte buffer.
+///
+/// [`archived`](Self::archived) borrows directly from the stored buffer without
+/// deserializing an owned `T`. Keeping the owner and view in one type prevents
+/// the archived reference from outliving its bytes.
+pub struct ArchivedMessage<T: Archive> {
+    bytes: AlignedVec,
+    _type: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T> std::fmt::Debug for ArchivedMessage<T>
+where
+    T: Archive,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchivedMessage")
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> ArchivedMessage<T>
+where
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>,
+{
+    pub(crate) fn from_aligned_bytes(bytes: AlignedVec) -> anyhow::Result<Self> {
+        rkyv::access::<T::Archived, rkyv::rancor::Error>(&bytes)
+            .map_err(|error| anyhow::anyhow!("Could not validate archived message: {error}"))?;
+        Ok(Self {
+            bytes,
+            _type: std::marker::PhantomData,
+        })
+    }
+
+    /// Access the archived representation without allocating or deserializing `T`.
+    pub fn archived(&self) -> &T::Archived {
+        // SAFETY: construction validates the buffer as T::Archived, and `bytes` is
+        // private and never exposed mutably, so that validation remains valid.
+        unsafe { rkyv::access_unchecked::<T::Archived>(&self.bytes) }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+impl<T> ArchivedMessage<T>
+where
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
+        + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
+{
+    /// Deserialize an owned value when an existing API still requires `T`.
+    pub fn deserialize(&self) -> anyhow::Result<T> {
+        let mut pool = Pool::new();
+        self.archived()
+            .deserialize(Strategy::wrap(&mut pool))
+            .map_err(|error| anyhow::anyhow!("Could not deserialize archived message: {error}"))
+    }
+}
+
 /// Initialize logging with zenoh logs filtered to warn level regardless of RUST_LOG setting.
 /// Uses RUST_LOG env var for other crates, defaulting to `info` if not set.
 pub fn init_logging() {
@@ -235,6 +305,10 @@ pub trait Cannon: Send + Sync + 'static {
     /// The returning Vec can contain previously missed entities of T from existing sync connections.
     /// The first item of T is the newest, followed by incremental older ones.
     async fn catch<T: Sendable>(&self, id: u32) -> anyhow::Result<Vec<T>>;
+
+    /// Catch validated archived messages without deserializing owned values.
+    async fn catch_archived<T: Sendable>(&self, id: u32)
+    -> anyhow::Result<Vec<ArchivedMessage<T>>>;
 
     async fn catch_dyn(&self, id: u32) -> anyhow::Result<Vec<(String, VariableType, String)>>;
 }

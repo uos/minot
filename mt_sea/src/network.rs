@@ -35,6 +35,13 @@ pub(crate) fn is_shm_runtime_available() -> bool {
 }
 
 #[cfg(feature = "shm")]
+pub(crate) fn is_shm_disabled() -> bool {
+    std::env::var("MINOT_SHM_DISABLED")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "shm")]
 pub(crate) fn disable_shm_runtime() {
     SHM_RUNTIME_AVAILABLE.store(false, Ordering::Release);
 }
@@ -66,11 +73,19 @@ pub(crate) fn open_zenoh_session(role: NetworkRole) -> anyhow::Result<zenoh::Ses
     #[cfg(feature = "shm")]
     let config = {
         let mut config = config;
-        if is_shm_runtime_available() {
+        if is_shm_runtime_available() && !is_shm_disabled() {
             disable_implicit_shm_transport(&mut config)?;
         } else {
             disable_shm_in_config(&mut config)?;
         }
+        config
+    };
+    #[cfg(not(feature = "shm"))]
+    let config = {
+        let mut config = config;
+        // Be explicit even though Zenoh was compiled without its SHM implementation:
+        // this peer must never advertise SHM capability during link negotiation.
+        disable_shm_in_config(&mut config)?;
         config
     };
 
@@ -110,7 +125,6 @@ fn is_shm_initialization_error(error: &str) -> bool {
         || error.contains("shm segment")
 }
 
-#[cfg(feature = "shm")]
 fn disable_shm_in_config(config: &mut zenoh::Config) -> anyhow::Result<()> {
     config
         .insert_json5("transport/shared_memory/enabled", "false")
@@ -119,7 +133,6 @@ fn disable_shm_in_config(config: &mut zenoh::Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "shm")]
 fn disable_implicit_shm_transport(config: &mut zenoh::Config) -> anyhow::Result<()> {
     config
         .insert_json5(
@@ -230,6 +243,20 @@ mod tests {
         assert!(!endpoints.contains("0.0.0.0"));
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
         assert_eq!(value(&config, "scouting/gossip/enabled"), "false");
+    }
+
+    #[test]
+    fn disabled_shm_config_does_not_advertise_shm_capability() {
+        let mut config = config_for(NetworkRole::Client, true, None, false);
+        disable_shm_in_config(&mut config).unwrap();
+        assert_eq!(value(&config, "transport/shared_memory/enabled"), "false");
+        assert_eq!(
+            value(
+                &config,
+                "transport/shared_memory/transport_optimization/enabled"
+            ),
+            "false"
+        );
     }
 
     #[test]

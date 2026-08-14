@@ -5,32 +5,17 @@ use std::time::Instant;
 use crate::net::NetArray;
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
-use rkyv::{
-    Archive, Deserialize,
-    api::high::{HighValidator, from_bytes},
-    bytecheck::CheckBytes,
-    de::Pool,
-    rancor::Strategy,
-    to_bytes,
-    util::AlignedVec,
-};
+use rkyv::{api::high::from_bytes, to_bytes, util::AlignedVec};
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
 use zenoh::Wait;
 
 use crate::{
-    HEARTBEAT_SUPPRESS_MS, PEER_DEAD_THRESHOLD, REGISTRATION_TIMEOUT_MS, Sendable, ShipKind,
-    VariableType,
+    ArchivedMessage, HEARTBEAT_SUPPRESS_MS, PEER_DEAD_THRESHOLD, REGISTRATION_TIMEOUT_MS, Sendable,
+    ShipKind, VariableType,
     client::Client,
     net::{PacketKind, Qos, sanitize_key},
 };
-
-/// Copy bytes into an aligned buffer for rkyv deserialization
-fn align_bytes(bytes: &[u8]) -> AlignedVec {
-    let mut aligned = AlignedVec::with_capacity(bytes.len());
-    aligned.extend_from_slice(bytes);
-    aligned
-}
 
 struct BeSendGuard {
     target_ship_name: String,
@@ -92,6 +77,11 @@ impl crate::Cannon for NetworkShipImpl {
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
+        // The archived representation is identical for every target. Keep one aligned
+        // allocation alive across the whole fan-out instead of serializing per target.
+        let data_bytes =
+            Arc::new(to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data"));
+
         for target in targets.iter() {
             let target_ship_name = match &target.kind {
                 ShipKind::Rat(name) => name.clone(),
@@ -109,13 +99,12 @@ impl crate::Cannon for NetworkShipImpl {
                     );
                     continue;
                 };
-                let data_bytes =
-                    to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data");
                 let (session, domain_id) = {
                     let c = self.client.lock().await;
                     (c.session(), c.domain_id())
                 };
                 let variable_name = variable_name.to_string();
+                let data_bytes = Arc::clone(&data_bytes);
                 self.runtime_handle.spawn(async move {
                     let result = tokio::time::timeout(
                         Duration::from_secs(5),
@@ -144,13 +133,11 @@ impl crate::Cannon for NetworkShipImpl {
                     drop(send_guard);
                 });
             } else {
-                let data_bytes =
-                    to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data");
                 let client = self.client.lock().await;
                 client
                     .send_raw_to_other_client(
                         id,
-                        data_bytes,
+                        data_bytes.as_slice(),
                         variable_type,
                         variable_name,
                         &target_ship_name,
@@ -162,13 +149,18 @@ impl crate::Cannon for NetworkShipImpl {
     }
 
     /// Catch the dumped data from the source.
-    async fn catch<T>(&self, id: u32) -> anyhow::Result<Vec<T>>
-    where
-        T: Send,
-        T: Archive,
-        T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-            + Deserialize<T, Strategy<Pool, rkyv::rancor::Error>>,
-    {
+    async fn catch<T: Sendable>(&self, id: u32) -> anyhow::Result<Vec<T>> {
+        self.catch_archived::<T>(id)
+            .await?
+            .into_iter()
+            .map(|message| message.deserialize())
+            .collect()
+    }
+
+    async fn catch_archived<T: Sendable>(
+        &self,
+        id: u32,
+    ) -> anyhow::Result<Vec<ArchivedMessage<T>>> {
         let (buf, mut update_chan) = {
             let client = self.client.lock().await;
             let buf = std::sync::Arc::clone(&client.raw_recv_buff);
@@ -187,15 +179,10 @@ impl crate::Cannon for NetworkShipImpl {
             };
 
             if let Some(data_vec) = data_opt {
-                // Data found - deserialize and return
-                let mut out_buf = Vec::with_capacity(data_vec.len());
-                for (raw, _, _) in data_vec {
-                    let aligned = align_bytes(&raw);
-                    let mat = from_bytes::<T, rkyv::rancor::Error>(&aligned)
-                        .expect("Could not decode data to T");
-                    out_buf.push(mat);
-                }
-                return Ok(out_buf);
+                return data_vec
+                    .into_iter()
+                    .map(|(raw, _, _)| ArchivedMessage::from_aligned_bytes(raw))
+                    .collect();
             }
 
             // No data yet - wait for notification
@@ -222,8 +209,7 @@ impl crate::Cannon for NetworkShipImpl {
     }
 
     async fn catch_dyn(&self, id: u32) -> anyhow::Result<Vec<(String, VariableType, String)>> {
-        fn to_dyn_str(var_type: VariableType, buf: Vec<u8>) -> anyhow::Result<String> {
-            let aligned = align_bytes(&buf);
+        fn to_dyn_str(var_type: VariableType, buf: AlignedVec) -> anyhow::Result<String> {
             Ok(match var_type {
                 VariableType::StaticOnly => {
                     return Err(anyhow!(
@@ -231,22 +217,22 @@ impl crate::Cannon for NetworkShipImpl {
                     ));
                 }
                 VariableType::U8 => {
-                    let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&aligned)?;
+                    let deserialized = from_bytes::<NetArray<u8>, rkyv::rancor::Error>(&buf)?;
                     let mat: nalgebra::DMatrix<u8> = deserialized.into();
                     format!("{:?}", mat)
                 }
                 VariableType::I32 => {
-                    let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&aligned)?;
+                    let deserialized = from_bytes::<NetArray<i32>, rkyv::rancor::Error>(&buf)?;
                     let mat: nalgebra::DMatrix<i32> = deserialized.into();
                     format!("{:?}", mat)
                 }
                 VariableType::F32 => {
-                    let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&aligned)?;
+                    let deserialized = from_bytes::<NetArray<f32>, rkyv::rancor::Error>(&buf)?;
                     let mat: nalgebra::DMatrix<f32> = deserialized.into();
                     format!("{:?}", mat)
                 }
                 VariableType::F64 => {
-                    let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&aligned)?;
+                    let deserialized = from_bytes::<NetArray<f64>, rkyv::rancor::Error>(&buf)?;
                     let mat: nalgebra::DMatrix<f64> = deserialized.into();
                     format!("{:?}", mat)
                 }
@@ -552,6 +538,39 @@ impl NetworkShipImpl {
                 }
             }
         }
+    }
+
+    /// Keep the coordinator's handler for this client alive while it is idle.
+    ///
+    /// The coordinator drops any client that sends nothing for
+    /// `DISCONNECT_TIMEOUT_MS` and tears down the task that answers its variable
+    /// requests, so a ship that only speaks when it has something to say hangs
+    /// forever on its next request after a long pause. Every ship must run this,
+    /// and exactly once: `init` deliberately does not start it, so the owner of
+    /// the `Arc` decides. The task ends when the connection is lost.
+    ///
+    /// Cost is one small packet per `HEARTBEAT_INTERVAL_MS`. `send_heartbeat`
+    /// only suppresses itself after another `send_heartbeat` or a `send_wind`;
+    /// variable requests and pub/sub publishes do not touch `last_send`, so a
+    /// busy ship still beats on schedule. That is deliberate — the peer's own
+    /// disconnect detector arms on heartbeat echoes, so a ship that fell silent
+    /// because it was busy publishing would lose its view of the coordinator.
+    pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let ship = std::sync::Arc::clone(self);
+        let disconnect = ship.disconnect.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_millis(crate::HEARTBEAT_INTERVAL_MS);
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        if let Err(e) = ship.send_heartbeat().await {
+                            debug!("Failed to send heartbeat: {e}");
+                        }
+                    }
+                    _ = disconnect.cancelled() => return,
+                }
+            }
+        })
     }
 
     /// Send a heartbeat to the coordinator if enough time has elapsed since the last send.

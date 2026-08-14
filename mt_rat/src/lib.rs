@@ -19,6 +19,16 @@ pub use rkyv::{Archive, Deserialize, Serialize};
 pub struct Rat {
     name: String,
     ship: Option<Arc<NetworkShipImpl>>,
+    /// Keeps the coordinator's per-client handler alive while this Rat is idle.
+    heartbeat: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Rat {
+    fn drop(&mut self) {
+        if let Some(heartbeat) = self.heartbeat.take() {
+            heartbeat.abort();
+        }
+    }
 }
 
 pub fn rfalse() -> NetArray<u8> {
@@ -52,9 +62,16 @@ impl Rat {
             },
         };
 
+        let ship = ship.map(Arc::new);
+        // A Rat only speaks when it reaches a watched variable, so without this
+        // the coordinator drops it during any pause longer than its disconnect
+        // timeout and the next `bacon` waits forever.
+        let heartbeat = ship.as_ref().map(NetworkShipImpl::spawn_heartbeat);
+
         Ok(Self {
             name: name.to_string(),
-            ship: ship.map(Arc::new),
+            ship,
+            heartbeat,
         })
     }
 }
@@ -96,8 +113,12 @@ pub fn init(
     }
 
     if srt.is_none() {
+        // Multi-threaded so the heartbeat task keeps running between `bacon`
+        // calls. A current-thread runtime only polls tasks inside `block_on`,
+        // which is exactly when the Rat does not need to be kept alive.
         srt.replace(Arc::new(
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
                 .enable_all()
                 .build()
                 .unwrap(),

@@ -62,9 +62,14 @@ impl Scope {
         .await?;
         debug!("Ship created");
 
+        let ship = Arc::new(ship);
+        // A Scope can stay quiet for a long time between samples; without this
+        // the coordinator drops it and stops answering its requests.
+        ship.spawn_heartbeat();
+
         let scope = Scope {
             name: config.name,
-            ship: Arc::new(ship),
+            ship,
         };
 
         SCOPE

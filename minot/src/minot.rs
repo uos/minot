@@ -561,19 +561,8 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Keep the coordinator's TUI-timeout alive by sending periodic heartbeats.
-    let comparer_hb = comparer.clone();
     let comparer_disconnect = comparer.disconnect.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(
-                mt_sea::HEARTBEAT_INTERVAL_MS,
-            ))
-            .await;
-            if let Err(e) = comparer_hb.send_heartbeat().await {
-                log::debug!("TUI heartbeat send failed: {e}");
-            }
-        }
-    });
+    comparer.spawn_heartbeat();
 
     tokio::spawn(async move {
         loop {
@@ -1523,18 +1512,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         // Keep the coordinator's TUI-timeout alive by sending periodic heartbeats.
-                        let comparer_hb = comparer.clone();
-                        tokio::spawn(async move {
-                            loop {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(
-                                    mt_sea::HEARTBEAT_INTERVAL_MS,
-                                ))
-                                .await;
-                                if let Err(e) = comparer_hb.send_heartbeat().await {
-                                    log::debug!("Serve heartbeat send failed: {e}");
-                                }
-                            }
-                        });
+                        comparer.spawn_heartbeat();
 
                         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 

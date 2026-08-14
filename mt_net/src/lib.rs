@@ -601,6 +601,66 @@ impl Rules {
         vars.into_iter().collect()
     }
 
+    /// Remove a registration. Leaves the variable in place when other clients
+    /// still use it, so one viewer leaving does not disturb the rest.
+    ///
+    /// Has to touch both halves of the state: `cache` holds registrations that
+    /// have not been resolved yet, while `resolve_cache` moves them into
+    /// `store` as routing rules. A client can be in either, and after
+    /// resolution a subscriber exists only as a name inside each publisher's
+    /// `Shoot` target list.
+    pub fn unregister(&mut self, var: &str, client: &str, kind: RatPubRegisterKind) -> bool {
+        let mut removed = false;
+
+        if let Some(clients) = self.cache.get_mut(var) {
+            removed |= clients.remove(&(client.to_owned(), kind.clone()));
+            if clients.is_empty() {
+                self.cache.remove(var);
+            }
+        }
+
+        if let Some(rules) = self.store.get_mut(var) {
+            let present = rules.iter().any(|vh| match (&kind, &vh.strategy) {
+                (RatPubRegisterKind::Publish, Some(ActionPlan::Shoot { .. })) => vh.ship == client,
+                (RatPubRegisterKind::Subscribe, Some(ActionPlan::Catch { .. })) => {
+                    vh.ship == client
+                }
+                (RatPubRegisterKind::Subscribe, Some(ActionPlan::Shoot { target, .. })) => {
+                    target.iter().any(|t| t == client)
+                }
+                _ => false,
+            });
+
+            match kind {
+                RatPubRegisterKind::Publish => rules.retain(|vh| {
+                    !(vh.ship == client && matches!(vh.strategy, Some(ActionPlan::Shoot { .. })))
+                }),
+                RatPubRegisterKind::Subscribe => {
+                    rules.retain(|vh| {
+                        !(vh.ship == client
+                            && matches!(vh.strategy, Some(ActionPlan::Catch { .. })))
+                    });
+                    for vh in rules.iter_mut() {
+                        if let Some(ActionPlan::Shoot { target, .. }) = vh.strategy.as_mut() {
+                            target.retain(|t| t != client);
+                        }
+                    }
+                }
+            }
+
+            // A publisher whose last subscriber left keeps its rule with an
+            // empty target list. Dropping it would forget the publisher
+            // entirely, and the next subscriber to arrive would have nothing
+            // to be routed from.
+            if rules.is_empty() {
+                self.store.remove(var);
+            }
+            removed |= present;
+        }
+
+        removed
+    }
+
     pub fn register(&mut self, var: String, client: String, kind: RatPubRegisterKind) {
         match self.cache.get_mut(&var) {
             Some(el) => {
@@ -1658,5 +1718,114 @@ mod tests {
         // Check the cache - entry for 'telemetry' should be removed
         assert!(!rules.cache.contains_key(&var_name));
         assert!(rules.cache.is_empty()); // Assuming no other cache entries
+    }
+}
+
+#[cfg(test)]
+mod unregister_tests {
+    use super::{RatPubRegisterKind, Rules};
+
+    fn rules() -> Rules {
+        Rules::default()
+    }
+
+    #[test]
+    fn unregistering_removes_only_that_client() {
+        let mut rules = rules();
+        rules.register(
+            "clouds".into(),
+            "viewer".into(),
+            RatPubRegisterKind::Subscribe,
+        );
+        rules.register(
+            "clouds".into(),
+            "logger".into(),
+            RatPubRegisterKind::Subscribe,
+        );
+
+        assert!(rules.unregister("clouds", "viewer", RatPubRegisterKind::Subscribe));
+
+        let remaining = rules.cache.get("clouds").expect("topic still in use");
+        assert!(remaining.contains(&("logger".to_string(), RatPubRegisterKind::Subscribe)));
+        assert!(!remaining.contains(&("viewer".to_string(), RatPubRegisterKind::Subscribe)));
+    }
+
+    /// The point of unsubscribing is that you can subscribe again. Dropping the
+    /// publisher along with its last subscriber would leave the next subscriber
+    /// with nothing to be routed from.
+    #[test]
+    fn a_topic_still_routes_after_its_only_subscriber_leaves_and_another_joins() {
+        let mut rules = rules();
+        rules.register(
+            "clouds".into(),
+            "pelorus".into(),
+            RatPubRegisterKind::Publish,
+        );
+        rules.register(
+            "clouds".into(),
+            "viewer".into(),
+            RatPubRegisterKind::Subscribe,
+        );
+
+        assert!(rules.unregister("clouds", "viewer", RatPubRegisterKind::Subscribe));
+        assert!(!targets_of(&rules, "clouds").contains(&"viewer".to_string()));
+
+        rules.register(
+            "clouds".into(),
+            "viewer2".into(),
+            RatPubRegisterKind::Subscribe,
+        );
+        assert!(
+            targets_of(&rules, "clouds").contains(&"viewer2".to_string()),
+            "a new subscriber must still be routed from the existing publisher"
+        );
+    }
+
+    /// Every subscriber a publisher sends to, across all its rules.
+    fn targets_of(rules: &Rules, var: &str) -> Vec<String> {
+        rules
+            .store
+            .get(var)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|vh| match &vh.strategy {
+                        Some(super::ActionPlan::Shoot { target, .. }) => Some(target.clone()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_last_client_leaving_drops_the_topic() {
+        let mut rules = rules();
+        rules.register(
+            "clouds".into(),
+            "viewer".into(),
+            RatPubRegisterKind::Subscribe,
+        );
+        assert!(rules.unregister("clouds", "viewer", RatPubRegisterKind::Subscribe));
+        assert!(!rules.cache.contains_key("clouds"));
+        assert!(!rules.store.contains_key("clouds"));
+    }
+
+    /// Unsubscribing twice, or from something never subscribed, is not an error
+    /// but must report that nothing changed so the coordinator can skip work.
+    #[test]
+    fn unregistering_what_was_never_registered_reports_no_change() {
+        let mut rules = rules();
+        rules.register(
+            "clouds".into(),
+            "viewer".into(),
+            RatPubRegisterKind::Subscribe,
+        );
+
+        assert!(!rules.unregister("other", "viewer", RatPubRegisterKind::Subscribe));
+        assert!(!rules.unregister("clouds", "someone", RatPubRegisterKind::Subscribe));
+        assert!(rules.unregister("clouds", "viewer", RatPubRegisterKind::Subscribe));
+        assert!(!rules.unregister("clouds", "viewer", RatPubRegisterKind::Subscribe));
     }
 }

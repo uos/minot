@@ -15,7 +15,7 @@ exclude.workspace = true
 
 [dependencies]
 mt_sea.workspace = true
-mt_coord.workspace = true
+mt_coord = { workspace = true, features = ["embed-scope"] }
 mt_net.workspace = true
 env_logger.workspace = true
 log.workspace = true
@@ -29,7 +29,7 @@ ros2-interfaces-jazzy-rkyv.workspace = true
 futures-lite = { workspace = true, optional = true }
 
 [features]
-default = ["shm"]
+default = []
 shm = ["mt_sea/shm"]
 smol = ["dep:futures-lite"]
 

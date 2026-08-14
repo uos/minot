@@ -36,7 +36,7 @@ cdr-encoding.workspace = true
 mt_pubsub = { workspace = true, optional = true }
 
 [features]
-default = ["mt_pubsub"]
+default = []
 shm = ["mt_sea/shm", "mt_pubsub?/shm"]
 humble = ["mt_bagread/humble"]
 ros2-c = ["dep:r2r", "dep:ros2-interfaces-jazzy-serde"]

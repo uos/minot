@@ -130,6 +130,13 @@ pub enum PacketKind {
         kind: RatPubRegisterKind,
         node_mode: Qos,
     },
+    /// Stop delivering a topic to a ship. Without this a subscriber can only
+    /// stop reading, and the coordinator keeps pushing the data at it.
+    UnregisterShipAtVar {
+        ship: String,
+        var: String,
+        kind: RatPubRegisterKind,
+    },
     RegistrationError(String),
     Sonar,
     Torpedo(Vec<String>),

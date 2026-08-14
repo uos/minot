@@ -31,5 +31,6 @@ cdr.workspace = true
 rusqlite = { workspace = true, optional = true }
 
 [features]
+default = []
 db3 = ["dep:rusqlite"]
 humble = []

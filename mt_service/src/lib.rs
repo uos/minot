@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use log::{debug, error};
-use mt_pubsub::{Node, Publisher, Qos, Subscriber};
+use mt_pubsub::{ArchivedMessage, Node, Publisher, Qos, Subscriber};
 use mt_sea::Sendable;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
@@ -16,6 +17,12 @@ use uuid::Uuid;
  * TODO:
  * - verify types between server<->client and fail creation on mismatch
  */
+
+/// A request as it arrives off the wire, still in its rkyv buffer.
+type RequestMessage<REQ> = ArchivedMessage<(u128, u64, REQ)>;
+
+/// A response as it arrives off the wire, still in its rkyv buffer.
+type ResponseMessage<RES> = ArchivedMessage<(u64, Result<RES, String>)>;
 
 pub struct ServiceServer<REQ, RES>
 where
@@ -29,7 +36,7 @@ where
     subber: Mutex<Subscriber<(u128, u64, REQ)>>,
 
     /// map of client identifiers to their respective publisher topics
-    clients: Mutex<HashMap<Uuid, mpsc::Sender<(u64, REQ)>>>,
+    clients: Mutex<HashMap<Uuid, mpsc::Sender<RequestMessage<REQ>>>>,
 
     _phantom_res: PhantomData<RES>,
 }
@@ -76,8 +83,11 @@ where
         let mut subber = this.subber.lock().await;
         let mut clients = this.clients.lock().await;
 
-        while let Some((client, seq_num, request)) = subber.next().await {
-            let client = Uuid::from_u128(client);
+        // Only the client id is read here; the request body stays in its rkyv
+        // buffer and is deserialized by the per-client handler. Doing it here
+        // would put the cost of every request body on this single loop.
+        while let Some(request) = subber.next_archived().await {
+            let client = Uuid::from_u128(request.archived().0.to_native());
             if !clients.contains_key(&client) {
                 debug!("Registering new client: {}", &client);
                 let (tx, rx) = mpsc::channel(100);
@@ -93,7 +103,7 @@ where
             if let Err(e) = clients
                 .get(&client)
                 .expect("client does not exist when it should")
-                .send((seq_num, request))
+                .send(request)
                 .await
             {
                 error!("client handler died: {}", e);
@@ -113,7 +123,7 @@ where
     async fn client_handler<F, Fut>(
         node: Arc<Node>,
         client: Uuid,
-        mut requests: mpsc::Receiver<(u64, REQ)>,
+        mut requests: mpsc::Receiver<RequestMessage<REQ>>,
         callback: Arc<F>,
     ) where
         F: Fn(REQ) -> Fut + Send + Sync,
@@ -133,7 +143,16 @@ where
             }
         };
 
-        while let Some((seq_num, request)) = requests.recv().await {
+        while let Some(message) = requests.recv().await {
+            // Deserializing here keeps it on the per-client task rather than on
+            // the server's single dispatch loop.
+            let (_, seq_num, request) = match message.deserialize() {
+                Ok(request) => request,
+                Err(e) => {
+                    error!("Discarding malformed request from {}: {}", client, e);
+                    continue;
+                }
+            };
             let response = (seq_num, callback(request).await);
             match pubber.publish(&response).await {
                 Ok(_) => {}
@@ -147,6 +166,65 @@ where
             }
         }
     }
+}
+
+/// What a waiting request is handed: either the still-archived response, or the
+/// reason no response will arrive.
+type DeliveredResponse<RES> = Result<ResponseMessage<RES>, String>;
+
+/// Requests waiting on a response, keyed by sequence number.
+struct PendingResponses<RES: Sendable> {
+    waiting: Mutex<HashMap<u64, oneshot::Sender<DeliveredResponse<RES>>>>,
+}
+
+impl<RES: Sendable> Default for PendingResponses<RES> {
+    fn default() -> Self {
+        Self {
+            waiting: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<RES: Sendable> PendingResponses<RES> {
+    /// Claim a slot before the request is published, so a fast response cannot
+    /// arrive before there is anywhere to put it.
+    async fn register(&self, seq_num: u64) -> oneshot::Receiver<DeliveredResponse<RES>> {
+        let (sender, receiver) = oneshot::channel();
+        self.waiting.lock().await.insert(seq_num, sender);
+        receiver
+    }
+
+    async fn forget(&self, seq_num: u64) {
+        self.waiting.lock().await.remove(&seq_num);
+    }
+
+    async fn deliver(&self, seq_num: u64, message: ResponseMessage<RES>) {
+        let waiting = self.waiting.lock().await.remove(&seq_num);
+        match waiting {
+            Some(sender) => {
+                // A gone receiver means the request timed out and stopped waiting.
+                // The late response is dropped.
+                let _ = sender.send(Ok(message));
+            }
+            None => debug!("discarding response for unknown or expired sequence {seq_num}"),
+        }
+    }
+
+    async fn fail_all(&self, reason: String) {
+        let mut waiting = self.waiting.lock().await;
+        for (_, sender) in waiting.drain() {
+            let _ = sender.send(Err(reason.clone()));
+        }
+    }
+}
+
+/// Turn what the dispatcher delivered into the response the caller asked for.
+/// Runs on the awaiting task, not on the dispatch loop.
+fn decode_response<RES: Sendable>(delivered: DeliveredResponse<RES>) -> Result<RES, String> {
+    let (_, payload) = delivered?
+        .deserialize()
+        .map_err(|e| format!("Could not decode response: {e}"))?;
+    payload.map_err(|e| format!("ServiceServer encountered an error processing request: {e}"))
 }
 
 pub struct ServiceClient<REQ, RES>
@@ -163,8 +241,21 @@ where
     /// clients publish requests to this
     pubber: Publisher<(u128, u64, REQ)>,
 
-    /// server responds over this subscribtion
-    subber: Mutex<Subscriber<(u64, Result<RES, String>)>>,
+    /// Requests waiting for a response, keyed by sequence number.
+    pending: Arc<PendingResponses<RES>>,
+
+    /// Reads responses and hands them to `pending`. Aborted on drop.
+    dispatcher: tokio::task::JoinHandle<()>,
+}
+
+impl<REQ, RES> Drop for ServiceClient<REQ, RES>
+where
+    REQ: Sendable,
+    RES: Sendable,
+{
+    fn drop(&mut self) {
+        self.dispatcher.abort();
+    }
 }
 
 impl<REQ, RES> ServiceClient<REQ, RES>
@@ -183,20 +274,47 @@ where
                 Qos::Reliable,
             )
             .await?;
+        let pending = Arc::new(PendingResponses::<RES>::default());
+        let dispatcher = tokio::spawn(Self::dispatch(subber, Arc::clone(&pending)));
         Ok(Self {
             id,
             seq_num: Mutex::new(0),
-            subber: Mutex::new(subber),
+            pending,
+            dispatcher,
             pubber,
         })
+    }
+
+    /// Route responses to the requests waiting for them.
+    async fn dispatch(
+        mut subber: Subscriber<(u64, Result<RES, String>)>,
+        pending: Arc<PendingResponses<RES>>,
+    ) {
+        loop {
+            // Only the sequence number is read here; the response body is
+            // deserialized by whichever task is awaiting it.
+            match subber.next_archived().await {
+                Some(message) => {
+                    let seq_num = message.archived().0.to_native();
+                    pending.deliver(seq_num, message).await
+                }
+                None => {
+                    // The subscription ended, so no response will ever arrive.
+                    // Fail everything waiting.
+                    pending
+                        .fail_all("None response from ServiceServer".to_owned())
+                        .await;
+                    return;
+                }
+            }
+        }
     }
 
     /**
      * perform a request, keep in mind the returned future is *lazy*
      * i.e. processing likely waits until .await is called (unless spawned as a task via tokio::spawn)
      *
-     * TODO: handle multiple async request calls?
-     * this currently very much assumes 1 request -> 1 response
+     * Safe to call concurrently on a shared client.
      *
      * @param request
      */
@@ -208,74 +326,47 @@ where
             n
         };
         let myreq = (self.id.as_u128(), seq_num, request);
+
+        // Registered before publishing so a fast response cannot arrive before
+        // there is anywhere to deliver it.
+        let receiver = self.pending.register(seq_num).await;
+
         let req_handle = self.pubber.publish(&myreq);
-        let mut subber = self.subber.lock().await;
-
-        if let Some(timeout) = timeout {
-            select! {
-                _ = sleep(timeout) => {
-                    return Err("Timeout reached while sending request".to_owned());
-                }
-                res = req_handle => {
-                    if let Err(e) = res {
-                        return Err(format!("Error sending request: {}", &e));
-                    }
-                }
-            }
-
-            loop {
-                select! {
-                    _ = sleep(timeout) => {
-                        return Err("Timeout reached while waiting for response".to_owned());
-                    }
-                    res = subber.next() => {
-                        if let Some(res) = Self::handle_response(res, seq_num) {
-                            return res;
-                        }
-                    }
-                }
-            }
-        } else {
-            if let Err(e) = req_handle.await {
-                return Err(format!("Error sending request: {}", &e));
-            }
-
-            loop {
-                let res = subber.next().await;
-                if let Some(res) = Self::handle_response(res, seq_num) {
-                    return res;
-                }
-            }
-        }
-    }
-
-    /**
-     * @param response  response as returned by subber.next()
-     * @param seq_num   the expected sequence number
-     * @returns         None if we should skip this response
-     *                  Some(Ok(...)) if response is correct
-     *                  Some(Err(...)) if response is bad
-     */
-    fn handle_response(
-        response: Option<(u64, Result<RES, String>)>,
-        seq_num: u64,
-    ) -> Option<Result<RES, String>> {
-        match response {
-            Some((res_seq, res_data)) => match res_seq.cmp(&seq_num) {
-                std::cmp::Ordering::Less => None,
-                std::cmp::Ordering::Equal => match res_data {
-                    Ok(res) => Some(Ok(res)),
-                    Err(e) => Some(Err(format!(
-                        "ServiceServer encountered an error processing request: {}",
-                        e
-                    ))),
-                },
-                std::cmp::Ordering::Greater => Some(Err(format!(
-                    "Unexpected sequence number: {} (expected {})",
-                    res_seq, seq_num
-                ))),
+        let publish = match timeout {
+            Some(timeout) => select! {
+                _ = sleep(timeout) => Err("Timeout reached while sending request".to_owned()),
+                res = req_handle => res.map_err(|e| format!("Error sending request: {}", &e)),
             },
-            None => Some(Err("None response from ServiceServer".to_owned())),
+            None => req_handle
+                .await
+                .map_err(|e| format!("Error sending request: {}", &e)),
+        };
+        if let Err(error) = publish {
+            self.pending.forget(seq_num).await;
+            return Err(error);
+        }
+
+        match timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, receiver).await {
+                Ok(Ok(response)) => decode_response(response),
+                Ok(Err(_)) => {
+                    self.pending.forget(seq_num).await;
+                    Err("Response dispatcher stopped".to_owned())
+                }
+                Err(_) => {
+                    // Stop waiting, and stop the dispatcher holding a slot for
+                    // a response that may still turn up later.
+                    self.pending.forget(seq_num).await;
+                    Err("Timeout reached while waiting for response".to_owned())
+                }
+            },
+            None => match receiver.await {
+                Ok(response) => decode_response(response),
+                Err(_) => {
+                    self.pending.forget(seq_num).await;
+                    Err("Response dispatcher stopped".to_owned())
+                }
+            },
         }
     }
 }

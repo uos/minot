@@ -48,9 +48,10 @@ If you have multiple Minot networks on the same physical network, use the `MINOT
 
 ## Shared memory
 
-The default feature set uses Zenoh shared memory for same-device messages of at least 1 MiB.
-If SHM initialization, pool growth, or allocation fails, Minot logs a warning and sends the
-message through the regular Zenoh transport instead.
+The `shm` feature uses Zenoh shared memory for same-device messages of at least 1 MiB.
+SHM capability is negotiated per Zenoh connection. If either local process has SHM disabled or
+unavailable, SHM-backed messages are carried as ordinary network bytes on that connection.
+Enabling SHM therefore remains compatible with peers built or started without SHM.
 
 Defaults can be changed with:
 
@@ -68,7 +69,21 @@ The `minot` binary exposes the same controls as `--shm-size`, `--shm-threshold`,
 Run the reliability suite and manual benchmark with:
 
 ```bash
-cargo test -p mt_pubsub --test shm_reliability
-cargo test -p mt_pubsub --test shm_reliability --release \
+cargo test -p mt_pubsub --test shm_reliability --features shm
+cargo test -p mt_pubsub --test shm_reliability --features shm --release \
   shm_large_packet_benchmark -- --exact --ignored --nocapture
 ```
+
+## Borrowed archived messages
+
+`Subscriber::next()` returns an owned, deserialized message. Code that can work with
+rkyv's archived representation can avoid that conversion with `next_archived()`:
+
+```rust
+if let Some(message) = subscriber.next_archived().await {
+    let archived = message.archived();
+    // Read archived fields while `message` keeps the backing buffer alive.
+}
+```
+
+Call `message.deserialize()` when an existing API still requires an owned value.
