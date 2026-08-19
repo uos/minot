@@ -77,7 +77,7 @@ where
     pub async fn start<F, Fut>(this: Arc<Self>, callback: Arc<F>)
     where
         F: Fn(REQ) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<RES, String>> + Send + Sync + 'static,
+        Fut: Future<Output = Result<RES, String>> + Send + 'static,
     {
         // once started these should stay locked for the entire runtime
         let mut subber = this.subber.lock().await;
