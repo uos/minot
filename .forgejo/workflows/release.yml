@@ -927,18 +927,17 @@ jobs:
           path: target/wheels
 
   macos-pypi:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: macos-latest
     needs: [rust-stable]
     strategy:
       matrix:
-        platform:
-          - runner: macos-latest
-            target: aarch64-apple-darwin
+        target:
+          - aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
         env:
-          TARGET: ${{ matrix.platform.target }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           rustup target add "$TARGET"
@@ -1068,6 +1067,7 @@ jobs:
           DEB_PATH: "artifacts/artifacts-deb-humble-*/*.deb"
         run: |
           set -euo pipefail
+          apt-get update && apt-get install -y openssh-client
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -1109,6 +1109,7 @@ jobs:
         run: |
           sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
+          apt-get update && apt-get install -y openssh-client
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -1180,7 +1181,7 @@ jobs:
     steps:
       - name: Deps
         run: |
-          pacman -Sy --noconfirm openssl openssh git nodejs base-devel
+          pacman -Sy --noconfirm openssl openssh git nodejs sudo base-devel
           useradd -m build
           echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
       - uses: actions/checkout@v4
@@ -1194,7 +1195,7 @@ jobs:
           ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
           chown -R build:build . /home/build/.ssh
 
-          -u build env \
+          sudo -u build env \
             GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
             FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
             FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
@@ -1220,7 +1221,7 @@ jobs:
     steps:
       - name: Deps
         run: |
-          pacman -Sy --noconfirm openssl openssh git nodejs base-devel
+          pacman -Sy --noconfirm openssl openssh git nodejs sudo base-devel
           useradd -m build
           echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
       - uses: actions/checkout@v4
@@ -1234,7 +1235,7 @@ jobs:
           ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
           chown -R build:build . /home/build/.ssh
 
-          -u build env \
+          sudo -u build env \
             GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
             FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
             FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
@@ -1275,6 +1276,7 @@ jobs:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           set -euo pipefail
+          apt-get update && apt-get install -y openssh-client
           mkdir -p ~/.ssh
           printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -1323,6 +1325,7 @@ jobs:
         run: |
           sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
+          apt-get update && apt-get install -y openssh-client
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
