@@ -1,4 +1,4 @@
-roslibrust::generate_ros_types_with_env!("msg/ros1");
+roslibrust::generate_ros_types!("msg/ros1");
 
 use anyhow::anyhow;
 use std::collections::HashMap;
