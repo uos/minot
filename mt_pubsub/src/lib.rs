@@ -24,8 +24,9 @@ pub enum CoordMode {
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     name: String,
-    /// Whether this node is reliable or best-effort.
-    /// Best-effort: if this node crashes, the scope will NOT torpedo other nodes.
+    /// Delivery mode. `Reliable` is fatal: if this node dies, the run is
+    /// torpedoed. `TryReliable` and `BestEffort` are not — their loss leaves
+    /// the rest of the system running. See `Qos` for the full split.
     mode: Qos,
     /// Controls coordinator startup behavior.
     coord_mode: CoordMode,
@@ -421,7 +422,7 @@ impl Node {
             mt_coord::ensure_default_coordinator_ready(None).await?;
         }
 
-        let rm_rules = config.mode == Qos::Reliable;
+        let rm_rules = config.mode.removes_rules_on_exit();
         let ship = match config.coord_mode {
             CoordMode::External => {
                 mt_sea::ship::NetworkShipImpl::init(

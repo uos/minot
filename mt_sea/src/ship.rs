@@ -17,32 +17,39 @@ use crate::{
     net::{PacketKind, Qos, sanitize_key},
 };
 
-struct BeSendGuard {
-    target_ship_name: String,
-    in_flight: Arc<std::sync::Mutex<HashSet<String>>>,
+/// One in-flight asynchronously dispatched send, identified by target *and*
+/// variable. Covers every mode where `Qos::dispatch_is_async` holds, so both
+/// `TryReliable` and `BestEffort`.
+///
+/// Keying on the target alone would make every variable sent to one ship share
+/// a single slot for the whole network round trip, so two publishes in the same
+/// frame would starve each other: the loser is dropped before serialization.
+/// That is invisible on loopback, where the first send completes in
+/// microseconds, and deterministic over WiFi.
+type AsyncSendKey = (String, String);
+
+struct AsyncSendGuard {
+    key: AsyncSendKey,
+    in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
 }
 
-impl BeSendGuard {
+impl AsyncSendGuard {
     fn try_acquire(
-        in_flight: Arc<std::sync::Mutex<HashSet<String>>>,
+        in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
         target_ship_name: String,
+        variable_name: String,
     ) -> Option<Self> {
-        if !in_flight.lock().unwrap().insert(target_ship_name.clone()) {
+        let key = (target_ship_name, variable_name);
+        if !in_flight.lock().unwrap().insert(key.clone()) {
             return None;
         }
-        Some(Self {
-            target_ship_name,
-            in_flight,
-        })
+        Some(Self { key, in_flight })
     }
 }
 
-impl Drop for BeSendGuard {
+impl Drop for AsyncSendGuard {
     fn drop(&mut self) {
-        self.in_flight
-            .lock()
-            .unwrap()
-            .remove(&self.target_ship_name);
+        self.in_flight.lock().unwrap().remove(&self.key);
     }
 }
 
@@ -55,9 +62,10 @@ pub struct NetworkShipImpl {
     runtime_handle: tokio::runtime::Handle,
     /// Cancelled when the coordinator connection is lost.
     pub disconnect: CancellationToken,
-    /// Targets that already have one best-effort delivery in progress. New
-    /// messages for a busy target are dropped before serialization.
-    be_sends_in_flight: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// (target, variable) pairs that already have one asynchronous delivery in
+    /// progress. A new message for a busy pair is dropped before serialization;
+    /// other variables to the same target are unaffected.
+    async_sends_in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
     /// Cached routing decisions pushed by the coordinator.
     route_cache: Arc<std::sync::RwLock<HashMap<String, (crate::Action, bool)>>>,
     /// Active peer-monitor tasks: ship_name → abort handle.
@@ -88,14 +96,20 @@ impl crate::Cannon for NetworkShipImpl {
                 ShipKind::Wind(name) => name.clone(),
             };
 
-            if target.node_mode == Qos::BestEffort {
-                let Some(send_guard) = BeSendGuard::try_acquire(
-                    Arc::clone(&self.be_sends_in_flight),
+            let target_mode = target.node_mode;
+            if target_mode.dispatch_is_async() {
+                // Guard per (target, variable): one delivery of this variable to
+                // this ship at a time. Keying on the target alone would let two
+                // variables published in the same frame starve each other for a
+                // whole network round trip.
+                let Some(send_guard) = AsyncSendGuard::try_acquire(
+                    Arc::clone(&self.async_sends_in_flight),
                     target_ship_name.clone(),
+                    variable_name.to_string(),
                 ) else {
                     debug!(
-                        "Dropping best-effort message '{}' for '{}': send already in progress",
-                        variable_name, target_ship_name
+                        "Dropping {:?} message '{}' for '{}': send already in progress",
+                        target_mode, variable_name, target_ship_name
                     );
                     continue;
                 };
@@ -105,29 +119,54 @@ impl crate::Cannon for NetworkShipImpl {
                 };
                 let variable_name = variable_name.to_string();
                 let data_bytes = Arc::clone(&data_bytes);
+                // Both modes dispatch off the caller's thread so a slow link can
+                // never wedge a publisher's loop. They differ in what happens on
+                // the wire: BestEffort tries once, TryReliable retries until its
+                // budget is spent.
+                let (send_budget, is_reliable_mode) = match target_mode {
+                    Qos::TryReliable => (
+                        Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS)
+                            + Duration::from_secs(1),
+                        true,
+                    ),
+                    _ => (Duration::from_secs(5), false),
+                };
                 self.runtime_handle.spawn(async move {
-                    let result = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        Client::send_raw_network(
-                            session,
-                            domain_id,
-                            id,
-                            data_bytes,
-                            variable_type,
-                            variable_name.clone(),
-                            target_ship_name.clone(),
-                        ),
-                    )
-                    .await;
-                    match result {
+                    let send = async {
+                        if is_reliable_mode {
+                            Client::send_raw_network_bounded(
+                                session,
+                                domain_id,
+                                id,
+                                data_bytes,
+                                variable_type,
+                                variable_name.clone(),
+                                target_ship_name.clone(),
+                            )
+                            .await
+                        } else {
+                            Client::send_raw_network(
+                                session,
+                                domain_id,
+                                id,
+                                data_bytes,
+                                variable_type,
+                                variable_name.clone(),
+                                target_ship_name.clone(),
+                            )
+                            .await
+                        }
+                    };
+                    // Backstop only: each send path already bounds itself.
+                    match tokio::time::timeout(send_budget, send).await {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => warn!(
-                            "Best-effort send '{}' to '{}' failed: {e}",
-                            variable_name, target_ship_name
+                            "{:?} send '{}' to '{}' failed: {e}",
+                            target_mode, variable_name, target_ship_name
                         ),
                         Err(_) => warn!(
-                            "Best-effort send '{}' to '{}' timed out",
-                            variable_name, target_ship_name
+                            "{:?} send '{}' to '{}' timed out",
+                            target_mode, variable_name, target_ship_name
                         ),
                     }
                     drop(send_guard);
@@ -434,13 +473,13 @@ fn extract_peers(action: &crate::Action) -> HashSet<String> {
         crate::Action::Sail => HashSet::new(),
         crate::Action::Shoot { target, .. } => target
             .iter()
-            .filter(|addr| addr.node_mode == Qos::Reliable)
+            .filter(|addr| addr.node_mode.is_monitored())
             .map(|addr| match &addr.kind {
                 crate::ShipKind::Rat(name) | crate::ShipKind::Wind(name) => unpad(name),
             })
             .collect(),
         crate::Action::Catch { source, .. } => {
-            if source.node_mode == Qos::BestEffort {
+            if !source.node_mode.is_monitored() {
                 return HashSet::new();
             }
             let name = match &source.kind {
@@ -743,7 +782,7 @@ impl NetworkShipImpl {
             }
         });
 
-        let be_sends_in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let async_sends_in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
 
         let route_cache = Arc::new(std::sync::RwLock::new(HashMap::<
             String,
@@ -764,7 +803,7 @@ impl NetworkShipImpl {
                 Instant::now() - Duration::from_millis(REGISTRATION_TIMEOUT_MS),
             )),
             disconnect,
-            be_sends_in_flight,
+            async_sends_in_flight,
             route_cache,
             peer_monitor,
             bypass_cache,
@@ -949,17 +988,78 @@ mod tests {
         assert!(extract_peers(&action).is_empty());
     }
 
+    /// A TryReliable peer is reliable on the wire but not fatal, so nothing
+    /// may heartbeat-monitor it: a monitored peer that stops answering fires a
+    /// Torpedo, which is exactly what this mode exists to avoid.
     #[test]
-    fn best_effort_send_guard_allows_only_one_message_per_target() {
-        let in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
-        let first = BeSendGuard::try_acquire(Arc::clone(&in_flight), "scope".to_string())
-            .expect("first send should start");
+    fn peer_monitors_exclude_try_reliable_shoot_targets() {
+        let action = crate::Action::Shoot {
+            target: vec![
+                peer("reliable################", Qos::Reliable),
+                peer("viewer################", Qos::TryReliable),
+            ],
+            id: 1,
+        };
 
-        assert!(BeSendGuard::try_acquire(Arc::clone(&in_flight), "scope".to_string()).is_none());
-        assert!(BeSendGuard::try_acquire(Arc::clone(&in_flight), "other".to_string()).is_some());
+        assert_eq!(
+            extract_peers(&action),
+            HashSet::from(["reliable".to_string()])
+        );
+    }
+
+    #[test]
+    fn peer_monitors_exclude_try_reliable_catch_sources() {
+        let action = crate::Action::Catch {
+            source: peer("viewer", Qos::TryReliable),
+            id: 1,
+        };
+
+        assert!(extract_peers(&action).is_empty());
+    }
+
+    /// Shoot and Catch decide monitoring through the same predicate. They used
+    /// to spell the question two opposite ways (`== Reliable` on one side,
+    /// `== BestEffort` on the other), which agreed only while there were
+    /// exactly two variants and silently disagreed the moment a third existed.
+    #[test]
+    fn shoot_and_catch_agree_on_which_modes_are_monitored() {
+        for mode in [Qos::Reliable, Qos::TryReliable, Qos::BestEffort] {
+            let shoot = crate::Action::Shoot {
+                target: vec![peer("peer", mode)],
+                id: 1,
+            };
+            let catch = crate::Action::Catch {
+                source: peer("peer", mode),
+                id: 1,
+            };
+
+            assert_eq!(
+                extract_peers(&shoot).is_empty(),
+                extract_peers(&catch).is_empty(),
+                "Shoot and Catch disagree about monitoring {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn async_send_guard_allows_only_one_message_per_target_and_variable() {
+        let in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let acquire = |ship: &str, var: &str| {
+            AsyncSendGuard::try_acquire(Arc::clone(&in_flight), ship.to_string(), var.to_string())
+        };
+
+        let first = acquire("scope", "cloud").expect("first send should start");
+
+        // Same target and same variable: still one at a time.
+        assert!(acquire("scope", "cloud").is_none());
+        // A different variable to the same target must not be starved by it.
+        let delta = acquire("scope", "delta").expect("other variable should not contend");
+        // A different target is independent as before.
+        assert!(acquire("other", "cloud").is_some());
 
         drop(first);
-        assert!(BeSendGuard::try_acquire(Arc::clone(&in_flight), "scope".to_string()).is_some());
+        assert!(acquire("scope", "cloud").is_some());
+        drop(delta);
     }
 
     #[test]

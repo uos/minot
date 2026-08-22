@@ -770,14 +770,8 @@ impl Client {
         tokio::spawn(async move {
             let coord_publisher = session_for_send
                 .declare_publisher(client_to_coord_key_owned)
-                .congestion_control(match node_mode {
-                    Qos::Reliable => zenoh::qos::CongestionControl::Block,
-                    Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
-                })
-                .reliability(match node_mode {
-                    Qos::Reliable => zenoh::qos::Reliability::Reliable,
-                    Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
-                })
+                .congestion_control(node_mode.congestion_control())
+                .reliability(node_mode.reliability())
                 .wait()
                 .expect("Failed to create coordinator publisher");
 
@@ -922,14 +916,8 @@ impl Client {
         let publisher = self
             .session
             .declare_publisher(&join_key)
-            .congestion_control(match self.node_mode {
-                Qos::Reliable => zenoh::qos::CongestionControl::Block,
-                Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
-            })
-            .reliability(match self.node_mode {
-                Qos::Reliable => zenoh::qos::Reliability::Reliable,
-                Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
-            })
+            .congestion_control(self.node_mode.congestion_control())
+            .reliability(self.node_mode.reliability())
             .wait()
             .expect("Failed to create join publisher");
 
@@ -1018,7 +1006,61 @@ impl Client {
         self.domain_id
     }
 
-    /// Network-only send (no SHM). Used for fire-and-forget BE delivery.
+    /// Build the on-the-wire data payload: id (4) + type (1) + name (64) + body.
+    fn build_data_payload(
+        id: u32,
+        variable_type: VariableType,
+        variable_name: &str,
+        data: &[u8],
+    ) -> zenoh::bytes::ZBytes {
+        let id_bytes = id.to_be_bytes();
+        let mut padded_name = [0u8; 64];
+        let name_bytes = variable_name.as_bytes();
+        let len = name_bytes.len().min(64);
+        padded_name[..len].copy_from_slice(&name_bytes[..len]);
+
+        let mut payload = Vec::with_capacity(69 + data.len());
+        payload.extend_from_slice(&id_bytes);
+        payload.push(variable_type.into());
+        payload.extend_from_slice(&padded_name);
+        payload.extend_from_slice(data);
+        zenoh::bytes::ZBytes::from(payload)
+    }
+
+    /// One network attempt at delivering `payload` to `data_key`.
+    ///
+    /// This is a Zenoh query that awaits the receiver's reply, so it costs a
+    /// full network round trip. The timeout is set on the query itself so Zenoh
+    /// promptly releases its pending state and the payload when the target
+    /// queryable has disappeared. Callers holding a lock or a guard across this
+    /// call hold it for the whole round trip.
+    async fn try_send_network_once(
+        session: &zenoh::Session,
+        data_key: &str,
+        payload: zenoh::bytes::ZBytes,
+        priority: zenoh::qos::Priority,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let replies = session
+            .get(data_key)
+            .payload(payload)
+            .priority(priority)
+            .timeout(timeout)
+            .wait()
+            .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
+
+        let reply = replies
+            .recv_async()
+            .await
+            .map_err(|e| anyhow::anyhow!("data query completed without a reply: {e}"))?;
+        reply
+            .result()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("receiver rejected data: {e:?}"))
+    }
+
+    /// Network-only send (no SHM) for `Qos::BestEffort`: a single attempt, no
+    /// retry. If it does not land, the next sample is worth more than this one.
     pub async fn send_raw_network(
         session: std::sync::Arc<zenoh::Session>,
         domain_id: u16,
@@ -1028,41 +1070,94 @@ impl Client {
         variable_name: String,
         target_ship_name: String,
     ) -> anyhow::Result<()> {
-        let target_key = sanitize_key(&target_ship_name);
-        let data_key = format!("minot/{}/data/{}", domain_id, target_key);
+        let data_key = format!(
+            "minot/{}/data/{}",
+            domain_id,
+            sanitize_key(&target_ship_name)
+        );
+        let payload = Self::build_data_payload(id, variable_type, &variable_name, &data);
 
-        let id_bytes = id.to_be_bytes();
-        let mut padded_name = [0u8; 64];
-        let name_bytes = variable_name.as_bytes();
-        let len = name_bytes.len().min(64);
-        padded_name[..len].copy_from_slice(&name_bytes[..len]);
+        Self::try_send_network_once(
+            &session,
+            &data_key,
+            payload,
+            zenoh::qos::Priority::Background,
+            std::time::Duration::from_millis(crate::BEST_EFFORT_ATTEMPT_TIMEOUT_MS),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Best-effort send failed: {e}"))
+    }
 
-        let total_len = 69 + data.len();
-        let mut payload = Vec::with_capacity(total_len);
-        payload.extend_from_slice(&id_bytes);
-        payload.push(variable_type.into());
-        payload.extend_from_slice(&padded_name);
-        payload.extend_from_slice(&data);
-        let payload = zenoh::bytes::ZBytes::from(payload);
+    /// Network-only send (no SHM) for `Qos::TryReliable`: retry until the
+    /// sample lands or the budget is spent.
+    ///
+    /// This is the bounded counterpart to [`Self::send_raw_to_other_client`],
+    /// which retries without any deadline and so can spin forever against a
+    /// target that never answers. Here a delivery that cannot land within
+    /// `TRY_RELIABLE_SEND_BUDGET_MS` fails on its own and the caller carries
+    /// on — the same trade a ROS 2 DDS reliable writer makes when it exhausts
+    /// `max_blocking_time`.
+    pub async fn send_raw_network_bounded(
+        session: std::sync::Arc<zenoh::Session>,
+        domain_id: u16,
+        id: u32,
+        data: std::sync::Arc<rkyv::util::AlignedVec>,
+        variable_type: VariableType,
+        variable_name: String,
+        target_ship_name: String,
+    ) -> anyhow::Result<()> {
+        let data_key = format!(
+            "minot/{}/data/{}",
+            domain_id,
+            sanitize_key(&target_ship_name)
+        );
+        let payload = Self::build_data_payload(id, variable_type, &variable_name, &data);
 
-        // Best-effort delivery is a single attempt. Set the timeout on the
-        // Zenoh query itself so Zenoh promptly releases its pending query state
-        // and the large payload when the target queryable has disappeared.
-        let replies = session
-            .get(&data_key)
-            .payload(payload)
-            .priority(zenoh::qos::Priority::Background)
-            .timeout(std::time::Duration::from_millis(250))
-            .wait()
-            .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS);
+        let attempt_timeout =
+            std::time::Duration::from_millis(crate::TRY_RELIABLE_ATTEMPT_TIMEOUT_MS);
+        let backoff = std::time::Duration::from_millis(crate::TRY_RELIABLE_RETRY_BACKOFF_MS);
 
-        let reply = replies.recv_async().await.map_err(|e| {
-            anyhow::anyhow!("Best-effort data query completed without a reply: {e}")
-        })?;
-        reply
-            .result()
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("Best-effort receiver rejected data: {e:?}"))
+        let mut attempts = 0u32;
+        let mut last_err;
+        loop {
+            attempts += 1;
+            // Never let one attempt outlive the overall budget.
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match Self::try_send_network_once(
+                &session,
+                &data_key,
+                payload.clone(),
+                zenoh::qos::Priority::Data,
+                attempt_timeout.min(remaining),
+            )
+            .await
+            {
+                Ok(()) => {
+                    if attempts > 1 {
+                        debug!(
+                            "Try-reliable send '{}' to '{}' landed on attempt {}",
+                            variable_name, target_ship_name, attempts
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(e) => last_err = e,
+            }
+
+            if tokio::time::Instant::now() + backoff >= deadline {
+                return Err(anyhow!(
+                    "Try-reliable send '{}' to '{}' gave up after {} attempts \
+                     ({} ms budget): {last_err}",
+                    variable_name,
+                    target_ship_name,
+                    attempts,
+                    crate::TRY_RELIABLE_SEND_BUDGET_MS
+                ));
+            }
+            tokio::time::sleep(backoff).await;
+        }
     }
 
     /// Send raw data to another client via Zenoh query (request-reply).

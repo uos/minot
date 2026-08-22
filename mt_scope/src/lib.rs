@@ -16,6 +16,9 @@ use tokio::sync::Mutex;
 pub enum Qos {
     #[default]
     Reliable,
+    /// Reliable wire delivery and ordering, without the fatal failure policy.
+    /// See `mt_sea::Qos` for the full split.
+    TryReliable,
     BestEffort,
 }
 
@@ -51,9 +54,10 @@ impl Scope {
     pub async fn create(config: ScopeConfig) -> anyhow::Result<()> {
         let sea_node_mode = match config.mode {
             Qos::Reliable => mt_sea::Qos::Reliable,
+            Qos::TryReliable => mt_sea::Qos::TryReliable,
             Qos::BestEffort => mt_sea::Qos::BestEffort,
         };
-        let rm_rules_on_disconnect = config.mode == Qos::Reliable;
+        let rm_rules_on_disconnect = sea_node_mode.removes_rules_on_exit();
         let ship = mt_sea::ship::NetworkShipImpl::init(
             ShipKind::Rat(config.name.clone()),
             rm_rules_on_disconnect,

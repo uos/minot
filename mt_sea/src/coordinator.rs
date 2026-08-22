@@ -22,8 +22,11 @@ pub struct CoordinatorImpl {
     pub rat_qs: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
     pub new_rat_note: tokio::sync::broadcast::Sender<String>,
     pub new_client_notify: tokio::sync::broadcast::Sender<String>,
-    /// (ship_name, var_name) pairs that registered as BE subscribers
-    pub be_subscriptions: std::sync::Arc<std::sync::RwLock<HashSet<(String, String)>>>,
+    /// Per-subscription delivery-mode overrides: (ship_name, var_name) -> Qos.
+    /// A node registered `Reliable` can still subscribe to one topic as
+    /// `BestEffort` or `TryReliable`; the override applies to that topic only.
+    pub sub_qos_overrides:
+        std::sync::Arc<std::sync::RwLock<HashMap<(String, String), crate::net::Qos>>>,
     /// Variable names that have at least one best-effort publisher
     pub be_publisher_vars: std::sync::Arc<std::sync::RwLock<HashSet<String>>>,
 }
@@ -328,14 +331,14 @@ impl CoordinatorImpl {
                         continue;
                     };
                     let mut addr = client_info.network.clone();
-                    // Override with per-subscription BE mode if registered
-                    if self
-                        .be_subscriptions
+                    // Apply the per-subscription override, if this topic has one.
+                    if let Some(mode) = self
+                        .sub_qos_overrides
                         .read()
                         .unwrap()
-                        .contains(&(client_name.clone(), variable.to_string()))
+                        .get(&(client_name.clone(), variable.to_string()))
                     {
-                        addr.node_mode = crate::net::Qos::BestEffort;
+                        addr.node_mode = *mode;
                     }
                     targets.push(addr);
                 }
@@ -420,7 +423,7 @@ impl CoordinatorImpl {
             rat_qs: rat_queues,
             new_rat_note,
             new_client_notify,
-            be_subscriptions: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
+            sub_qos_overrides: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
             be_publisher_vars: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
         })
     }

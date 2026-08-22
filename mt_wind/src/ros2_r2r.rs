@@ -371,8 +371,7 @@ pub fn get_env_or_default(key: &str, default: &str) -> anyhow::Result<String> {
 #[tokio::main]
 #[allow(dead_code)]
 async fn main() -> anyhow::Result<()> {
-    let env = env_logger::Env::new().filter_or("WIND_LOG", "info");
-    env_logger::Builder::from_env(env).init();
+    mt_log::init_filtered("Wind", "WIND_LOG", "info", mt_log::QUIET_ZENOH);
 
     let wind_name = get_env_or_default("WIND_NAME", "turbine_ros2_c")?;
 

@@ -1372,6 +1372,16 @@ dependencies = [
 
 [[package]]
 name = "env_filter"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bf3c259d255ca70051b30e2e95b5446cdb8949ac4cd22c0d7fd634d89f568e2"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
+name = "env_filter"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
@@ -1388,7 +1398,7 @@ checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
 dependencies = [
  "anstream",
  "anstyle",
- "env_filter",
+ "env_filter 2.0.0",
  "jiff",
  "log",
 ]
@@ -2863,12 +2873,12 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
- "env_logger",
  "futures",
  "heck",
  "log",
  "mt_bagread",
  "mt_coord",
+ "mt_log",
  "mt_mtc",
  "mt_net",
  "mt_sea",
@@ -3016,6 +3026,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt_log"
+version = "0.9.0"
+dependencies = [
+ "env_filter 0.1.4",
+ "env_logger",
+ "log",
+ "ratatui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mt_mtc"
 version = "0.9.0"
 dependencies = [
@@ -3091,8 +3113,8 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "env_logger",
  "log",
+ "mt_log",
  "mt_net",
  "nalgebra",
  "rand 0.8.6",
@@ -3123,11 +3145,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cdr-encoding",
- "env_logger",
  "hiroz",
  "hiroz-msgs",
  "log",
  "mt_bagread",
+ "mt_log",
  "mt_net",
  "mt_pubsub",
  "mt_sea",

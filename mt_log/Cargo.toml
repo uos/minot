@@ -1,0 +1,32 @@
+[package]
+name = "mt_log"
+description = "One log line format for every process in the Minot stack, and the terminal pane that reads it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+exclude.workspace = true
+
+[features]
+default = ["json"]
+# Structured records on the wire, for a parent that wants the level and target
+# a child already knew rather than the ones it can guess from text.
+json = ["dep:serde", "dep:serde_json"]
+# The status-view side: a buffer, a logger that feeds it, and the pane.
+tui = ["dep:ratatui", "dep:env_filter"]
+# `init` for processes that log straight to the console.
+env = ["dep:env_logger"]
+
+[dependencies]
+log.workspace = true
+env_filter = { version = "0.1", optional = true }
+env_logger = { workspace = true, optional = true }
+ratatui = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }

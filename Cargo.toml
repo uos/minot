@@ -13,6 +13,7 @@ members = [
   "mt_service",
   "mt_action",
   "mt_scope",
+  "mt_log",
 ]
 resolver = "3"
 
@@ -51,6 +52,7 @@ mt_bagread = { path = "mt_bagread", version = "0.9.0", default-features = false 
 mt_net = { path = "mt_net", version = "0.9.0", default-features = false }
 mt_wind = { path = "mt_wind", version = "0.9.0", default-features = false }
 mt_mtc = { path = "mt_mtc", version = "0.9.0", default-features = false }
+mt_log = { path = "mt_log", version = "0.9.0", default-features = false }
 
 # Tools
 anyhow = "1.0"

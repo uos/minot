@@ -16,8 +16,8 @@ exclude.workspace = true
 [dependencies]
 mt_sea.workspace = true
 mt_bagread.workspace = true
-env_logger.workspace = true
 log.workspace = true
+mt_log = { workspace = true, features = ["env"] }
 nalgebra.workspace = true
 tokio.workspace = true
 rkyv.workspace = true

@@ -16,8 +16,8 @@ exclude.workspace = true
 [dependencies]
 mt_wind = { optional = true, workspace = true }
 mt_sea.workspace = true
-env_logger.workspace = true
 log.workspace = true
+mt_log = { workspace = true, features = ["env"] }
 nalgebra.workspace = true
 tokio.workspace = true
 serde.workspace = true

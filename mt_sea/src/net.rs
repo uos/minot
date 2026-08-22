@@ -72,11 +72,93 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
     }
 }
 
+/// Delivery mode for a node.
+///
+/// Two independent axes are encoded here, and they are easy to confuse:
+///
+/// * **Wire QoS** — how Zenoh carries the bytes ([`Qos::reliability`],
+///   [`Qos::congestion_control`]).
+/// * **Failure policy** — what the rest of the system does when this node stops
+///   answering ([`Qos::is_monitored`], [`Qos::fires_torpedo`],
+///   [`Qos::removes_rules_on_exit`]).
+///
+/// Always ask through the predicates below rather than comparing variants.
+/// Matching on `== Qos::Reliable` and `== Qos::BestEffort` spells the same
+/// question two opposite ways, so a third variant silently lands on different
+/// sides of the two spellings.
 #[derive(Serialize, Deserialize, Archive, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Qos {
+    /// Reliable wire delivery, and a node whose loss is fatal to the system:
+    /// peers heartbeat-monitor it and a Torpedo tears the run down when it dies.
+    /// Sends to it block the caller until they land.
     #[default]
     Reliable,
+    /// Reliable wire delivery and ordering, without the fatal failure policy.
+    ///
+    /// Comparable to a ROS 2 DDS `RELIABLE` subscriber: writes are retried and
+    /// ordered, a write that cannot land within its deadline fails on its own
+    /// rather than taking the participant down, and nothing tears down peers.
+    /// Sends are dispatched off the caller's thread, so a slow or roaming link
+    /// cannot wedge the publisher's loop. Intended for links where latency is
+    /// unpredictable — WiFi viewers, tablets, anything off the LAN.
+    TryReliable,
+    /// Unreliable single-attempt delivery, dropped under congestion, non-fatal.
+    /// For high-rate streams where the next sample is worth more than this one.
     BestEffort,
+}
+
+impl Qos {
+    /// Wire reliability. Note this is close to free over TCP, which already
+    /// retransmits and orders; it bites on lossy transports.
+    pub fn reliability(self) -> zenoh::qos::Reliability {
+        match self {
+            Qos::Reliable | Qos::TryReliable => zenoh::qos::Reliability::Reliable,
+            Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
+        }
+    }
+
+    /// Backpressure behaviour when the transmit queue is full.
+    ///
+    /// `Reliable` blocks indefinitely, which is what wedges a publisher when the
+    /// link stalls. `TryReliable` uses `BlockFirst`: wait for the first message,
+    /// drop later ones instead of stalling without bound.
+    pub fn congestion_control(self) -> zenoh::qos::CongestionControl {
+        match self {
+            Qos::Reliable => zenoh::qos::CongestionControl::Block,
+            Qos::TryReliable => zenoh::qos::CongestionControl::BlockFirst,
+            Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
+        }
+    }
+
+    /// Whether peers must heartbeat-monitor this node and report it dead.
+    pub fn is_monitored(self) -> bool {
+        matches!(self, Qos::Reliable)
+    }
+
+    /// Whether losing this node fires a Torpedo that stops the whole run.
+    pub fn fires_torpedo(self) -> bool {
+        matches!(self, Qos::Reliable)
+    }
+
+    /// Whether the coordinator drops this node's routing rules when it goes
+    /// away. Resilient nodes keep theirs so a reconnect finds its routes intact.
+    pub fn removes_rules_on_exit(self) -> bool {
+        matches!(self, Qos::Reliable)
+    }
+
+    /// Whether delivery to this node is expected not to silently drop samples.
+    /// Used to reject pairings with a best-effort publisher.
+    pub fn expects_reliable_delivery(self) -> bool {
+        matches!(self, Qos::Reliable | Qos::TryReliable)
+    }
+
+    /// Whether sends to this node are dispatched off the caller's thread.
+    ///
+    /// False only for `Reliable`, whose send is awaited inline and retried
+    /// without bound. Everything else must not be able to wedge a frame loop.
+    pub fn dispatch_is_async(self) -> bool {
+        !matches!(self, Qos::Reliable)
+    }
 }
 
 #[derive(Serialize, Deserialize, Archive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -345,14 +427,8 @@ impl Sea {
                     let coord_to_client_key_owned = coord_to_client_key.clone();
                     let publisher = session_clone
                         .declare_publisher(coord_to_client_key_owned)
-                        .congestion_control(match node_mode {
-                            Qos::Reliable => zenoh::qos::CongestionControl::Block,
-                            Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
-                        })
-                        .reliability(match node_mode {
-                            Qos::Reliable => zenoh::qos::Reliability::Reliable,
-                            Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
-                        })
+                        .congestion_control(node_mode.congestion_control())
+                        .reliability(node_mode.reliability())
                         .wait()
                         .expect("Failed to create publisher for client");
 
@@ -447,5 +523,75 @@ impl Sea {
     pub async fn cleanup(&mut self) {
         // Zenoh session cleanup is handled automatically when dropped
         info!("Sea coordinator shutting down");
+    }
+}
+
+#[cfg(test)]
+mod qos_tests {
+    use super::Qos;
+
+    /// The two axes are independent, and `TryReliable` is the combination that
+    /// only exists because they are: reliable on the wire, non-fatal on failure.
+    #[test]
+    fn try_reliable_is_reliable_on_the_wire_but_never_fatal() {
+        let mode = Qos::TryReliable;
+
+        assert_eq!(mode.reliability(), zenoh::qos::Reliability::Reliable);
+        assert!(mode.expects_reliable_delivery());
+
+        assert!(!mode.is_monitored());
+        assert!(!mode.fires_torpedo());
+        assert!(!mode.removes_rules_on_exit());
+    }
+
+    /// Only `Reliable` may take the rest of the system down with it, and only
+    /// `Reliable` blocks its caller. Everything else must stay survivable.
+    #[test]
+    fn reliable_is_the_only_fatal_and_the_only_blocking_mode() {
+        for mode in [Qos::TryReliable, Qos::BestEffort] {
+            assert!(!mode.fires_torpedo(), "{mode:?} must not fire a Torpedo");
+            assert!(!mode.is_monitored(), "{mode:?} must not be monitored");
+            assert!(
+                mode.dispatch_is_async(),
+                "{mode:?} must not be able to wedge its caller"
+            );
+        }
+
+        assert!(Qos::Reliable.fires_torpedo());
+        assert!(Qos::Reliable.is_monitored());
+        assert!(!Qos::Reliable.dispatch_is_async());
+    }
+
+    /// `Block` is what stalls a publisher when a link goes away. Only the mode
+    /// that accepts being wedged may use it.
+    #[test]
+    fn only_reliable_blocks_without_bound_under_congestion() {
+        use zenoh::qos::CongestionControl;
+
+        assert_eq!(Qos::Reliable.congestion_control(), CongestionControl::Block);
+        assert_eq!(
+            Qos::TryReliable.congestion_control(),
+            CongestionControl::BlockFirst
+        );
+        assert_eq!(
+            Qos::BestEffort.congestion_control(),
+            CongestionControl::Drop
+        );
+    }
+
+    /// A best-effort publisher drops samples, so any subscriber that expects
+    /// delivery has to be rejected rather than silently starved.
+    #[test]
+    fn best_effort_is_the_only_mode_that_tolerates_dropped_samples() {
+        assert!(Qos::Reliable.expects_reliable_delivery());
+        assert!(Qos::TryReliable.expects_reliable_delivery());
+        assert!(!Qos::BestEffort.expects_reliable_delivery());
+    }
+
+    /// `Reliable` is the default, so an unknown or departed client is treated
+    /// as fatal rather than silently downgraded.
+    #[test]
+    fn default_mode_is_reliable() {
+        assert_eq!(Qos::default(), Qos::Reliable);
     }
 }

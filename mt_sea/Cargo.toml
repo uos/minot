@@ -20,8 +20,8 @@ shm = ["zenoh/shared-memory"]
 [dependencies]
 nalgebra.workspace = true
 log.workspace = true
+mt_log = { workspace = true, features = ["env"] }
 mt_net.workspace = true
-env_logger.workspace = true
 rand.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

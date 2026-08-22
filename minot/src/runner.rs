@@ -8,28 +8,12 @@ use tokio::process::Command;
 
 type BoxError = Box<dyn std::error::Error>;
 
-/// Initialize a stderr logger for the runner process with a minimal format
-/// that pelorus can parse: `[LEVEL] target: message`
+/// Initialize a stderr logger for the runner process.
+///
+/// The format is `mt_log`'s, so a parent capturing this stream reads it back
+/// with the level, source and target the records were written with.
 fn init_runner_logger() {
-    let mut builder = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,zenoh=warn"),
-    );
-    builder
-        .filter_module("zenoh::api::admin", log::LevelFilter::Off)
-        .filter_module("zenoh::api::session", log::LevelFilter::Off)
-        .filter_module("zenoh::net::routing::hat::peer", log::LevelFilter::Error)
-        .format(|buf, record| {
-            use std::io::Write;
-            writeln!(
-                buf,
-                "[{}] {}: {}",
-                record.level(),
-                record.target(),
-                record.args()
-            )
-        })
-        .target(env_logger::Target::Stderr);
-    builder.init();
+    mt_log::init_filtered("Minot", "RUST_LOG", "info,zenoh=warn", mt_log::QUIET_ZENOH);
 }
 
 /// Re-emit a log record received from serve's JSON protocol at the correct level.

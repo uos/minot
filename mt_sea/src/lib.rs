@@ -29,6 +29,23 @@ pub const REGISTRATION_TIMEOUT_MS: u64 = 2000;
 /// [peer-heartbeat] Consecutive ping failures before declaring a peer dead.
 pub const PEER_DEAD_THRESHOLD: u32 = 3;
 
+/// [try-reliable] Total budget for one `Qos::TryReliable` delivery.
+/// Generous enough to ride out a WiFi roam or a retry burst, bounded so a
+/// send can never wedge the caller's loop the way `Qos::Reliable` can.
+pub const TRY_RELIABLE_SEND_BUDGET_MS: u64 = 3000;
+
+/// [try-reliable] Per-attempt query timeout inside that budget. Must be well
+/// below TRY_RELIABLE_SEND_BUDGET_MS so a stalled attempt leaves room to retry.
+pub const TRY_RELIABLE_ATTEMPT_TIMEOUT_MS: u64 = 500;
+
+/// [try-reliable] Pause between failed attempts, so a dead target is not
+/// hammered for the whole budget.
+pub const TRY_RELIABLE_RETRY_BACKOFF_MS: u64 = 50;
+
+/// [best-effort] Single-attempt query timeout. Best-effort never retries: the
+/// next sample is worth more than this one.
+pub const BEST_EFFORT_ATTEMPT_TIMEOUT_MS: u64 = 250;
+
 /// [coordinator] Last-resort timeout for coordinator-side per-client handler.
 /// Nodes no longer heartbeat the coordinator directly; this only fires for
 /// truly isolated or zombie clients that sent no packet for this long.
@@ -106,21 +123,12 @@ where
     }
 }
 
-/// Initialize logging with zenoh logs filtered to warn level regardless of RUST_LOG setting.
-/// Uses RUST_LOG env var for other crates, defaulting to `info` if not set.
+/// Initialize logging in the house format, with the transport crates capped
+/// however loud `RUST_LOG` asks everything else to be.
 pub fn init_logging() {
-    use env_logger::Env;
-    let env = Env::new().filter_or("RUST_LOG", "info");
-    env_logger::Builder::from_env(env)
-        .filter_module("zenoh", log::LevelFilter::Warn)
-        .filter_module("zenoh::api::admin", log::LevelFilter::Off)
-        .filter_module("zenoh::api::session", log::LevelFilter::Off)
-        .filter_module("zenoh::net::routing::hat::peer", log::LevelFilter::Error)
-        .filter_module("zenoh_transport", log::LevelFilter::Warn)
-        .filter_module("zenoh_link", log::LevelFilter::Warn)
-        .filter_module("zenoh_protocol", log::LevelFilter::Warn)
-        .init();
+    mt_log::init_filtered("Minot", "RUST_LOG", "info", mt_log::QUIET_ZENOH);
 }
+
 use rkyv::{
     Archive, Deserialize, Serialize,
     api::high::{HighSerializer, HighValidator},

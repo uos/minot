@@ -771,11 +771,7 @@ async fn async_play(
     publish_clock: bool,
     missing_qos: AsyncMissingQos,
 ) -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .filter_module("zenoh", log::LevelFilter::Warn)
-        .filter_module("zenoh::api::admin", log::LevelFilter::Off)
-        .filter_module("zenoh::api::session", log::LevelFilter::Off)
-        .init();
+    mt_log::init_filtered("Minot", "RUST_LOG", "info", mt_log::QUIET_ZENOH);
 
     #[allow(unused_mut)]
     let mut ready_rxs: Vec<tokio::sync::oneshot::Receiver<()>> = Vec::new();
