@@ -2035,8 +2035,8 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hiroz"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "byteorder",
  "clap",
@@ -2069,8 +2069,8 @@ dependencies = [
 
 [[package]]
 name = "hiroz-cdr"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -2081,8 +2081,8 @@ dependencies = [
 
 [[package]]
 name = "hiroz-codegen"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "anyhow",
  "hex",
@@ -2098,8 +2098,8 @@ dependencies = [
 
 [[package]]
 name = "hiroz-derive"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2108,8 +2108,8 @@ dependencies = [
 
 [[package]]
 name = "hiroz-msgs"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2127,16 +2127,16 @@ dependencies = [
 
 [[package]]
 name = "hiroz-protocol"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "zenoh",
 ]
 
 [[package]]
 name = "hiroz-schema"
-version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/hiroz.git#29d2688e17b29389e10be88445b0dd6cfe1572ed"
+version = "0.2.0"
+source = "git+https://github.com/ZettaScaleLabs/hiroz.git?tag=v0.2.0#8ece001ad1014b5e464954b25b30d0adde2615c1"
 dependencies = [
  "hex",
  "serde",
