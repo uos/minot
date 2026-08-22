@@ -1307,6 +1307,7 @@ jobs:
     needs:
       - create-release
     runs-on: ubuntu-dev-resolute
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
       - name: Publish to crates.io
@@ -1314,11 +1315,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
-          if ! output=$(cargo publish 2>&1); then
-            echo "$output"
-            echo "$output" | grep -q "already exists" || exit 1
-            echo "Version already published, skipping."
-          fi
+          bash ./scripts/cargo-publish.sh
 
   minot-rat-release-uos-ppa:
     runs-on: ubuntu-dev-resolute

@@ -1,6 +1,6 @@
 [package]
 name = "mt_log"
-description = "One log line format for every process in the Minot stack, and the terminal pane that reads it."
+description = "Central logging in the SeaKit stack."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

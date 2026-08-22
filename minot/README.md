@@ -1,25 +1,5 @@
 # Minot
 
-## Local-only networking
-
-Pass `--local-only` to `minot` or `minot-coord` to restrict Minot discovery and
-communication to processes on the same machine:
-
-```text
-minot --local-only sync example.mt
-minot-coord --local-only
-```
-
-This still uses loopback networking so local Minot processes can communicate.
-If a Zenoh router is already listening on the local Minot endpoint
-(`127.0.0.1:7447`), local-only clients connect to it. Otherwise, a node using
-automatic coordinator startup creates the loopback-only router in-process.
-Without the option, Minot retains its default network-wide discovery behavior.
-The coordinator runs as a Zenoh router, listens on all IPv4 interfaces at
-`tcp/0.0.0.0:7447`, and keeps multicast scouting enabled. Clients can therefore
-use multicast discovery or connect directly to the host's LAN address on port
-`7447`.
-
 Minot is a highly versatile toolset for debugging and verifying stateful robot perception software. Some common use cases are:
 
 * Fine-grained rosbag publishing
