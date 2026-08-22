@@ -135,8 +135,8 @@ debug = 0
 
 [profile.full-release]
 inherits = "release"
-lto = "fat"          # Link Time Optimization
-codegen-units = 1    # Slower compile times but compiler sees all generated code and can optimize over everything across modules. Also decreases binary size.
+lto = "fat"
+codegen-units = 1
 
 [profile.colcon]
 inherits = "release"
