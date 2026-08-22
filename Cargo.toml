@@ -27,7 +27,7 @@ authors = ["Christopher Sieh <stelzo@steado.de>"]
 categories = ["science::robotics"]
 documentation = "https://uos.github.io/minot"
 homepage = "https://uos.github.io/minot"
-rust-version = "1.85"
+rust-version = "1.85.1"
 exclude = [
   "**/.github/**",
   "**/tests/**",
