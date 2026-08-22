@@ -9,7 +9,7 @@ endif()
 
 include(r2r_cargo.cmake)
 
-r2r_cargo(rcl rcl_action sensor_msgs nav_msgs)
+r2r_cargo(rcl rcl_action builtin_interfaces std_msgs geometry_msgs sensor_msgs nav_msgs rosgraph_msgs)
 
 install(PROGRAMS
   ${CMAKE_SOURCE_DIR}/target/colcon/${PROJECT_NAME}${SUFFIX}

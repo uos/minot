@@ -14,7 +14,22 @@
   <build_depend>libclang-dev</build_depend>
 
   <build_depend>rcl</build_depend>
+  <build_depend>rcl_action</build_depend>
+  <build_depend>builtin_interfaces</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>rosgraph_msgs</build_depend>
+
   <exec_depend>rcl</exec_depend>
+  <exec_depend>rcl_action</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
