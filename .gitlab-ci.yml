@@ -94,14 +94,12 @@ lint:
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
-    - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
       - minot-$TRIPLE
-      - minot-coord-$TRIPLE
       - librat.so
       - librat.a
     expire_in: 1 week
@@ -120,12 +118,10 @@ snapshot:linux:x86_64-musl:
     - rustup default stable
     - rustup target add $RUST_TARGET
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
   artifacts:
     paths:
-      - minot-coord-$TRIPLE
       - minot-$TRIPLE
       - librat.a
     expire_in: 1 week
@@ -172,14 +168,12 @@ snapshot:linux:riscv64-musl:
     - rustup target add $RUST_TARGET
     - curl -L https://musl.cc/riscv64-linux-musl-cross.tgz | tar xz
     - RUSTFLAGS="-C target-feature=+crt-static" cargo build --target $RUST_TARGET --release
-    - mv target/$RUST_TARGET/release/minot-coord minot-coord-$TRIPLE
     - mv target/$RUST_TARGET/release/minot minot-$TRIPLE
     - mv target/$RUST_TARGET/release/librat.a librat.a
     - cargo build --target $RUST_TARGET --release --lib # needed to build shared library
     - mv target/$RUST_TARGET/release/librat.so librat.so
   artifacts:
     paths:
-      - minot-coord-$TRIPLE
       - minot-$TRIPLE
       - librat.so
       - librat.a

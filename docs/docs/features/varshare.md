@@ -60,10 +60,10 @@ You can also send everything to the Minot sync to compare them with the `==` ope
 
 #### Standalone Coordinator
 
-Variable Sharing only needs the Coordinator, which can run standalone without the sync command. The binary takes a Ratslang file with Rules. It waits for every Rat in that Rule to be connected to the network before un(b)locking all Rats to continue their normal flow after intialisation.
+Variable Sharing only needs the Coordinator, which can run standalone without the sync command. The subcommand takes a Ratslang file with Rules. It waits for every Rat in that Rule to be connected to the network before un(b)locking all Rats to continue their normal flow after intialisation.
 
 ~~~bash title="Standalone Coordinator"
-minot-coord ./rules.mt
+minot coord ./rules.mt
 ~~~
 
 #### Minot sync with embedded Coordinator

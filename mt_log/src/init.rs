@@ -55,10 +55,45 @@ pub fn init_filtered(
 /// at info, which buries everything a run is actually about.
 pub const QUIET_ZENOH: &[(&str, log::LevelFilter)] = &[
     ("zenoh", log::LevelFilter::Warn),
-    ("zenoh::api::admin", log::LevelFilter::Off),
-    ("zenoh::api::session", log::LevelFilter::Off),
+    // Held at error, not off. These narrate their normal operation and are
+    // worth nothing at warn, but a module that has genuinely failed still has
+    // something to say, and silencing it wholesale is how a real fault turns
+    // into a process that merely stops working with no explanation.
+    ("zenoh::api::admin", log::LevelFilter::Error),
+    ("zenoh::api::session", log::LevelFilter::Error),
     ("zenoh::net::routing::hat::peer", log::LevelFilter::Error),
+    // A bounded query is bounded by being allowed to expire, and Zenoh reports
+    // every expiry from both ends at warn: the router noting the deadline, the
+    // session then receiving a reply for a query it has already dropped. One
+    // best-effort peer walking away makes every publisher in the process
+    // narrate the same non-event. Real errors still come through.
+    ("zenoh::net::routing::dispatcher::queries", log::LevelFilter::Error),
     ("zenoh_transport", log::LevelFilter::Warn),
     ("zenoh_link", log::LevelFilter::Warn),
     ("zenoh_protocol", log::LevelFilter::Warn),
 ];
+
+/// Add [`QUIET_ZENOH`] to a filter spec, so the transport stays out of it.
+///
+/// Takes either a bare level or a full spec, because a process is handed one
+/// or the other depending on whether its level came from a config file or from
+/// `RUST_LOG`. Anything the spec already says is left alone: these are appended
+/// as more specific directives, and the longest match wins.
+///
+/// Each module is *capped*, never raised. Appending `zenoh=warn` to a spec that
+/// asked for `error` would turn chatter back on for the level that asked for
+/// the least of it.
+pub fn quieted(spec: &str) -> String {
+    // The global level is the directive with no module name. A spec that sets
+    // none leaves the libraries at their own default, which is info.
+    let base = spec
+        .split(',')
+        .find(|directive| !directive.contains('='))
+        .and_then(|level| level.trim().parse::<log::LevelFilter>().ok())
+        .unwrap_or(log::LevelFilter::Info);
+    QUIET_ZENOH
+        .iter()
+        .fold(spec.to_owned(), |spec, (module, cap)| {
+            format!("{spec},{module}={}", base.min(*cap))
+        })
+}

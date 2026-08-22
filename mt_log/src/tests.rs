@@ -268,3 +268,80 @@ mod tui {
         assert_eq!(wrap(&"µ".repeat(12), 5, 5), vec!["µµµµµ", "µµµµµ", "µµ"]);
     }
 }
+
+#[cfg(all(feature = "env", feature = "tui"))]
+mod quieted_spec {
+    // env_filter comes in with the `tui` feature, which is what parses a spec
+    // at runtime; these assert against that same engine.
+
+    use crate::quieted;
+
+    fn allows(spec: &str, target: &str, level: log::Level) -> bool {
+        env_filter::Builder::new()
+            .parse(spec)
+            .build()
+            .matches(&log::Record::builder().level(level).target(target).build())
+    }
+
+    /// The flood this exists to stop: one best-effort peer walking away makes
+    /// every publisher in the process narrate the same expired query.
+    #[test]
+    fn query_expiry_chatter_is_held_back() {
+        for level in ["error", "warn", "info", "debug", "trace"] {
+            let spec = quieted(level);
+            assert!(
+                !allows(&spec, "zenoh::api::session", log::Level::Warn),
+                "a late reply for a dropped query still logs at {level}: {spec}"
+            );
+            assert!(
+                !allows(
+                    &spec,
+                    "zenoh::net::routing::dispatcher::queries",
+                    log::Level::Warn
+                ),
+                "a query deadline still logs at {level}: {spec}"
+            );
+        }
+    }
+
+    /// Held back, not switched off. Nothing in the list is quiet enough to
+    /// swallow a real error: a module that has genuinely failed still has
+    /// something to say, and silencing it wholesale is how a real fault turns
+    /// into a process that merely stops working with no explanation.
+    #[test]
+    fn real_transport_errors_still_come_through() {
+        let spec = quieted("info");
+        for (module, _) in crate::QUIET_ZENOH {
+            assert!(
+                allows(&spec, module, log::Level::Error),
+                "a real error from {module} would go unreported: {spec}"
+            );
+        }
+        assert!(allows(&spec, "zenoh_transport", log::Level::Warn));
+    }
+
+    /// A cap, never a floor: the level that asked for the least must not get
+    /// transport chatter handed back to it.
+    #[test]
+    fn a_quieter_level_is_never_made_louder() {
+        let spec = quieted("error");
+        assert!(!allows(&spec, "zenoh", log::Level::Warn), "{spec}");
+        assert!(!allows(&spec, "zenoh_transport", log::Level::Warn), "{spec}");
+    }
+
+    /// A full spec is capped just the same, since a process may be handed one
+    /// through the environment rather than a bare level from its config.
+    #[test]
+    fn a_full_spec_is_capped_without_losing_what_it_said() {
+        let spec = quieted("info,polarstern=debug");
+        assert!(allows(&spec, "polarstern", log::Level::Debug), "{spec}");
+        assert!(!allows(&spec, "zenoh::api::session", log::Level::Warn), "{spec}");
+    }
+
+    #[test]
+    fn the_applications_own_records_are_untouched() {
+        let spec = quieted("info");
+        assert!(allows(&spec, "polarstern", log::Level::Info));
+        assert!(allows(&spec, "pelorus", log::Level::Info));
+    }
+}

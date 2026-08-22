@@ -1053,10 +1053,13 @@ impl Client {
             .recv_async()
             .await
             .map_err(|e| anyhow::anyhow!("data query completed without a reply: {e}"))?;
-        reply
-            .result()
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("receiver rejected data: {e:?}"))
+        reply.result().map(|_| ()).map_err(|e| {
+            // The reason is the reply's payload, which is text; the struct
+            // around it is a wrapper whose debug form buries that one word in
+            // a byte dump of it.
+            let payload = e.payload().to_bytes();
+            anyhow::anyhow!("receiver rejected data: {}", String::from_utf8_lossy(&payload))
+        })
     }
 
     /// Network-only send (no SHM) for `Qos::BestEffort`: a single attempt, no
@@ -1085,7 +1088,6 @@ impl Client {
             std::time::Duration::from_millis(crate::BEST_EFFORT_ATTEMPT_TIMEOUT_MS),
         )
         .await
-        .map_err(|e| anyhow::anyhow!("Best-effort send failed: {e}"))
     }
 
     /// Network-only send (no SHM) for `Qos::TryReliable`: retry until the

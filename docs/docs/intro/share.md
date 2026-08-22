@@ -22,7 +22,7 @@ Build and run the libraries and the Coordinator.
 git clone https://codeberg.org/stelzo/minot && cd minot
 cargo build
 
-./target/debug/minot-coord mt/varshare_demo.mt
+./target/debug/minot coord mt/varshare_demo.mt
 ~~~
 
 Start a second terminal to run `rat1` in Rust.

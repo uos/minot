@@ -84,6 +84,8 @@ printf "\n"; info "Minot Uninstallation Script"; printf "\n"
 printf "Will remove files from:\n  bin: ${BIN_DIR}\n  lib: ${LIB_DIR}\n  include: ${INCLUDE_DIR}\n\n"
 
 TO_REMOVE_LIST=""
+# 'minot-coord' was folded into 'minot coordinator' and is no longer shipped.
+# It stays in this list so upgrades clean up installs that still have it.
 for f in \
   "${BIN_DIR}/minot" \
   "${BIN_DIR}/minot-coord" \
@@ -782,7 +784,7 @@ download_and_install() {
         binname="$1"
         req="$2"
         case "$binname" in
-            minot|minot-coord) return 0 ;;
+            minot) return 0 ;;
             wind-mt-pubsub*|wind-ratpub*) echo "$req" | grep -Eq '\bembed-mt-pubsub\b' && return 0 || return 1 ;;
             wind-ros1*)   echo "$req" | grep -Eq '(\bembed-ros1-native\b|\bembed-ros\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
             wind-ros2-native*) echo "$req" | grep -Eq '(\bembed-ros2-native\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
@@ -845,7 +847,7 @@ download_and_install() {
                 *.a|*.so|*.dylib|*.dll|*.h|*.d|*.sha256) continue ;;
             esac
             
-            if [ "$BINARY_NAME" = "minot-coord" ] || should_install_binary "$BINARY_NAME" "$REQUESTED_FEATURES"; then
+            if should_install_binary "$BINARY_NAME" "$REQUESTED_FEATURES"; then
                 cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
                 chmod +x "$INSTALL_DIR/$BINARY_NAME"
                 success "Binary: $BINARY_NAME -> $INSTALL_DIR/$BINARY_NAME"
@@ -1146,7 +1148,7 @@ build_from_source() {
     printf "\n"
 
     ART_DIR="target/release"
-    for binary in "$ART_DIR"/minot "$ART_DIR"/minot-coord "$ART_DIR"/wind-*; do
+    for binary in "$ART_DIR"/minot "$ART_DIR"/wind-*; do
         if [ -f "$binary" ]; then
             BINARY_NAME=$(basename "$binary")
             # Skip .d files (dependency files from Rust build)

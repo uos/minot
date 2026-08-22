@@ -166,6 +166,12 @@ pub struct HeadlessArgs {
 }
 
 #[derive(Parser, Debug, Clone)]
+pub struct CoordinatorArgs {
+    /// Path to a .mt file for initialization
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug, Clone)]
 pub struct AsyncPlayArgs {
     /// Path to a bag file or directory (.mcap, .db3, or folder with metadata.yaml)
     pub path: PathBuf,
@@ -200,6 +206,9 @@ pub(crate) enum Commands {
     /// Play a bag file in real-time to all connected winds (ratpub, ROS2, etc.)
     #[command(name = "async")]
     AsyncPlay(AsyncPlayArgs),
+    /// Run the coordinator, the network manager for Minot nodes
+    #[command(name = "coordinator", alias = "coord")]
+    Coordinator(CoordinatorArgs),
     /// Start the stdin-stdout server for bagfile querying, commonly used in integrations
     Serve,
     /// Run a .mt file in headless (offline) mode, outputting JSON logs
@@ -209,7 +218,7 @@ pub(crate) enum Commands {
         /// Optional feature name to check (e.g., "coord", "mt_pubsub", "ros2") or comma-separated list (e.g., "coord,ros2")
         feature: Option<String>,
     },
-    // Uninstall minot and minot-coord from the system
+    // Uninstall minot from the system, including any legacy minot-coord binary
     Uninstall,
 
     /// Generate shell completions
@@ -989,6 +998,8 @@ fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let minot_path = &current_exe;
+    // `minot-coord` was folded into `minot coordinator`. Installs made before
+    // that still have the standalone binary lying around, so clean it up too.
     let minot_coord_path = install_dir.join("minot-coord");
 
     let mut failed = false;
@@ -1017,7 +1028,7 @@ fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        println!("'minot-coord' not found, skipping.");
+        println!("No legacy 'minot-coord' binary found, skipping.");
     }
 
     if !failed {
@@ -1882,6 +1893,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::AsyncPlay(args) => async_play(args.path, args.rate, args.clock, args.missing_qos)
             .await
             .map_err(|e| e.into()),
+        Commands::Coordinator(coord_args) => {
+            coord::run(coord_args.file).await.map_err(|e| e.into())
+        }
         Commands::Serve => serve().await,
         Commands::Headless(headless_args) => {
             runner::run(

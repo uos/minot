@@ -17,7 +17,7 @@ minot --help
 Or the standalone coordinator.
 
 ~~~bash
-minot-coord --help
+minot coord --help
 ~~~
 
 If the command could not be found, add your local binary folder to your `$PATH`: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`.

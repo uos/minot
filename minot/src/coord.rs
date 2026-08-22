@@ -2,25 +2,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::anyhow;
-use clap::Parser;
 use log::{info, warn};
 
 use mt_mtc::{Evaluated, Rhs, Val, VariableHistory};
 use mt_net::{ActionPlan, Rules};
 
 pub use mt_coord::run_coordinator;
-
-#[derive(Parser, Debug)]
-#[command(version, about, author, long_about = None)]
-/// Minot Coordinator — Network Manager for MtPubsub Nodes
-pub struct Args {
-    /// Restrict Minot discovery and communication to this machine.
-    #[arg(long, global = true)]
-    pub local_only: bool,
-
-    /// Path to .mt file for initialization
-    pub file: Option<PathBuf>,
-}
 
 pub fn topic_from_eval_or_default(
     eval: &Evaluated,
@@ -96,15 +83,16 @@ pub fn get_clients(eval: &Evaluated) -> anyhow::Result<HashSet<String>> {
     Ok(clients)
 }
 
-#[tokio::main(flavor = "multi_thread")]
-pub async fn main() -> anyhow::Result<()> {
+/// Run the coordinator in the foreground until Ctrl-C or a Torpedo.
+///
+/// Backs the `minot coordinator` subcommand. `--local-only` is a global flag on
+/// the top-level parser and is already applied by the time this runs, but
+/// logging is not: each subcommand installs its own logger, so this must too or
+/// the coordinator runs completely silently.
+pub async fn run(file: Option<PathBuf>) -> anyhow::Result<()> {
     mt_sea::init_logging();
 
-    let args = Args::parse();
-    mt_sea::network::set_local_only(args.local_only);
-    let filepath = args.file;
-
-    let eval = if let Some(fp) = filepath {
+    let eval = if let Some(fp) = file {
         let rules_file = std::fs::canonicalize(&fp)?;
         mt_mtc::compile_file(&rules_file, None, None)?
     } else {

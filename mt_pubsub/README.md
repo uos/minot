@@ -11,7 +11,7 @@ Part of the [minot](https://github.com/uos/minot) family of crates.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_pubsub = "0.8.0"
+mt_pubsub = "0.9.0"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 
@@ -31,7 +31,7 @@ Learn more on how to use it in your Code by visiting the [Minot docs](https://uo
 
 First, start the coordinator:
 ```bash
-cargo run --bin minot-coord
+cargo run --bin minot -- coord
 ```
 
 Then run the publisher and subscriber in separate terminals:

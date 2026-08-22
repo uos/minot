@@ -43,7 +43,7 @@ pub use pane::LogView;
 #[cfg(feature = "env")]
 mod init;
 #[cfg(feature = "env")]
-pub use init::{QUIET_ZENOH, init, init_filtered};
+pub use init::{QUIET_ZENOH, init, init_filtered, quieted};
 
 #[cfg(test)]
 mod tests;

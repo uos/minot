@@ -13,8 +13,7 @@ The `minot-$ROS_DISTRO-*` archives will only give you ROS specific binaries:
 
 Archives not specific to a ROS distribution contain builds that can be used independently.
 
-- `minot` sync + coordinator + MtPubSub publisher
-- `minot-coord` Standalone coordinator
+- `minot` sync + coordinator (`minot coord`) + MtPubSub publisher
 - `wind-mt-pubsub` Standalone MtPubSub publisher
 - `librat.*, rat.h` C libraries for Variable Sharing
 - `wind-ros*-native` ROS Publisher using [roslibrust](https://crates.io/crates/roslibrust) for ROS1 and [ros2-client](https://crates.io/crates/ros2-client) for ROS2

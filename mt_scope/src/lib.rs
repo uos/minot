@@ -41,7 +41,7 @@ pub struct Scope {
     ship: Arc<NetworkShipImpl>,
 }
 
-// Save communication channel to minot-coord
+// Save communication channel to the coordinator
 struct CoordCommunication {
     coord: (
         tokio::sync::mpsc::Sender<Packet>,

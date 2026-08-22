@@ -11,8 +11,8 @@ makedepends=('cargo' 'git')
 options=('!lto' '!debug')
 source=("$pkgname::git+$url.git#tag=v$pkgver")
 sha256sums=('SKIP')
-provides=('minot-coord' 'librat')
-conflicts=('minot-coord' 'librat')
+provides=('librat')
+conflicts=('librat')
 
 build() {
   export CARGO_TARGET_DIR="$srcdir/target"
@@ -29,7 +29,6 @@ build() {
 
 package() {
   install -Dm755 "$srcdir/target/release/minot" "$pkgdir/usr/bin/minot"
-  install -Dm755 "$srcdir/target/release/minot-coord" "$pkgdir/usr/bin/minot-coord"
 
   install -Dm755 "$srcdir/target/release/librat.so" "$pkgdir/usr/lib/librat.so"
   install -Dm755 "$srcdir/target/release/librat.a" "$pkgdir/usr/lib/librat.a"

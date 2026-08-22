@@ -28,7 +28,7 @@ For standalone scripts, MtPubSub-native applications or CI/CD, we also offer pre
 
 !!! info "MtPubSub coordinator"
     
-    Every install of Minot already ships a standalone coordinator `minot-coord`. It is also a ready-to-use MtPubSub coordinator for your MtPubSub pub/sub applications.
+    Every install of Minot can run a standalone coordinator with `minot coord`. It is also a ready-to-use MtPubSub coordinator for your MtPubSub pub/sub applications.
 
 ### Arch
 

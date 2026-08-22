@@ -4,7 +4,7 @@
 
 It implements a peer-to-peer network for pub/sub, services and actions over TCP with a novel approach to quality of service on node, publisher, service and action level for deterministic and highly reliable robotic software.
 ~~~bash
-minot-coord # start manually
+minot coord # start manually
 ./my_publisher # written in Go
 ./my_subscriber # written in Rust
 ~~~

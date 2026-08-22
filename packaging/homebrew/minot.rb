@@ -14,8 +14,7 @@ class Minot < Formula
   end
 
   def install
-    bin.install "rat/minot"
-    bin.install "minot-coord"
+    bin.install "min/minot"
 
     lib.install "librat.a"
     lib.install "librat.dylib"
@@ -33,6 +32,6 @@ class Minot < Formula
 
   test do
     system "#{bin}/minot", "--version"
-    system "#{bin}/minot-coord", "--version"
+    system "#{bin}/minot", "coord", "--help"
   end
 end

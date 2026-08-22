@@ -1,4 +1,4 @@
-roslibrust::find_and_generate_ros_messages_without_ros_package_path!("msg/ros1");
+roslibrust::generate_ros_types_with_env!("msg/ros1");
 
 use anyhow::anyhow;
 use std::collections::HashMap;

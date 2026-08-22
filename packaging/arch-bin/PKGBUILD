@@ -20,8 +20,8 @@ source_aarch64=(
 )
 sha256sums_aarch64=('SKIP' 'SKIP')
 noextract=("$pkgname-$pkgver-bin.deb" "$pkgname-$pkgver-dev.deb")
-provides=('minot' 'minot-coord' 'librat')
-conflicts=('minot' 'minot-coord' 'librat')
+provides=('minot' 'librat')
+conflicts=('minot' 'librat')
 
 prepare() {
   mkdir -p "$srcdir/minot-bin-ext" "$srcdir/minot-dev-ext"
@@ -45,7 +45,6 @@ build() {
 
 package() {
   install -Dm755 "$srcdir/minot-bin-ext/usr/bin/minot" "$pkgdir/usr/bin/minot"
-  install -Dm755 "$srcdir/minot-bin-ext/usr/bin/minot-coord" "$pkgdir/usr/bin/minot-coord"
 
   install -Dm644 "$srcdir/minot-dev-ext/usr/lib/librat.so" "$pkgdir/usr/lib/librat.so"
   install -Dm644 "$srcdir/minot-dev-ext/usr/lib/librat.a" "$pkgdir/usr/lib/librat.a"

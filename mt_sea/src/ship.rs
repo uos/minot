@@ -160,10 +160,22 @@ impl crate::Cannon for NetworkShipImpl {
                     // Backstop only: each send path already bounds itself.
                     match tokio::time::timeout(send_budget, send).await {
                         Ok(Ok(())) => {}
-                        Ok(Err(e)) => warn!(
-                            "{:?} send '{}' to '{}' failed: {e}",
-                            target_mode, variable_name, target_ship_name
-                        ),
+                        // What failed and to whom is the whole of what a
+                        // warning is for here. The chain underneath is Zenoh
+                        // describing a query that timed out, which says nothing
+                        // a reader of the warning did not already know — and a
+                        // peer going away turns every publisher into a source
+                        // of it at once.
+                        Ok(Err(e)) => {
+                            warn!(
+                                "{:?} send '{}' to '{}' failed",
+                                target_mode, variable_name, target_ship_name
+                            );
+                            debug!(
+                                "{:?} send '{}' to '{}' failed: {e:#}",
+                                target_mode, variable_name, target_ship_name
+                            );
+                        }
                         Err(_) => warn!(
                             "{:?} send '{}' to '{}' timed out",
                             target_mode, variable_name, target_ship_name
