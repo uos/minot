@@ -326,7 +326,10 @@ mod quieted_spec {
     fn a_quieter_level_is_never_made_louder() {
         let spec = quieted("error");
         assert!(!allows(&spec, "zenoh", log::Level::Warn), "{spec}");
-        assert!(!allows(&spec, "zenoh_transport", log::Level::Warn), "{spec}");
+        assert!(
+            !allows(&spec, "zenoh_transport", log::Level::Warn),
+            "{spec}"
+        );
     }
 
     /// A full spec is capped just the same, since a process may be handed one
@@ -335,7 +338,10 @@ mod quieted_spec {
     fn a_full_spec_is_capped_without_losing_what_it_said() {
         let spec = quieted("info,polarstern=debug");
         assert!(allows(&spec, "polarstern", log::Level::Debug), "{spec}");
-        assert!(!allows(&spec, "zenoh::api::session", log::Level::Warn), "{spec}");
+        assert!(
+            !allows(&spec, "zenoh::api::session", log::Level::Warn),
+            "{spec}"
+        );
     }
 
     #[test]

@@ -194,6 +194,11 @@ pub struct Client {
     pub coordinator_receive: std::sync::Arc<std::sync::RwLock<Option<CoordSender>>>,
     pub coordinator_send:
         std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<Packet>>>>,
+    /// Dedicated control-plane heartbeat path. This must not share the packet
+    /// queue with wind/data traffic or data-plane backpressure can look like a
+    /// dead coordinator.
+    coordinator_heartbeat_send:
+        std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<()>>>>,
     pub kind: ShipKind,
     rm_rules_on_disconnect: bool,
     node_mode: Qos,
@@ -219,6 +224,14 @@ impl std::fmt::Debug for Client {
             .field("rm_rules_on_disconnect", &self.rm_rules_on_disconnect)
             .field("timing", &self.timing)
             .finish_non_exhaustive()
+    }
+}
+
+impl Client {
+    pub(crate) fn coordinator_heartbeat_send(
+        &self,
+    ) -> Option<tokio::sync::mpsc::Sender<()>> {
+        self.coordinator_heartbeat_send.read().unwrap().clone()
     }
 }
 
@@ -568,6 +581,7 @@ impl Client {
         let wind_receiver = std::sync::Arc::new(tokio::sync::Mutex::new(wind_receiver));
 
         let coord_send_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
+        let coord_heartbeat_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
         let coord_receive_tx: std::sync::Arc<std::sync::RwLock<Option<CoordSender>>> =
             std::sync::Arc::new(std::sync::RwLock::new(None));
 
@@ -717,6 +731,7 @@ impl Client {
         Ok(Self {
             kind: ship_kind,
             coordinator_send: coord_send_tx,
+            coordinator_heartbeat_send: coord_heartbeat_tx,
             coordinator_receive: coord_receive_tx,
             rm_rules_on_disconnect,
             node_mode,
@@ -752,12 +767,38 @@ impl Client {
         let client_to_coord_key =
             format!("minot/{}/clients/{}/coord", self.domain_id, ship_name_key);
         let join_key = format!("minot/{}/coord/join", self.domain_id);
+        let heartbeat_to_coord_key =
+            crate::net::client_heartbeat_key(self.domain_id, &ship_name_key);
 
         let coord_subscriber = self
             .session
             .declare_subscriber(&coord_to_client_key)
             .wait()
             .expect("Failed to create coordinator subscriber");
+
+        // Heartbeats have their own high-priority publisher/subscriber pair.
+        // They deliberately bypass coordinator_send and the ordinary packet
+        // publisher so a full wind/data queue cannot delay liveness.
+        let heartbeat_publisher = self
+            .session
+            .declare_publisher(heartbeat_to_coord_key)
+            .priority(zenoh::qos::Priority::RealTime)
+            .congestion_control(zenoh::qos::CongestionControl::Drop)
+            .reliability(zenoh::qos::Reliability::Reliable)
+            .wait()
+            .expect("Failed to create coordinator heartbeat publisher");
+        let (heartbeat_tx, mut heartbeat_rx) = tokio::sync::mpsc::channel::<()>(1);
+        self.coordinator_heartbeat_send
+            .write()
+            .unwrap()
+            .replace(heartbeat_tx);
+        tokio::spawn(async move {
+            while heartbeat_rx.recv().await.is_some() {
+                if let Err(error) = heartbeat_publisher.put(&[0u8; 1]).wait() {
+                    debug!("Failed to send dedicated coordinator heartbeat: {error}");
+                }
+            }
+        });
 
         debug!("Client {} listening on {}", ship_name, coord_to_client_key);
 
@@ -871,7 +912,15 @@ impl Client {
                 } else {
                     unarmed_poll
                 };
-                let result = tokio::time::timeout(wait, coord_subscriber.recv_async()).await;
+                // If the runtime was stalled until the deadline, prefer a
+                // heartbeat already waiting in the subscriber over declaring
+                // the coordinator dead. `timeout()` checks the timer first and
+                // caused false disconnects when both became ready together.
+                let result = tokio::select! {
+                    biased;
+                    sample = coord_subscriber.recv_async() => Ok(sample),
+                    _ = tokio::time::sleep(wait) => Err(()),
+                };
                 if result.is_ok() {
                     silent_for = tokio::time::Duration::ZERO;
                 } else if !received_first {
@@ -1106,7 +1155,10 @@ impl Client {
             // around it is a wrapper whose debug form buries that one word in
             // a byte dump of it.
             let payload = e.payload().to_bytes();
-            anyhow::anyhow!("receiver rejected data: {}", String::from_utf8_lossy(&payload))
+            anyhow::anyhow!(
+                "receiver rejected data: {}",
+                String::from_utf8_lossy(&payload)
+            )
         })
     }
 

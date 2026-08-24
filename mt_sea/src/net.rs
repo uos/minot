@@ -11,6 +11,13 @@ use crate::{Action, ShipKind, ShipName, VariableHuman, WindData};
 pub const PROTO_IDENTIFIER: u8 = 69;
 pub const CONTROLLER_CLIENT_ID: ShipName = 0;
 
+pub(crate) fn client_heartbeat_key(domain_id: u16, sanitized_ship_name: &str) -> String {
+    format!(
+        "minot/{}/heartbeat/clients/{}/coord",
+        domain_id, sanitized_ship_name
+    )
+}
+
 /// Copy bytes into an aligned buffer for rkyv deserialization
 fn align_bytes(bytes: &[u8]) -> AlignedVec {
     let mut aligned = AlignedVec::with_capacity(bytes.len());
@@ -302,6 +309,8 @@ impl Sea {
 
         tokio::spawn(async move {
             info!("Sea coordinator listening on {}", join_key);
+            let mut client_transport_tasks =
+                std::collections::HashMap::<ShipKind, Vec<tokio::task::JoinHandle<()>>>::new();
 
             loop {
                 let sample = subscriber.recv_async().await;
@@ -345,13 +354,18 @@ impl Sea {
                     {
                         let mut lock = rat_lock.lock().unwrap();
                         if lock.get(&ship_kind).is_some() {
-                            // Client is reconnecting - allow it by removing old entry
-                            // The old Zenoh subscriber task will eventually exit when it
-                            // detects no more messages or errors
+                            // Client is reconnecting. Its old transport tasks
+                            // are aborted below so duplicate subscribers and
+                            // heartbeat echoers cannot survive a generation.
                             info!("Client {:?} reconnecting, allowing rejoin", ship_kind);
                             lock.remove(&ship_kind);
                         }
                         lock.insert(ship_kind.clone());
+                    }
+                    if let Some(tasks) = client_transport_tasks.remove(&ship_kind) {
+                        for task in tasks {
+                            task.abort();
+                        }
                     }
 
                     let generated_id = rand::random::<ShipName>().abs();
@@ -385,6 +399,8 @@ impl Sea {
                     // Key for client -> coordinator messages
                     let client_to_coord_key =
                         format!("minot/{}/clients/{}/coord", domain_id, ship_name_key);
+                    let heartbeat_to_coord_key =
+                        client_heartbeat_key(domain_id, &ship_name_key);
 
                     // Subscriber for receiving from client
                     let client_subscriber = session_clone
@@ -393,11 +409,12 @@ impl Sea {
                         .expect("Failed to create subscriber for client");
 
                     let recv_tx_clone = recv_tx.clone();
+                    let heartbeat_recv_tx = recv_tx.clone();
                     let ships_lock = std::sync::Arc::clone(&rat_lock);
                     let ship_kind_for_disconnect = ship_kind.clone();
 
                     // Task to receive from client
-                    tokio::spawn(async move {
+                    let receive_task = tokio::spawn(async move {
                         loop {
                             match client_subscriber.recv_async().await {
                                 Ok(sample) => {
@@ -443,6 +460,41 @@ impl Sea {
                         }
                     });
 
+                    // A dedicated high-priority control path keeps liveness
+                    // independent of wind/data publisher queues and range
+                    // query congestion. Heartbeat echoes use their own
+                    // publisher but the normal coordinator-to-client key, so
+                    // the client's existing connection watcher sees them.
+                    let heartbeat_subscriber = session_clone
+                        .declare_subscriber(heartbeat_to_coord_key)
+                        .wait()
+                        .expect("Failed to create client heartbeat subscriber");
+                    let heartbeat_echo_publisher = session_clone
+                        .declare_publisher(coord_to_client_key.clone())
+                        .priority(zenoh::qos::Priority::RealTime)
+                        .congestion_control(zenoh::qos::CongestionControl::Drop)
+                        .reliability(zenoh::qos::Reliability::Reliable)
+                        .wait()
+                        .expect("Failed to create heartbeat echo publisher");
+                    let heartbeat_task = tokio::spawn(async move {
+                        let heartbeat_packet = Packet {
+                            header: Header::default(),
+                            data: PacketKind::Heartbeat,
+                        };
+                        let heartbeat_bytes = rkyv::api::high::to_bytes::<rancor::Error>(
+                            &heartbeat_packet,
+                        )
+                        .expect("Failed to serialize heartbeat");
+                        while heartbeat_subscriber.recv_async().await.is_ok() {
+                            let _ = heartbeat_recv_tx.send((heartbeat_packet.clone(), None));
+                            if let Err(error) =
+                                heartbeat_echo_publisher.put(&*heartbeat_bytes).wait()
+                            {
+                                debug!("Failed to echo dedicated heartbeat: {error}");
+                            }
+                        }
+                    });
+
                     // Create publisher synchronously BEFORE spawning send task
                     // This ensures publisher is ready before we send the welcome
                     debug!("Creating coordinator publisher for {}", coord_to_client_key);
@@ -471,13 +523,15 @@ impl Sea {
                         .expect("Failed to serialize welcome packet");
                     if let Err(e) = publisher.put(&*bytes).wait() {
                         error!("Failed to send welcome packet: {}", e);
+                        receive_task.abort();
+                        heartbeat_task.abort();
                         continue;
                     }
 
                     debug!("Welcome packet sent to {}", coord_to_client_key);
 
                     // Task to send subsequent packets to client
-                    tokio::spawn(async move {
+                    let send_task = tokio::spawn(async move {
                         while let Some(packet) = send_rx.recv().await {
                             let bytes = rkyv::api::high::to_bytes::<rancor::Error>(&packet)
                                 .expect("Failed to serialize packet");
@@ -488,6 +542,7 @@ impl Sea {
                         }
                     });
 
+                    let ship_kind_for_tasks = ship_kind.clone();
                     let ship_handle = ShipHandle {
                         ship: generated_id,
                         disconnect: disconnect_tx,
@@ -503,6 +558,10 @@ impl Sea {
                     if let Err(e) = clients_tx_inner.send(ship_handle) {
                         error!("Failed to broadcast new client: {}", e);
                     }
+                    client_transport_tasks.insert(
+                        ship_kind_for_tasks,
+                        vec![receive_task, heartbeat_task, send_task],
+                    );
                     debug!("ShipHandle created and sent");
                 }
             }
@@ -551,7 +610,14 @@ impl Sea {
 
 #[cfg(test)]
 mod qos_tests {
-    use super::Qos;
+    use super::{Qos, client_heartbeat_key};
+
+    #[test]
+    fn coordinator_heartbeat_has_a_dedicated_control_key() {
+        let heartbeat = client_heartbeat_key(7, "player");
+        assert_eq!(heartbeat, "minot/7/heartbeat/clients/player/coord");
+        assert_ne!(heartbeat, "minot/7/clients/player/coord");
+    }
 
     /// The two axes are independent, and `TryReliable` is the combination that
     /// only exists because they are: reliable on the wire, non-fatal on failure.

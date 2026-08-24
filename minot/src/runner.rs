@@ -82,6 +82,8 @@ pub async fn run(
     minot_path: PathBuf,
     sync: bool,
     local_only: bool,
+    registry: Option<String>,
+    no_cache_stream: bool,
 ) -> Result<(), BoxError> {
     init_runner_logger();
 
@@ -101,8 +103,15 @@ pub async fn run(
     if local_only {
         command.arg("--local-only");
     }
+    if let Some(registry) = registry {
+        command.arg("serve").arg("--registry").arg(registry);
+    } else {
+        command.arg("serve");
+    }
+    if no_cache_stream {
+        command.arg("--no-cache-stream");
+    }
     let mut child = command
-        .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

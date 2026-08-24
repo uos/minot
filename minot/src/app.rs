@@ -717,6 +717,16 @@ pub enum WindMode {
     ActiveSelect,
 }
 
+struct StreamedDataset(marina::registry::minot::RemoteDataset);
+
+impl std::fmt::Debug for StreamedDataset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("StreamedDataset")
+            .field(&self.0.bag().to_string())
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub struct WindCursor {
     line_start: Option<u32>,
@@ -731,6 +741,7 @@ pub struct WindCursor {
     pub(crate) compile_state: WindCompile,
     wind_file_path: PathBuf,
     bagfile: Arc<RwLock<mt_bagread::Bagfile>>,
+    streamed_dataset: Option<StreamedDataset>,
     pub(crate) variable_cache: HashMap<mt_mtc::Var, mt_mtc::Rhs>,
     dynamic_vars: HashMap<String, Vec<PlayKindUnitedPass3>>,
 }
@@ -747,6 +758,7 @@ impl Default for WindCursor {
             mode: WindMode::default(),
             wind_file_path: PathBuf::from("./wind.rl"),
             bagfile: Arc::new(RwLock::new(mt_bagread::Bagfile::default())),
+            streamed_dataset: None,
             variable_cache: HashMap::new(),
             wind_work_queue: 0,
             compile_state: WindCompile::default(),
@@ -821,6 +833,25 @@ impl WindCursor {
     fn with_rats(mut self, wind_file_path: PathBuf) -> Self {
         self.wind_file_path = wind_file_path;
         self
+    }
+}
+
+async fn promote_streamed_dataset(wind_cursor: &Arc<RwLock<WindCursor>>) {
+    let dataset = wind_cursor.write().unwrap().streamed_dataset.take();
+    let Some(dataset) = dataset else {
+        return;
+    };
+    let bag = dataset.0.bag().to_string();
+    info!("Completing and promoting streamed Marina dataset {bag}");
+    let result = tokio::task::spawn_blocking(move || {
+        let mut progress = marina::ProgressReporter::silent();
+        dataset.0.materialize(&mut progress)
+    })
+    .await;
+    match result {
+        Ok(Ok(path)) => info!("Promoted Marina dataset {bag} to {}", path.display()),
+        Ok(Err(error)) => warn!("Could not promote streamed Marina dataset {bag}: {error}"),
+        Err(error) => warn!("Marina promotion task for {bag} failed: {error}"),
     }
 }
 
@@ -1676,6 +1707,8 @@ impl App {
         mut receiver: tokio::sync::mpsc::Receiver<(String, String, String)>,
         mut dyn_wind_receiver: tokio::sync::mpsc::Receiver<String>,
         rats: Option<PathBuf>,
+        marina_registry: Option<String>,
+        no_cache_stream: bool,
     ) -> Self {
         let history = Arc::new(RwLock::new(History::default()));
         let history_add = Arc::clone(&history);
@@ -1740,38 +1773,47 @@ impl App {
                     let mut wc = wind_cursor_worker.write().unwrap();
                     wc.wind_work_queue = wc.wind_work_queue.saturating_sub(1);
                 };
+                let marina_registry = marina_registry.clone();
                 let fun = async move {
                     for windfn in eval.wind.iter() {
                         match windfn {
                             mt_mtc::WindFunction::Reset(path) => {
-                                let bag_blocking = {
-                                    let wc = wind_cursor_worker.read().unwrap();
-                                    Arc::clone(&wc.bagfile)
-                                };
-
                                 let reset_path = PathBuf::from(path);
-                                let abs_path = if reset_path.is_relative() {
+                                let local_candidate = if reset_path.is_relative() {
                                     let rats_file =
                                         wind_cursor_worker.read().unwrap().wind_file_path.clone();
-                                    rats_file
-                                        .parent()
-                                        .unwrap()
-                                        .join(reset_path)
-                                        .canonicalize()
-                                        .unwrap()
+                                    rats_file.parent().unwrap().join(reset_path)
                                 } else {
-                                    reset_path.canonicalize().unwrap()
+                                    reset_path
+                                };
+                                let target = if local_candidate.exists() {
+                                    local_candidate.to_string_lossy().into_owned()
+                                } else {
+                                    path.clone()
                                 };
 
-                                match bag_blocking.write().unwrap().reset(Some(abs_path)) {
+                                let opened = tokio::task::block_in_place(|| {
+                                    tokio::runtime::Handle::current().block_on(
+                                        crate::open_playback_bag(
+                                            &target,
+                                            marina_registry.as_deref(),
+                                            false,
+                                            no_cache_stream,
+                                        ),
+                                    )
+                                });
+                                match opened {
                                     Err(e) => {
                                         warn!(
-                                            "Could not reset bagfile path {path:?}: {e}, skipping to next action"
+                                            "Could not resolve bagfile or Marina dataset {path:?}: {e}, skipping to next action"
                                         );
                                         continue;
                                     }
-                                    Ok(_) => {
-                                        info!("read bag {path}");
+                                    Ok(opened) => {
+                                        let mut wc = wind_cursor_worker.write().unwrap();
+                                        *wc.bagfile.write().unwrap() = opened.bagfile;
+                                        wc.streamed_dataset = opened.streamed.map(StreamedDataset);
+                                        info!("read bag or Marina dataset {path}");
                                     }
                                 }
                             }
@@ -1873,6 +1915,7 @@ impl App {
                                     if bagmsgs.messages.len() > 1 { "s" } else { "" },
                                     start_bag_read.elapsed()
                                 );
+                                let reached_end = bagmsgs.end_of_bag;
 
                                 let mut wind_data = Vec::with_capacity(bagmsgs.messages.len());
                                 let mut start_time = None;
@@ -1890,11 +1933,12 @@ impl App {
 
                                 // Check for empty data conditions
                                 if wind_data.is_empty() {
-                                    if bagmsgs.end_of_bag {
+                                    if reached_end {
                                         // Truly no more data in bagfile - abort remaining actions
                                         warn!(
                                             "reached end of bagfile with no more matching messages"
                                         );
+                                        promote_streamed_dataset(&wind_cursor_worker).await;
                                         return;
                                     } else {
                                         // No matching messages at current position, but bagfile has more data
@@ -1907,7 +1951,7 @@ impl App {
                                 }
 
                                 // Log if we got data but also reached the end
-                                if bagmsgs.end_of_bag {
+                                if reached_end {
                                     info!(
                                         "processing final {} message(s) from bagfile",
                                         wind_data.len()
@@ -2065,6 +2109,9 @@ impl App {
                                             }
                                         }
                                     }
+                                }
+                                if reached_end {
+                                    promote_streamed_dataset(&wind_cursor_worker).await;
                                 }
                             }
                         }

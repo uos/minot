@@ -225,6 +225,12 @@ enum Token<'a> {
     #[regex(r"\.?\/+[^ \n]*")]
     Path(&'a str),
 
+    // Relative path or Marina namespace/name[:tag...] reference. Keeping it as
+    // one token makes reset! accept the same unquoted target users pass to the
+    // CLI while ordinary variables retain their existing grammar.
+    #[regex(r"[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.:\-]+", priority = 10)]
+    Target(&'a str),
+
     #[regex(r#""[^"]+""#, rm_first_and_last)]
     String(&'a str),
 
@@ -304,6 +310,7 @@ impl fmt::Display for Token<'_> {
         match self {
             Self::VarNamespace(ns) => write!(f, "Namespace({:?})", ns),
             Self::Path(path) => write!(f, "Path({:?})", path),
+            Self::Target(target) => write!(f, "Target({:?})", target),
             Self::String(string) => write!(f, "String({:?})", string),
             // Self::EnumDivider => write!(f, "::"),
             Self::FnReset => write!(f, "reset()"),
@@ -1295,7 +1302,9 @@ where
         .ignore_then(
             select! {
                 Token::Path(p) => p, // prefixed with /, resolve
+                Token::Target(t) => t,
                 Token::Variable(v) =>  v, // not prefixed, so implicit ./
+                Token::String(s) => s, // exact local path or Marina dataset reference
             }
             .labelled("bagfile"),
         )
@@ -2783,6 +2792,24 @@ mod tests {
         let eval = eval.unwrap();
         assert!(!eval.rules.raw().is_empty());
         assert!(!eval.wind.is_empty());
+    }
+
+    #[test]
+    fn reset_accepts_a_quoted_marina_reference() {
+        let eval = compile_code(r#"reset! "wachsbleiche/loop_2:hunter""#).unwrap();
+        assert!(matches!(
+            eval.wind.as_slice(),
+            [WindFunction::Reset(target)] if target == "wachsbleiche/loop_2:hunter"
+        ));
+    }
+
+    #[test]
+    fn reset_accepts_an_unquoted_marina_reference_like_the_cli() {
+        let eval = compile_code(r#"reset! wachsbleiche/loop_2:hunter"#).unwrap();
+        assert!(matches!(
+            eval.wind.as_slice(),
+            [WindFunction::Reset(target)] if target == "wachsbleiche/loop_2:hunter"
+        ));
     }
 
     #[test]

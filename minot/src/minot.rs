@@ -149,6 +149,14 @@ fn spawn_shm_stats_logger() {
 pub struct TuiArgs {
     /// Path to a '.mt' file. See the docs for a demo.
     pub file: PathBuf,
+
+    /// Marina registry to use for remote reset! targets.
+    #[arg(long)]
+    pub registry: Option<String>,
+
+    /// Stream remote reset! targets without caching or promotion.
+    #[arg(long)]
+    pub no_cache_stream: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -163,6 +171,25 @@ pub struct HeadlessArgs {
     /// Wait for stdin input (any line) before executing the file. Useful when waiting for network connections.
     #[arg(long)]
     pub sync: bool,
+
+    /// Marina registry to use for remote reset! targets.
+    #[arg(long)]
+    pub registry: Option<String>,
+
+    /// Stream remote reset! targets without caching or promotion.
+    #[arg(long)]
+    pub no_cache_stream: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ServeArgs {
+    /// Marina registry to use for remote reset! targets.
+    #[arg(long)]
+    pub registry: Option<String>,
+
+    /// Stream remote reset! targets without caching or promotion.
+    #[arg(long)]
+    pub no_cache_stream: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -183,6 +210,10 @@ pub struct AsyncPlayArgs {
     /// Materialise a Marina dataset before playback instead of streaming it.
     #[arg(long)]
     pub no_stream: bool,
+
+    /// Stream without caching blocks or promoting the completed dataset.
+    #[arg(long, conflicts_with = "no_stream")]
+    pub no_cache_stream: bool,
 
     /// Playback rate multiplier (1.0 = real-time, 2.0 = 2× speed, 0.5 = half speed)
     #[arg(long, default_value_t = 1.0)]
@@ -218,7 +249,7 @@ pub(crate) enum Commands {
     #[command(name = "coordinator", alias = "coord")]
     Coordinator(CoordinatorArgs),
     /// Start the stdin-stdout server for bagfile querying, commonly used in integrations
-    Serve,
+    Serve(ServeArgs),
     /// Run a .mt file in headless (offline) mode, outputting JSON logs
     Headless(HeadlessArgs),
     /// Show compiled features or check if a specific feature is available
@@ -261,7 +292,8 @@ pub(crate) enum Commands {
     },
 }
 
-async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn tui(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let path = args.file;
     println!("Compiling {:#?}", &path.canonicalize()?);
     let eval = mt_mtc::compile_file(&path, None, None)?;
     // remove compile feebback
@@ -632,7 +664,15 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut app = App::new(tx, ndata_rx, dyn_wind_rx, Some(path)).await;
+    let mut app = App::new(
+        tx,
+        ndata_rx,
+        dyn_wind_rx,
+        Some(path),
+        args.registry,
+        args.no_cache_stream,
+    )
+    .await;
 
     info!("Welcome to Minot. Have fun!");
     let backend = CrosstermBackend::new(std::io::stdout());
@@ -823,17 +863,44 @@ impl Drop for NetworkSettingsGuard {
     }
 }
 
-async fn open_playback_bag(
+pub(crate) struct OpenedPlaybackBag {
+    pub(crate) bagfile: mt_bagread::Bagfile,
+    pub(crate) streamed: Option<marina::registry::minot::RemoteDataset>,
+}
+
+impl OpenedPlaybackBag {
+    fn promote(self) -> anyhow::Result<()> {
+        // Close the range-readable MCAP before its sparse backing file is
+        // moved from stream/ into the ordinary ready/ cache.
+        drop(self.bagfile);
+        if let Some(dataset) = self.streamed {
+            let bag = dataset.bag().to_string();
+            info!("Completing and promoting streamed Marina dataset {bag}");
+            let mut progress = marina::ProgressReporter::silent();
+            let path = dataset
+                .materialize(&mut progress)
+                .with_context(|| format!("could not promote streamed Marina dataset '{bag}'"))?;
+            info!("Promoted Marina dataset {bag} to {}", path.display());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) async fn open_playback_bag(
     target: &str,
     registry: Option<&str>,
     no_stream: bool,
-) -> anyhow::Result<mt_bagread::Bagfile> {
+    no_cache_stream: bool,
+) -> anyhow::Result<OpenedPlaybackBag> {
     let path = std::path::Path::new(target);
     if path.exists() {
         let mut bagfile = mt_bagread::Bagfile::default();
         bagfile.reset(Some(path))?;
         info!("Playing local bag: {}", path.display());
-        return Ok(bagfile);
+        return Ok(OpenedPlaybackBag {
+            bagfile,
+            streamed: None,
+        });
     }
 
     let _network_settings = NetworkSettingsGuard::for_remote_dataset();
@@ -842,7 +909,7 @@ async fn open_playback_bag(
     let mode = if no_stream {
         marina::AccessMode::RequireLocal
     } else {
-        marina::AccessMode::PreferStream
+        marina::AccessMode::PreferCachedThenStream
     };
     let access = marina
         .resolve_access(target, registry, mode)
@@ -854,8 +921,17 @@ async fn open_playback_bag(
         marina::DatasetAccess::Local(path) => {
             bagfile.reset(Some(&path))?;
             info!("Playing materialised Marina dataset: {}", path.display());
+            Ok(OpenedPlaybackBag {
+                bagfile,
+                streamed: None,
+            })
         }
         marina::DatasetAccess::Streamed(dataset) => {
+            let dataset = if no_cache_stream {
+                dataset.online_only()
+            } else {
+                dataset
+            };
             let remote = dataset.open_mcap().with_context(|| {
                 format!("could not select an MCAP file from Marina dataset '{target}'")
             })?;
@@ -865,15 +941,19 @@ async fn open_playback_bag(
                 dataset.bag(),
                 registry.unwrap_or("<auto>")
             );
+            Ok(OpenedPlaybackBag {
+                bagfile,
+                streamed: (!no_cache_stream).then_some(dataset),
+            })
         }
     }
-    Ok(bagfile)
 }
 
 async fn async_play(
     target: String,
     registry: Option<String>,
     no_stream: bool,
+    no_cache_stream: bool,
     rate: f64,
     publish_clock: bool,
     missing_qos: AsyncMissingQos,
@@ -892,8 +972,8 @@ async fn async_play(
         }
     });
 
-    let mut bagfile = tokio::select! {
-        result = open_playback_bag(&target, registry.as_deref(), no_stream) => result?,
+    let mut opened = tokio::select! {
+        result = open_playback_bag(&target, registry.as_deref(), no_stream, no_cache_stream) => result?,
         _ = stop.cancelled() => return Ok(()),
     };
 
@@ -1018,7 +1098,7 @@ async fn async_play(
 
     let disconnect = ship.disconnect.clone();
     loop {
-        let msg_opt = tokio::task::block_in_place(|| bagfile.next_message_with_timestamp())?;
+        let msg_opt = tokio::task::block_in_place(|| opened.bagfile.next_message_with_timestamp())?;
 
         if stop.is_cancelled() {
             return Ok(());
@@ -1074,6 +1154,7 @@ async fn async_play(
     }
 
     info!("Bag playback complete.");
+    tokio::task::block_in_place(|| opened.promote())?;
     Ok(())
 }
 
@@ -1287,7 +1368,7 @@ fn init_stdio_logger(
     Ok(())
 }
 
-async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+async fn serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Create a dedicated logger thread and channel for serialized JSON messages
     let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
     start_logging_thread(log_rx);
@@ -1757,7 +1838,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
 
-                        let app = App::new(tx, ndata_rx, dyn_wind_rx, Some(file_path)).await;
+                        let app = App::new(
+                            tx,
+                            ndata_rx,
+                            dyn_wind_rx,
+                            Some(file_path),
+                            args.registry.clone(),
+                            args.no_cache_stream,
+                        )
+                        .await;
 
                         // Wait for all winds to be connected before responding
                         let mut ready_futures = vec![];
@@ -2016,11 +2105,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_shm_stats_logger();
 
     match args.command {
-        Commands::Sync(tui_args) => tui(tui_args.file).await,
+        Commands::Sync(tui_args) => tui(tui_args).await,
         Commands::AsyncPlay(args) => async_play(
             args.target,
             args.registry,
             args.no_stream,
+            args.no_cache_stream,
             args.rate,
             args.clock,
             args.missing_qos,
@@ -2030,13 +2120,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Coordinator(coord_args) => {
             coord::run(coord_args.file).await.map_err(|e| e.into())
         }
-        Commands::Serve => serve().await,
+        Commands::Serve(args) => serve(args).await,
         Commands::Headless(headless_args) => {
             runner::run(
                 headless_args.file,
                 headless_args.minot_path,
                 headless_args.sync,
                 local_only,
+                headless_args.registry,
+                headless_args.no_cache_stream,
             )
             .await
         }

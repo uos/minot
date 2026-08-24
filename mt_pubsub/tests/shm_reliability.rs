@@ -1,6 +1,5 @@
 #![cfg(feature = "shm")]
 /// Test suite managed by AI.
-
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mt_pubsub::{CoordMode, Node, NodeConfig, Qos};

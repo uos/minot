@@ -9,6 +9,21 @@ use mt_sea::{Coordinator, Qos, ShipKind, WindData};
 
 const EMBEDDED_COORDINATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Receive client traffic until the idle deadline, preferring an already
+/// queued packet when the receiver and timer become ready in the same poll.
+/// `tokio::time::timeout` checks its deadline first, which made a stalled
+/// executor report clients dead even though their heartbeats were queued.
+async fn recv_before_idle_timeout<T: Clone>(
+    receiver: &mut tokio::sync::broadcast::Receiver<T>,
+    timeout: tokio::time::Duration,
+) -> Result<Result<T, tokio::sync::broadcast::error::RecvError>, ()> {
+    tokio::select! {
+        biased;
+        result = receiver.recv() => Ok(result),
+        _ = tokio::time::sleep(timeout) => Err(()),
+    }
+}
+
 fn take_subscription_override_vars(
     overrides: &mut HashMap<(String, String), Qos>,
     disconnected_ship: &str,
@@ -340,9 +355,9 @@ fn run_coordinator_with_ready(
                                     let minot_compare_name = COMPARE_NODE_NAME.to_string();
                                     match inner_name.as_str() {
                                         COMPARE_NODE_NAME => loop {
-                                            match tokio::time::timeout(
+                                            match recv_before_idle_timeout(
+                                                &mut client_news,
                                                 client_idle_timeout,
-                                                client_news.recv(),
                                             )
                                             .await
                                             {
@@ -487,9 +502,9 @@ fn run_coordinator_with_ready(
                                         },
                                         _ => {
                                             loop {
-                                                match tokio::time::timeout(
+                                                match recv_before_idle_timeout(
+                                                    &mut client_news,
                                                     client_idle_timeout,
-                                                    client_news.recv(),
                                                 )
                                                 .await
                                                 {
@@ -646,13 +661,6 @@ fn run_coordinator_with_ready(
                                                                     "Received heartbeat from {}",
                                                                     inner_name
                                                                 );
-                                                                let _ = client
-                                                                    .send
-                                                                    .send(Packet {
-                                                                        header: net::Header::default(),
-                                                                        data: PacketKind::Heartbeat,
-                                                                    })
-                                                                    .await;
                                                             }
                                                             PacketKind::Sonar => {
                                                                 let reliable = connected_clients_inner
@@ -1407,6 +1415,15 @@ pub async fn start_default_with_torpedo_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn queued_heartbeat_wins_a_simultaneously_expired_idle_deadline() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        tx.send("heartbeat").unwrap();
+
+        let received = recv_before_idle_timeout(&mut rx, tokio::time::Duration::ZERO).await;
+        assert!(matches!(received, Ok(Ok("heartbeat"))));
+    }
 
     #[test]
     fn disconnect_removes_only_the_dead_clients_subscription_overrides() {

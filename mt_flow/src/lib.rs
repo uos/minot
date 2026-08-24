@@ -34,8 +34,6 @@
 //! is fatal by contract — peers monitor it and its death torpedoes the run — so
 //! a laptop pulling a dataset over bad WiFi must never be one.
 
-
-
 use anyhow::{Context, Result, anyhow};
 use log::{debug, warn};
 use mt_pubsub::{Node, Publisher, Qos, Subscriber};
@@ -514,8 +512,13 @@ impl FlowReceiver {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Announce the opening credit before waiting for anything, or both
         // sides wait for each other.
-        publish_tolerantly(&self.windows, &self.window(), &self.connection, "the opening window")
-            .await?;
+        publish_tolerantly(
+            &self.windows,
+            &self.window(),
+            &self.connection,
+            "the opening window",
+        )
+        .await?;
 
         // Reset whenever the stream moves, so a long but healthy transfer is
         // never mistaken for a stalled one.
@@ -764,7 +767,10 @@ mod tests {
             complete: true,
         });
         state.apply(window(3, 9));
-        assert!(state.complete, "completion must not be undone by a stale window");
+        assert!(
+            state.complete,
+            "completion must not be undone by a stale window"
+        );
     }
 
     #[test]

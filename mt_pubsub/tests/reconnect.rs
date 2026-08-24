@@ -55,7 +55,10 @@ impl Coordinator {
         let child = Command::new(binary)
             .arg("coordinator")
             .arg("--local-only")
-            .env("RUST_LOG", std::env::var("COORD_LOG").unwrap_or_else(|_| "off".into()))
+            .env(
+                "RUST_LOG",
+                std::env::var("COORD_LOG").unwrap_or_else(|_| "off".into()),
+            )
             .stdout(Stdio::null())
             .stderr(if std::env::var("COORD_LOG").is_ok() {
                 Stdio::inherit()
@@ -65,7 +68,12 @@ impl Coordinator {
             .spawn()
             .ok()?;
         let coordinator = Self { child };
-        if !wait_until(Duration::from_secs(30), mt_sea::network::local_router_is_running).await {
+        if !wait_until(
+            Duration::from_secs(30),
+            mt_sea::network::local_router_is_running,
+        )
+        .await
+        {
             return None;
         }
         Some(coordinator)

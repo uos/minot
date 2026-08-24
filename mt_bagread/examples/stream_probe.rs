@@ -107,9 +107,10 @@ fn main() -> anyhow::Result<()> {
     let mut bag = Bagfile::default();
     let summary_start = std::time::Instant::now();
     match buffered {
-        Some(capacity) => {
-            bag.reset_with_io(Box::new(std::io::BufReader::with_capacity(capacity, io)), None)?
-        }
+        Some(capacity) => bag.reset_with_io(
+            Box::new(std::io::BufReader::with_capacity(capacity, io)),
+            None,
+        )?,
         None => bag.reset_with_io(Box::new(io), None)?,
     }
     let summary_time = summary_start.elapsed();
@@ -225,7 +226,10 @@ fn main() -> anyhow::Result<()> {
     // alone sinks the approach.
     let total_requests = (summary_requests + message_requests.len()) as f64;
     println!("--- modelled latency cost (bandwidth ignored) ---");
-    println!("  {:>8}  {:>12}  {:>12}  {:>12}", "RTT", "serial", "W=8", "W=32");
+    println!(
+        "  {:>8}  {:>12}  {:>12}  {:>12}",
+        "RTT", "serial", "W=8", "W=32"
+    );
     for rtt_ms in [1.0_f64, 20.0, 100.0, 200.0] {
         let serial = total_requests * rtt_ms / 1000.0;
         println!(

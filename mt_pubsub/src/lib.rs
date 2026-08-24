@@ -107,7 +107,6 @@ impl NodeConfig {
     }
 }
 
-
 /// Send a `RegisterShipAtVar` and wait for the coordinator to acknowledge it.
 ///
 /// Resolves the coordinator channels from the client at call time rather than
@@ -185,7 +184,11 @@ impl<T: Sendable> Publisher<T> {
     /// Cheap in the common case: one atomic load that matches.
     async fn ensure_registered(&self) -> anyhow::Result<()> {
         let live = self.ship.connection.generation();
-        if self.registered_generation.load(std::sync::atomic::Ordering::Acquire) == live {
+        if self
+            .registered_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            == live
+        {
             return Ok(());
         }
         register_at_var(

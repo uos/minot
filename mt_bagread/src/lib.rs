@@ -1164,7 +1164,10 @@ impl Bagfile {
     /// O(1) memory — exactly one message is deserialized per call.
     pub fn next_message_with_timestamp(&mut self) -> anyhow::Result<Option<(u64, u64, BagMsg)>> {
         if let Some(reader) = self.reader.as_mut() {
-            let file = self.io.as_mut().ok_or_else(|| anyhow!("bag i/o not open"))?;
+            let file = self
+                .io
+                .as_mut()
+                .ok_or_else(|| anyhow!("bag i/o not open"))?;
             let buf = &mut self.read_buffer;
             let summary = &self.summary;
             let metadata = &self.metadata;

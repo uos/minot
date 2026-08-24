@@ -11,8 +11,7 @@ use tokio_util::sync::CancellationToken;
 use zenoh::Wait;
 
 use crate::{
-    ArchivedMessage, Sendable,
-    ShipKind, VariableType,
+    ArchivedMessage, Sendable, ShipKind, VariableType,
     client::Client,
     net::{PacketKind, Qos, sanitize_key},
 };
@@ -697,11 +696,10 @@ impl NetworkShipImpl {
     /// and exactly once: `init` deliberately does not start it, so the owner of
     /// the `Arc` decides. The task ends when the connection is lost.
     ///
-    /// Cost is one small packet per `HEARTBEAT_INTERVAL_MS`. Only another
-    /// heartbeat suppresses it; application traffic does not, so a busy ship
-    /// still beats on schedule. That is deliberate — the peer's own
-    /// disconnect detector arms on heartbeat echoes, so a ship that fell silent
-    /// because it was busy publishing would lose its view of the coordinator.
+    /// Cost is one small control message per `HEARTBEAT_INTERVAL_MS`. The
+    /// heartbeat uses its own real-time-priority publisher and bounded channel;
+    /// application traffic cannot queue ahead of it. Only another heartbeat
+    /// suppresses it, so a busy ship still beats on schedule.
     pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
         // Tells the disconnect detector that silence from the coordinator is
         // meaningful for this node, because it is asking for a reply.
@@ -731,17 +729,16 @@ impl NetworkShipImpl {
             return Ok(None);
         }
 
-        let coord_send = {
+        let heartbeat_send = {
             let client = self.client.lock().await;
-            client.coordinator_send.read().unwrap().clone()
+            client.coordinator_heartbeat_send()
         };
 
-        if let Some(sender) = coord_send {
-            let packet = crate::net::Packet {
-                header: crate::net::Header::default(),
-                data: PacketKind::Heartbeat,
-            };
-            sender.send(packet).await?;
+        if let Some(sender) = heartbeat_send {
+            // Capacity one is intentional: heartbeats represent current
+            // liveness, so another pending beat is enough. This path is
+            // independent of wind/data packet queues.
+            let _ = sender.try_send(());
             *self.last_heartbeat.lock().await = Instant::now();
             Ok(Some(()))
         } else {
@@ -771,8 +768,14 @@ impl NetworkShipImpl {
         node_mode: Qos,
         options: crate::NodeOptions,
     ) -> anyhow::Result<Self> {
-        Self::init_with_coord_start(kind, rm_rules_on_disconnect, node_mode, options, |_| async {})
-            .await
+        Self::init_with_coord_start(
+            kind,
+            rm_rules_on_disconnect,
+            node_mode,
+            options,
+            |_| async {},
+        )
+        .await
     }
 
     /// Like `init`, but on registration timeout calls `start_coord` and retries once.
@@ -819,8 +822,14 @@ impl NetworkShipImpl {
         F: FnOnce(Option<tokio::sync::mpsc::Sender<()>>) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
-        Self::init_with_coord_start_impl(kind, rm_rules_on_disconnect, node_mode, options, start_coord)
-            .await
+        Self::init_with_coord_start_impl(
+            kind,
+            rm_rules_on_disconnect,
+            node_mode,
+            options,
+            start_coord,
+        )
+        .await
     }
 
     async fn init_with_coord_start_impl<F, Fut>(

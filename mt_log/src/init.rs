@@ -67,7 +67,10 @@ pub const QUIET_ZENOH: &[(&str, log::LevelFilter)] = &[
     // session then receiving a reply for a query it has already dropped. One
     // best-effort peer walking away makes every publisher in the process
     // narrate the same non-event. Real errors still come through.
-    ("zenoh::net::routing::dispatcher::queries", log::LevelFilter::Error),
+    (
+        "zenoh::net::routing::dispatcher::queries",
+        log::LevelFilter::Error,
+    ),
     ("zenoh_transport", log::LevelFilter::Warn),
     ("zenoh_link", log::LevelFilter::Warn),
     ("zenoh_protocol", log::LevelFilter::Warn),

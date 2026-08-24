@@ -67,7 +67,8 @@ impl NodeOptions {
 
     /// Resolve the reconnect policy for a node running at `qos`.
     pub fn reconnect_policy(&self, qos: Qos) -> ReconnectPolicy {
-        self.reconnect.unwrap_or_else(|| ReconnectPolicy::for_qos(qos))
+        self.reconnect
+            .unwrap_or_else(|| ReconnectPolicy::for_qos(qos))
     }
 }
 

@@ -40,7 +40,12 @@ impl Coordinator {
             .spawn()
             .ok()?;
         let coordinator = Self { child };
-        if !wait_until(Duration::from_secs(30), mt_sea::network::local_router_is_running).await {
+        if !wait_until(
+            Duration::from_secs(30),
+            mt_sea::network::local_router_is_running,
+        )
+        .await
+        {
             return None;
         }
         Some(coordinator)
