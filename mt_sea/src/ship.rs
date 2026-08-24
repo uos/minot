@@ -522,9 +522,13 @@ async fn ping_peer(session: &zenoh::Session, key: &str) -> anyhow::Result<()> {
         .map_err(|_| anyhow!("ping_peer: peer replied with error"))
 }
 
-/// Continuously ping a peer; send `PeerDead` to the coordinator after
-/// `PEER_DEAD_THRESHOLD` consecutive failures, then cancel the local disconnect
-/// token so this node shuts down even if the coordinator is already gone.
+/// Continuously ping a peer and send `PeerDead` to the coordinator after
+/// `PEER_DEAD_THRESHOLD` consecutive failures.
+///
+/// The cancellation token belongs to the *observer*, not the peer being
+/// checked. It is therefore only an input that stops this task when the
+/// observer shuts down. Cancelling it because another peer missed heartbeats
+/// would make a server kill itself whenever a client disappears.
 async fn monitor_peer(
     session: Arc<zenoh::Session>,
     domain_id: u16,
@@ -539,7 +543,10 @@ async fn monitor_peer(
     let mut consecutive_failures = 0u32;
 
     loop {
-        tokio::time::sleep(interval).await;
+        tokio::select! {
+            _ = disconnect.cancelled() => return,
+            _ = tokio::time::sleep(interval) => {}
+        }
 
         let alive = tokio::time::timeout(timeout_dur, ping_peer(&session, &key))
             .await
@@ -562,9 +569,6 @@ async fn monitor_peer(
                 };
                 // Best-effort notify coordinator; may fail if it is also gone.
                 coord_tx.send(packet).await.ok();
-                // Cancel local disconnect so this node shuts down regardless of
-                // whether the coordinator is still alive to send a torpedo back.
-                disconnect.cancel();
                 return;
             }
         }
