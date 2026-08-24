@@ -56,7 +56,10 @@ impl Drop for AsyncSendGuard {
 #[derive(Debug)]
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
-    pub last_send: Arc<tokio::sync::Mutex<Instant>>,
+    /// Time of the last heartbeat, deliberately independent of application
+    /// traffic. A busy Wind producer still needs heartbeat echoes to prove its
+    /// coordinator connection to the client-side liveness detector.
+    pub last_heartbeat: Arc<tokio::sync::Mutex<Instant>>,
     /// Runtime captured during initialization because `shoot` can be invoked
     /// from an ordinary worker thread with no entered Tokio context.
     runtime_handle: tokio::runtime::Handle,
@@ -694,10 +697,9 @@ impl NetworkShipImpl {
     /// and exactly once: `init` deliberately does not start it, so the owner of
     /// the `Arc` decides. The task ends when the connection is lost.
     ///
-    /// Cost is one small packet per `HEARTBEAT_INTERVAL_MS`. `send_heartbeat`
-    /// only suppresses itself after another `send_heartbeat` or a `send_wind`;
-    /// variable requests and pub/sub publishes do not touch `last_send`, so a
-    /// busy ship still beats on schedule. That is deliberate — the peer's own
+    /// Cost is one small packet per `HEARTBEAT_INTERVAL_MS`. Only another
+    /// heartbeat suppresses it; application traffic does not, so a busy ship
+    /// still beats on schedule. That is deliberate — the peer's own
     /// disconnect detector arms on heartbeat echoes, so a ship that fell silent
     /// because it was busy publishing would lose its view of the coordinator.
     pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
@@ -721,10 +723,10 @@ impl NetworkShipImpl {
         })
     }
 
-    /// Send a heartbeat to the coordinator if enough time has elapsed since the last send.
+    /// Send a heartbeat if enough time has elapsed since the last heartbeat.
     /// Returns Ok(Some(())) if sent, Ok(None) if skipped (too soon), Err on failure.
     pub async fn send_heartbeat(&self) -> anyhow::Result<Option<()>> {
-        let elapsed = self.last_send.lock().await.elapsed();
+        let elapsed = self.last_heartbeat.lock().await.elapsed();
         if elapsed < self.timing.heartbeat_suppress() {
             return Ok(None);
         }
@@ -740,7 +742,7 @@ impl NetworkShipImpl {
                 data: PacketKind::Heartbeat,
             };
             sender.send(packet).await?;
-            *self.last_send.lock().await = Instant::now();
+            *self.last_heartbeat.lock().await = Instant::now();
             Ok(Some(()))
         } else {
             Ok(None)
@@ -759,7 +761,6 @@ impl NetworkShipImpl {
                     data: crate::net::PacketKind::Wind(messages),
                 })
                 .await?;
-            *self.last_send.lock().await = Instant::now();
         }
         Ok(())
     }
@@ -929,7 +930,7 @@ impl NetworkShipImpl {
             client,
             runtime_handle: tokio::runtime::Handle::current(),
             // Initialize far enough in the past so the first heartbeat fires immediately
-            last_send: Arc::new(tokio::sync::Mutex::new(
+            last_heartbeat: Arc::new(tokio::sync::Mutex::new(
                 Instant::now() - timing.registration_timeout(),
             )),
             disconnect,
