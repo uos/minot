@@ -22,6 +22,14 @@ fn take_subscription_override_vars(
     vars
 }
 
+/// A delayed peer-dead report can arrive after the ordinary disconnect path
+/// has already removed this entry. Absence means "already handled", never
+/// "Reliable": defaulting it would turn a harmless stale report into a global
+/// Torpedo.
+fn peer_dead_fires_torpedo(mode: Option<Qos>) -> bool {
+    mode.is_some_and(Qos::fires_torpedo)
+}
+
 #[derive(Debug)]
 enum MinotTask {
     AppendRule {
@@ -1222,13 +1230,8 @@ fn run_coordinator_with_ready(
                 }
                 MinotTask::PeerDead { ship } => {
                     info!("PeerDead: {}", ship);
-                    let is_reliable = client_qos
-                        .read()
-                        .unwrap()
-                        .get(&ship)
-                        .copied()
-                        .unwrap_or_default()
-                        .fires_torpedo();
+                    let is_reliable =
+                        peer_dead_fires_torpedo(client_qos.read().unwrap().get(&ship).copied());
                     let affected_vars = rules_changer.read().unwrap().all_vars_for_ship(&ship);
                     rules_changer.write().unwrap().remove_client(&ship);
                     take_subscription_override_vars(
@@ -1420,5 +1423,13 @@ mod tests {
                 Qos::BestEffort
             )])
         );
+    }
+
+    #[test]
+    fn a_delayed_peer_dead_report_for_an_already_removed_client_is_not_fatal() {
+        assert!(!peer_dead_fires_torpedo(None));
+        assert!(!peer_dead_fires_torpedo(Some(Qos::TryReliable)));
+        assert!(!peer_dead_fires_torpedo(Some(Qos::BestEffort)));
+        assert!(peer_dead_fires_torpedo(Some(Qos::Reliable)));
     }
 }
