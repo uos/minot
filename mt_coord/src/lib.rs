@@ -5,7 +5,7 @@ use mt_sea::net::{self, Packet};
 use mt_sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
 use mt_net::{ActionPlan, COMPARE_NODE_NAME, RatPubRegisterKind, Rules, VariableHuman};
-use mt_sea::{Coordinator, DISCONNECT_TIMEOUT_MS, Qos, ShipKind, WindData};
+use mt_sea::{Coordinator, Qos, ShipKind, WindData};
 
 const EMBEDDED_COORDINATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -298,6 +298,12 @@ fn run_coordinator_with_ready(
                                     .unwrap()
                                     .insert(name.clone(), client.node_mode);
                                 let mut client_news = client.recv.subscribe();
+                                // Each client tells us at join time how patient to be
+                                // with it — a node on a wobbly link asks for more than
+                                // one on the LAN. See `mt_sea::Timing`.
+                                let client_idle_timeout = tokio::time::Duration::from_millis(
+                                    client.disconnect_timeout_ms,
+                                );
                                 let inner_name = name.clone();
                                 let rat_rules = std::sync::Arc::clone(&rules);
                                 let rat_coord_tx = coord_tx_new_client.clone();
@@ -316,7 +322,7 @@ fn run_coordinator_with_ready(
                                     match inner_name.as_str() {
                                         COMPARE_NODE_NAME => loop {
                                             match tokio::time::timeout(
-                                                tokio::time::Duration::from_millis(DISCONNECT_TIMEOUT_MS),
+                                                client_idle_timeout,
                                                 client_news.recv(),
                                             )
                                             .await
@@ -463,9 +469,7 @@ fn run_coordinator_with_ready(
                                         _ => {
                                             loop {
                                                 match tokio::time::timeout(
-                                                    tokio::time::Duration::from_millis(
-                                                        DISCONNECT_TIMEOUT_MS,
-                                                    ),
+                                                    client_idle_timeout,
                                                     client_news.recv(),
                                                 )
                                                 .await
@@ -729,14 +733,15 @@ fn run_coordinator_with_ready(
                                                     | Err(_)) => {
                                                         if result.is_err() {
                                                             // The client stopped speaking for
-                                                            // DISCONNECT_TIMEOUT_MS. Its handler is
+                                                            // its declared timeout. Its handler is
                                                             // the only thing answering variable
                                                             // requests, so tearing it down silently
                                                             // makes the client hang on its next
                                                             // bacon() with no diagnostic.
                                                             warn!(
                                                                 "Client {} timed out (no packet or heartbeat within {}ms), treating as disconnected",
-                                                                inner_name, DISCONNECT_TIMEOUT_MS
+                                                                inner_name,
+                                                                client_idle_timeout.as_millis()
                                                             );
                                                         } else {
                                                             info!(

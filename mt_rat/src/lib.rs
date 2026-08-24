@@ -52,6 +52,7 @@ impl Rat {
             ShipKind::Rat(name.to_string()),
             false,
             mt_sea::Qos::Reliable,
+            mt_sea::NodeOptions::default(),
         );
 
         let ship = match timeout {

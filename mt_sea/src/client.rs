@@ -197,6 +197,8 @@ pub struct Client {
     pub kind: ShipKind,
     rm_rules_on_disconnect: bool,
     node_mode: Qos,
+    timing: crate::Timing,
+    connection: std::sync::Arc<crate::ConnectionState>,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
     pub raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
     pub wind_receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Packet>>>,
@@ -215,6 +217,7 @@ impl std::fmt::Debug for Client {
             .field("kind", &self.kind)
             .field("domain_id", &self.domain_id)
             .field("rm_rules_on_disconnect", &self.rm_rules_on_disconnect)
+            .field("timing", &self.timing)
             .finish_non_exhaustive()
     }
 }
@@ -544,7 +547,10 @@ impl Client {
         ship_kind: ShipKind,
         rm_rules_on_disconnect: bool,
         node_mode: Qos,
+        timing: crate::Timing,
+        connection: std::sync::Arc<crate::ConnectionState>,
     ) -> anyhow::Result<Self> {
+        timing.validate()?;
         let domain_id = get_domain_id();
         if domain_id > 0 {
             info!("Client using domain ID {}", domain_id);
@@ -714,6 +720,8 @@ impl Client {
             coordinator_receive: coord_receive_tx,
             rm_rules_on_disconnect,
             node_mode,
+            timing,
+            connection,
             updated_raw_recv,
             raw_recv_buff,
             wind_receiver,
@@ -734,6 +742,8 @@ impl Client {
             ShipKind::Wind(name) => name.clone(),
         };
         let ship_name_key = sanitize_key(&ship_name);
+        // A fresh registration has not yet been answered by anyone.
+        self.connection.mark_link_unproven();
 
         // Key for coordinator -> client messages
         let coord_to_client_key =
@@ -788,6 +798,9 @@ impl Client {
         let recv_tx_clone = recv_tx.clone();
         let ship_kind_clone = self.kind.clone();
         let wind_sender_clone = self.wind_sender.clone();
+        let disconnect_timeout = self.timing.disconnect_timeout();
+        let connection_for_watch = std::sync::Arc::clone(&self.connection);
+        let registration_timeout = self.timing.registration_timeout();
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
         let (reg_done_tx, mut reg_done_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -828,37 +841,66 @@ impl Client {
                 }
             }
 
-            // Phase 2: coordinator must echo our heartbeats within DISCONNECT_TIMEOUT_MS.
-            // Wait for the first heartbeat echo with no timeout — the first echo can't
-            // arrive until the client sends its first heartbeat (up to HEARTBEAT_INTERVAL_MS
-            // away), so applying DISCONNECT_TIMEOUT_MS here would fire false positives.
-            // Only after receiving the first echo do we start enforcing the timeout.
+            // Phase 2: the coordinator must echo this node's heartbeats within its
+            // configured disconnect timeout.
+            //
+            // The full timeout cannot be applied straight away — the first echo
+            // cannot arrive until the client has sent its first heartbeat, up to
+            // one heartbeat interval later — so the detector arms on that first
+            // echo. But "wait for an echo that may never come" cannot be the
+            // whole story either: a coordinator that dies seconds after
+            // welcoming this node, before ever answering it, would otherwise
+            // never be noticed and the node would wait forever. So until the
+            // detector arms, a heartbeating node also gives up after a grace
+            // period. A node that does not heartbeat is not expecting a reply
+            // and is never timed out.
             let mut received_first = false;
+            // How long this node has gone without any word from the coordinator
+            // while its detector is still unarmed.
+            let mut silent_for = tokio::time::Duration::ZERO;
+            // Before the first echo the wait is short, so that a node which
+            // starts heartbeating just after registering still gets noticed.
+            let unarmed_poll = tokio::time::Duration::from_millis(200).min(disconnect_timeout);
+            // A heartbeating node that is never answered at all is just as
+            // disconnected as one that stops being answered. Generous, because
+            // this window also covers the coordinator still setting itself up.
+            let startup_grace = disconnect_timeout + registration_timeout;
             loop {
-                let recv_fut = coord_subscriber.recv_async();
-                let result = if received_first {
-                    tokio::time::timeout(
-                        tokio::time::Duration::from_millis(crate::DISCONNECT_TIMEOUT_MS),
-                        recv_fut,
-                    )
-                    .await
+                let wait = if received_first {
+                    disconnect_timeout
                 } else {
-                    // No timeout until first heartbeat echo arrives
-                    match recv_fut.await {
-                        Ok(s) => Ok(Ok(s)),
-                        Err(e) => Ok(Err(e)),
-                    }
+                    unarmed_poll
                 };
+                let result = tokio::time::timeout(wait, coord_subscriber.recv_async()).await;
+                if result.is_ok() {
+                    silent_for = tokio::time::Duration::ZERO;
+                } else if !received_first {
+                    // Not yet armed: only give up once this node is actually
+                    // asking for replies and has waited out the grace period.
+                    silent_for += wait;
+                    if !connection_for_watch.is_heartbeating() || silent_for < startup_grace {
+                        continue;
+                    }
+                    warn!(
+                        "Coordinator never answered {:?} within {:?} — treating as unreachable",
+                        ship_kind_clone, startup_grace
+                    );
+                    let _ = disconnect_tx.send(());
+                    break;
+                }
                 match result {
                     Ok(Ok(sample)) => {
                         let payload = sample.payload().to_bytes();
                         let aligned = align_bytes(&payload);
                         match from_bytes::<Packet, rkyv::rancor::Error>(&aligned) {
                             Ok(packet) => {
-                                // Only arm the disconnect timer after the first heartbeat
-                                // echo — ships that never send heartbeats won't have a timer
-                                // and won't produce false positives.
                                 if matches!(packet.data, PacketKind::Heartbeat) {
+                                    if !received_first {
+                                        debug!(
+                                            "{ship_kind_clone:?} coordinator link proven; disconnect detector armed at {disconnect_timeout:?}"
+                                        );
+                                        connection_for_watch.mark_link_proven();
+                                    }
                                     received_first = true;
                                 }
                                 if matches!(packet.data, PacketKind::Wind(_)) {
@@ -906,6 +948,7 @@ impl Client {
                 remove_rules_on_disconnect: self.rm_rules_on_disconnect,
                 domain_id: self.domain_id,
                 node_mode: self.node_mode,
+                disconnect_timeout_ms: self.timing.disconnect_timeout_ms,
             },
         };
 
@@ -1000,6 +1043,11 @@ impl Client {
 
     pub fn session(&self) -> std::sync::Arc<zenoh::Session> {
         std::sync::Arc::clone(&self.session)
+    }
+
+    /// This client's timing policy.
+    pub fn timing(&self) -> crate::Timing {
+        self.timing
     }
 
     pub fn domain_id(&self) -> u16 {

@@ -62,6 +62,7 @@ impl Scope {
             ShipKind::Rat(config.name.clone()),
             rm_rules_on_disconnect,
             sea_node_mode,
+            mt_sea::NodeOptions::default(),
         )
         .await?;
         debug!("Ship created");

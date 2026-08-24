@@ -29,6 +29,312 @@ pub const REGISTRATION_TIMEOUT_MS: u64 = 2000;
 /// [peer-heartbeat] Consecutive ping failures before declaring a peer dead.
 pub const PEER_DEAD_THRESHOLD: u32 = 3;
 
+/// Everything about a node that is policy rather than identity.
+///
+/// Carried as one value so adding a knob later does not churn every call site.
+/// `Default` reproduces the behaviour Minot had before these existed: LAN
+/// timing, and reconnect decided by the node's QoS.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NodeOptions {
+    /// How patient this node and its coordinator are with each other.
+    pub timing: Timing,
+    /// What to do when the coordinator link drops. `None` derives it from the
+    /// node's QoS via [`ReconnectPolicy::for_qos`], which is almost always what
+    /// you want — override only to force a `Reliable` node to give up sooner,
+    /// or to pin a resilient node to `Never` for a deterministic test.
+    pub reconnect: Option<ReconnectPolicy>,
+}
+
+impl NodeOptions {
+    /// Options for a link that is expected to wobble: WAN timing plus
+    /// reconnection.
+    pub fn wan() -> Self {
+        Self {
+            timing: Timing::wan(),
+            reconnect: Some(ReconnectPolicy::always()),
+        }
+    }
+
+    pub fn with_timing(mut self, timing: Timing) -> Self {
+        self.timing = timing;
+        self
+    }
+
+    pub fn with_reconnect(mut self, reconnect: ReconnectPolicy) -> Self {
+        self.reconnect = Some(reconnect);
+        self
+    }
+
+    /// Resolve the reconnect policy for a node running at `qos`.
+    pub fn reconnect_policy(&self, qos: Qos) -> ReconnectPolicy {
+        self.reconnect.unwrap_or_else(|| ReconnectPolicy::for_qos(qos))
+    }
+}
+
+/// Live state of a node's link to the coordinator.
+///
+/// A node's connection can come back. The [`ShipKind`] registration, the
+/// channels to the coordinator, and the coordinator's own handler for this
+/// client are all rebuilt on a reconnect, but the *node* — and every publisher
+/// and subscriber the caller is holding — stays alive across it.
+///
+/// Each successful registration is a **generation**. Long-lived tasks watch the
+/// generation rather than a one-shot disconnect signal: when it changes, the
+/// channels they captured are stale and whatever registration they did with the
+/// coordinator has to be redone.
+#[derive(Debug)]
+pub struct ConnectionState {
+    generation: std::sync::atomic::AtomicU64,
+    connected: std::sync::atomic::AtomicBool,
+    link_proven: std::sync::atomic::AtomicBool,
+    heartbeating: std::sync::atomic::AtomicBool,
+    /// Carries the new generation number to everything that needs to re-register.
+    announce: tokio::sync::broadcast::Sender<u64>,
+}
+
+impl Default for ConnectionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConnectionState {
+    pub fn new() -> Self {
+        let (announce, _) = tokio::sync::broadcast::channel(16);
+        Self {
+            generation: std::sync::atomic::AtomicU64::new(0),
+            connected: std::sync::atomic::AtomicBool::new(true),
+            link_proven: std::sync::atomic::AtomicBool::new(false),
+            heartbeating: std::sync::atomic::AtomicBool::new(false),
+            announce,
+        }
+    }
+
+    /// Which registration is currently live. Starts at 0 and increments once
+    /// per successful re-registration.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Whether the link is up right now.
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Subscribe to reconnection announcements. Each message is the generation
+    /// that just became live.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<u64> {
+        self.announce.subscribe()
+    }
+
+    /// Whether the coordinator has been observed answering this node.
+    ///
+    /// Registration only proves the coordinator was reachable at that instant.
+    /// This becomes true once it echoes a heartbeat, which is also the point at
+    /// which the node's own disconnect detector arms — before then, a
+    /// coordinator that dies cannot be noticed. Wait on this when you need the
+    /// link to be genuinely established rather than merely registered.
+    pub fn is_link_proven(&self) -> bool {
+        self.link_proven.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Whether this node sends heartbeats.
+    ///
+    /// Only a heartbeating node can expect the coordinator to answer, so only a
+    /// heartbeating node may treat silence as a disconnect. A ship that speaks
+    /// solely when it has something to say would otherwise be torn down for
+    /// being quiet.
+    pub fn is_heartbeating(&self) -> bool {
+        self.heartbeating.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_heartbeating(&self) {
+        self.heartbeating
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn mark_link_proven(&self) {
+        self.link_proven
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn mark_link_unproven(&self) {
+        self.link_proven
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn mark_disconnected(&self) {
+        self.mark_link_unproven();
+        self.connected
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Publish a completed re-registration. Returns the new generation.
+    pub(crate) fn mark_reconnected(&self) -> u64 {
+        let generation = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        self.connected
+            .store(true, std::sync::atomic::Ordering::Release);
+        // No receivers is normal — nothing is currently holding a subscription.
+        let _ = self.announce.send(generation);
+        generation
+    }
+}
+
+/// What a node should do when it loses the coordinator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReconnectPolicy {
+    /// Give up. The node's shutdown token is cancelled and it is finished.
+    ///
+    /// This is the only correct policy for [`Qos::Reliable`], whose whole
+    /// contract is that its death is fatal to the run.
+    #[default]
+    Never,
+    /// Keep re-registering, with backoff, until the link comes back or the node
+    /// is shut down explicitly. Publishers and subscribers survive.
+    Always {
+        /// First retry delay.
+        initial_backoff_ms: u64,
+        /// Ceiling for the exponential backoff.
+        max_backoff_ms: u64,
+    },
+}
+
+impl ReconnectPolicy {
+    /// The sensible default for a node that is allowed to come back.
+    pub fn always() -> Self {
+        Self::Always {
+            initial_backoff_ms: 250,
+            max_backoff_ms: 10_000,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        matches!(self, Self::Always { .. })
+    }
+
+    /// The default policy for a node with this QoS.
+    ///
+    /// `Reliable` never reconnects: peers monitor it and its loss torpedoes the
+    /// run, so a silent recovery would contradict the guarantee callers rely on.
+    /// Everything else reconnects, because nothing depends on its liveness.
+    pub fn for_qos(qos: Qos) -> Self {
+        if qos.fires_torpedo() {
+            Self::Never
+        } else {
+            Self::always()
+        }
+    }
+}
+
+/// Per-node timing policy.
+///
+/// The constants above are the defaults, chosen for a LAN-attached replay rig
+/// where a node that goes quiet for 800 ms really has died. They are far too
+/// tight for a link that is expected to wobble — an SSH tunnel to a robot on
+/// cellular, a laptop roaming between access points — where a one-second hiccup
+/// is normal and must not be read as a death.
+///
+/// A node carries its own `Timing` and tells the coordinator about it when it
+/// joins, so the two sides agree on how patient to be with each other.
+///
+/// The fields are interdependent; [`Timing::validate`] checks the relationships
+/// that the rest of the system relies on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timing {
+    /// How often this node sends a heartbeat to keep its connection alive.
+    pub heartbeat_interval_ms: u64,
+    /// A heartbeat is skipped if real data was sent within this window.
+    pub heartbeat_suppress_ms: u64,
+    /// How long the coordinator waits with no message before declaring this
+    /// node gone, and how long this node waits for heartbeat echoes before
+    /// declaring the coordinator gone.
+    pub disconnect_timeout_ms: u64,
+    /// How long to wait for a coordinator before giving up on registration.
+    pub registration_timeout_ms: u64,
+    /// Consecutive peer ping failures before declaring that peer dead.
+    pub peer_dead_threshold: u32,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
+            heartbeat_suppress_ms: HEARTBEAT_SUPPRESS_MS,
+            disconnect_timeout_ms: DISCONNECT_TIMEOUT_MS,
+            registration_timeout_ms: REGISTRATION_TIMEOUT_MS,
+            peer_dead_threshold: PEER_DEAD_THRESHOLD,
+        }
+    }
+}
+
+impl Timing {
+    /// Timing for a link that is expected to wobble: off-LAN, tunnelled,
+    /// wireless, or otherwise not under your control.
+    ///
+    /// Roughly 5× more patient than the default across the board. The cost is
+    /// that a genuinely dead node takes ~10 s rather than ~800 ms to notice,
+    /// which is the right trade when the alternative is tearing down a healthy
+    /// stream because a packet was late.
+    pub fn wan() -> Self {
+        Self {
+            heartbeat_interval_ms: 2_000,
+            heartbeat_suppress_ms: 1_000,
+            disconnect_timeout_ms: 10_000,
+            registration_timeout_ms: 15_000,
+            peer_dead_threshold: 3,
+        }
+    }
+
+    /// Check the relationships the rest of the system relies on.
+    ///
+    /// Called when a node is built, so a bad custom `Timing` fails loudly at
+    /// startup rather than as mysterious spurious disconnects later.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.heartbeat_interval_ms == 0 {
+            anyhow::bail!("Timing::heartbeat_interval_ms must be greater than zero");
+        }
+        if self.heartbeat_suppress_ms > self.heartbeat_interval_ms {
+            anyhow::bail!(
+                "Timing::heartbeat_suppress_ms ({}) must be <= heartbeat_interval_ms ({}), \
+                 otherwise a heartbeat can be suppressed past the disconnect timeout",
+                self.heartbeat_suppress_ms,
+                self.heartbeat_interval_ms
+            );
+        }
+        if self.disconnect_timeout_ms <= self.heartbeat_interval_ms + self.heartbeat_suppress_ms {
+            anyhow::bail!(
+                "Timing::disconnect_timeout_ms ({}) must be > heartbeat_interval_ms + \
+                 heartbeat_suppress_ms ({}), otherwise healthy nodes are declared dead",
+                self.disconnect_timeout_ms,
+                self.heartbeat_interval_ms + self.heartbeat_suppress_ms
+            );
+        }
+        if self.peer_dead_threshold == 0 {
+            anyhow::bail!("Timing::peer_dead_threshold must be greater than zero");
+        }
+        Ok(())
+    }
+
+    pub fn heartbeat_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.heartbeat_interval_ms)
+    }
+
+    pub fn heartbeat_suppress(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.heartbeat_suppress_ms)
+    }
+
+    pub fn disconnect_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.disconnect_timeout_ms)
+    }
+
+    pub fn registration_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.registration_timeout_ms)
+    }
+}
+
 /// [try-reliable] Total budget for one `Qos::TryReliable` delivery.
 /// Generous enough to ride out a WiFi roam or a retry burst, bounded so a
 /// send can never wedge the caller's loop the way `Qos::Reliable` can.

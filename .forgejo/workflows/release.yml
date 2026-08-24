@@ -1282,7 +1282,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 git@github.com:uos/homebrew-minot.git tap
+          git clone --depth 1 git@github.com:uos/homebrew-tools.git tap
           mkdir -p tap/Formula
           cp minot.rb tap/Formula/minot.rb
           cd tap

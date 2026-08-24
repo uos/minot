@@ -1,0 +1,30 @@
+[package]
+name = "mt_flow"
+description = "Resumable, credit-controlled chunk streams over a Minot network."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+exclude.workspace = true
+
+[features]
+default = []
+shm = ["mt_sea/shm", "mt_pubsub/shm"]
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+mt_pubsub.workspace = true
+mt_sea.workspace = true
+rkyv.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true

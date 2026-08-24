@@ -25,6 +25,7 @@ serde_json.workspace = true
 mt_net.workspace = true
 mt_mtc.workspace = true
 mt_bagread.workspace = true
+marina.workspace = true
 anyhow.workspace = true
 crossterm.workspace = true
 futures.workspace = true

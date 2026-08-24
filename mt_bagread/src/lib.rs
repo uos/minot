@@ -281,6 +281,21 @@ fn metadata_from_summary(summary: &Summary) -> Metadata {
     }
 }
 
+/// Byte source a [`Bagfile`] reads an MCAP from.
+///
+/// MCAP parsing here is sans-io: the reader asks for byte ranges
+/// (`ReadChunkRequest`, `SeekRequest`) and is handed the bytes. Anything that
+/// can seek and read can therefore back a bag — a local file, an in-memory
+/// buffer, or a range-fetching client for a dataset on another machine.
+///
+/// `Send + Sync` because a `Bagfile` is routinely shared across threads behind
+/// an `Arc<RwLock<_>>`; a remote implementation should keep its connection
+/// state behind its own lock rather than relax this.
+///
+/// Blanket-implemented; there is nothing to write by hand.
+pub trait BagIo: Read + Seek + Send + Sync {}
+impl<T: Read + Seek + Send + Sync> BagIo for T {}
+
 #[derive(Default)]
 pub struct Bagfile {
     bagfile_name: Option<std::path::PathBuf>,
@@ -290,7 +305,7 @@ pub struct Bagfile {
     reader: Option<IndexedReader>,
     read_buffer: Vec<u8>,
     summary: Summary,
-    file: Option<std::fs::File>,
+    io: Option<Box<dyn BagIo>>,
     #[cfg(feature = "db3")]
     db3: Option<Db3State>,
 }
@@ -308,7 +323,7 @@ impl fmt::Debug for Bagfile {
                 &format!("[{} bytes]", self.read_buffer.len()),
             )
             .field("summary", &self.summary);
-        // omitting "file"
+        // omitting "io"
         #[cfg(feature = "db3")]
         d.field("db3", &self.db3.as_ref().map(|_| "<db3>"));
         d.finish()
@@ -838,7 +853,7 @@ impl Bagfile {
                         play_mode: _,
                     } => collect_until(
                         reader,
-                        &mut self.file.as_mut().unwrap(),
+                        self.io.as_mut().unwrap(),
                         &mut self.read_buffer,
                         &mut self.last_iter_time,
                         &mut self.start_time,
@@ -856,7 +871,7 @@ impl Bagfile {
                         play_mode: _,
                     } => collect_until(
                         reader,
-                        &mut self.file.as_mut().unwrap(),
+                        self.io.as_mut().unwrap(),
                         &mut self.read_buffer,
                         &mut self.last_iter_time,
                         &mut self.start_time,
@@ -870,6 +885,67 @@ impl Bagfile {
             }
             None => Err(anyhow!("Not yet initialized.")),
         }
+    }
+
+    /// Point this bag at an arbitrary byte source instead of a path.
+    ///
+    /// `metadata` is the parsed `metadata.yaml` when one is available. Pass
+    /// `None` and it is derived from the MCAP summary, exactly as for a
+    /// directory bag that has no metadata file.
+    ///
+    /// This is the entry point for reading a bag that is not on this machine:
+    /// supply a [`BagIo`] that services reads over the network and the rest of
+    /// the reader is unchanged, because MCAP parsing here only ever asks for
+    /// byte ranges.
+    pub fn reset_with_io(
+        &mut self,
+        io: Box<dyn BagIo>,
+        metadata: Option<Metadata>,
+    ) -> anyhow::Result<()> {
+        self.bagfile_name = None;
+        self.attach_io(io, metadata)?;
+        self.last_iter_time = None;
+        Ok(())
+    }
+
+    /// Read the summary off `io` and install it as this bag's active source.
+    fn attach_io(
+        &mut self,
+        mut io: Box<dyn BagIo>,
+        metadata: Option<Metadata>,
+    ) -> anyhow::Result<()> {
+        let summary = {
+            let mut reader = mcap::sans_io::summary_reader::SummaryReader::new();
+            while let Some(event) = reader.next_event() {
+                match event? {
+                    SummaryReadEvent::ReadRequest(need) => {
+                        let written = io.read(reader.insert(need))?;
+                        reader.notify_read(written);
+                    }
+                    SummaryReadEvent::SeekRequest(to) => {
+                        reader.notify_seeked(io.seek(to)?);
+                    }
+                }
+            }
+            reader
+                .finish()
+                .ok_or_else(|| anyhow!("MCAP has no summary section; it may be truncated"))?
+        };
+
+        self.metadata = Some(metadata.unwrap_or_else(|| metadata_from_summary(&summary)));
+        self.reader = Some(
+            mcap::sans_io::indexed_reader::IndexedReader::new(&summary)
+                .context("could not construct indexed MCAP reader")?,
+        );
+        self.read_buffer.resize(1024, 0);
+        self.io = Some(io);
+        self.summary = summary;
+        self.start_time = None;
+        #[cfg(feature = "db3")]
+        {
+            self.db3 = None;
+        }
+        Ok(())
     }
 
     pub fn reset(&mut self, path: Option<impl AsRef<Path>>) -> anyhow::Result<()> {
@@ -941,7 +1017,7 @@ impl Bagfile {
                         topic_map,
                     });
                     self.reader = None;
-                    self.file = None;
+                    self.io = None;
                     self.start_time = None;
                 }
             } else {
@@ -1031,7 +1107,7 @@ impl Bagfile {
                             topic_map,
                         });
                         self.reader = None;
-                        self.file = None;
+                        self.io = None;
                         self.start_time = None;
                     }
                 } else {
@@ -1063,37 +1139,8 @@ impl Bagfile {
                         };
 
                     let f = Utf8PathBuf::from_path_buf(mcap_path).unwrap();
-                    let mut file = fs::File::open(f).context("Couldn't open MCAP file")?;
-
-                    let summary = {
-                        let mut reader = mcap::sans_io::summary_reader::SummaryReader::new();
-                        while let Some(event) = reader.next_event() {
-                            match event? {
-                                SummaryReadEvent::ReadRequest(need) => {
-                                    let written = file.read(reader.insert(need))?;
-                                    reader.notify_read(written);
-                                }
-                                SummaryReadEvent::SeekRequest(to) => {
-                                    reader.notify_seeked(file.seek(to)?);
-                                }
-                            }
-                        }
-                        reader.finish().unwrap()
-                    };
-
-                    self.metadata =
-                        Some(bag_info_opt.unwrap_or_else(|| metadata_from_summary(&summary)));
-                    let reader = mcap::sans_io::indexed_reader::IndexedReader::new(&summary)
-                        .expect("could not construct reader");
-                    self.reader = Some(reader);
-                    self.read_buffer.resize(1024, 0);
-                    self.file = Some(file);
-                    self.summary = summary;
-                    self.start_time = None;
-                    #[cfg(feature = "db3")]
-                    {
-                        self.db3 = None;
-                    }
+                    let file = fs::File::open(f).context("Couldn't open MCAP file")?;
+                    self.attach_io(Box::new(file), bag_info_opt)?;
                 }
             } // end else { // not a raw .db3 file
         }
@@ -1117,7 +1164,7 @@ impl Bagfile {
     /// O(1) memory — exactly one message is deserialized per call.
     pub fn next_message_with_timestamp(&mut self) -> anyhow::Result<Option<(u64, u64, BagMsg)>> {
         if let Some(reader) = self.reader.as_mut() {
-            let file = self.file.as_mut().ok_or_else(|| anyhow!("file not open"))?;
+            let file = self.io.as_mut().ok_or_else(|| anyhow!("bag i/o not open"))?;
             let buf = &mut self.read_buffer;
             let summary = &self.summary;
             let metadata = &self.metadata;

@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use zenoh::Wait;
 
 use crate::{
-    ArchivedMessage, HEARTBEAT_SUPPRESS_MS, PEER_DEAD_THRESHOLD, REGISTRATION_TIMEOUT_MS, Sendable,
+    ArchivedMessage, Sendable,
     ShipKind, VariableType,
     client::Client,
     net::{PacketKind, Qos, sanitize_key},
@@ -73,6 +73,10 @@ pub struct NetworkShipImpl {
     /// When true, skip the route cache in ask_for_action and always send VariableTaskRequest.
     /// Set for ShipKind::Rat so the coordinator handler runs (TUI catch, comparison loop, etc).
     bypass_cache: bool,
+    /// This node's timing policy, used by the heartbeat and peer monitors.
+    timing: crate::Timing,
+    /// Live coordinator-link state. Survives reconnects; see `ConnectionState`.
+    pub connection: Arc<crate::ConnectionState>,
 }
 
 #[async_trait::async_trait]
@@ -527,10 +531,11 @@ async fn monitor_peer(
     peer_name: String,
     coord_tx: tokio::sync::mpsc::Sender<crate::net::Packet>,
     disconnect: CancellationToken,
+    timing: crate::Timing,
 ) {
     let key = format!("minot/{}/heartbeat/{}", domain_id, sanitize_key(&peer_name));
-    let interval = Duration::from_millis(crate::HEARTBEAT_INTERVAL_MS);
-    let timeout_dur = Duration::from_millis(crate::DISCONNECT_TIMEOUT_MS);
+    let interval = timing.heartbeat_interval();
+    let timeout_dur = timing.disconnect_timeout();
     let mut consecutive_failures = 0u32;
 
     loop {
@@ -544,7 +549,7 @@ async fn monitor_peer(
             consecutive_failures = 0;
         } else {
             consecutive_failures += 1;
-            if consecutive_failures >= PEER_DEAD_THRESHOLD {
+            if consecutive_failures >= timing.peer_dead_threshold {
                 warn!(
                     "Peer {} declared dead after {} consecutive ping failures",
                     peer_name, consecutive_failures
@@ -564,6 +569,91 @@ async fn monitor_peer(
             }
         }
     }
+}
+
+/// Watch the coordinator link for the lifetime of the node.
+///
+/// Registration hands back a one-shot that fires when the link drops. Before
+/// reconnect existed, that one-shot was wired straight to the node's shutdown
+/// token, which made every disconnect terminal. Now it is the top of a loop: on
+/// a drop, a node whose policy allows it re-registers with backoff and
+/// publishes a new generation, and everything holding a publisher or subscriber
+/// re-establishes itself against the new registration rather than dying.
+///
+/// The coordinator is already built for this — a `JoinRequest` from a name it
+/// knows aborts the stale handler and rejoins, and rules for a node that does
+/// not remove them on exit are still there when it comes back.
+#[allow(clippy::too_many_arguments)]
+fn spawn_connection_supervisor(
+    client: Arc<tokio::sync::Mutex<Client>>,
+    connection: Arc<crate::ConnectionState>,
+    disconnect: CancellationToken,
+    disconnect_rx: tokio::sync::oneshot::Receiver<()>,
+    policy: crate::ReconnectPolicy,
+    timing: crate::Timing,
+    kind: ShipKind,
+) {
+    tokio::spawn(async move {
+        let mut link_lost = disconnect_rx;
+        loop {
+            // Wait for this registration to drop, unless the node is shut down first.
+            tokio::select! {
+                _ = disconnect.cancelled() => return,
+                _ = &mut link_lost => {}
+            }
+
+            let (initial_backoff_ms, max_backoff_ms) = match policy {
+                crate::ReconnectPolicy::Never => {
+                    // Preserves the original contract: losing the coordinator
+                    // finishes the node.
+                    info!("{kind:?} lost the coordinator and does not reconnect — shutting down");
+                    disconnect.cancel();
+                    return;
+                }
+                crate::ReconnectPolicy::Always {
+                    initial_backoff_ms,
+                    max_backoff_ms,
+                } => (initial_backoff_ms, max_backoff_ms),
+            };
+
+            connection.mark_disconnected();
+            warn!("{kind:?} lost the coordinator — reconnecting");
+
+            let mut backoff = Duration::from_millis(initial_backoff_ms);
+            let max_backoff = Duration::from_millis(max_backoff_ms);
+            loop {
+                tokio::select! {
+                    _ = disconnect.cancelled() => return,
+                    _ = tokio::time::sleep(backoff) => {}
+                }
+
+                // `register` retries the join internally and only returns once
+                // the coordinator welcomes it, so it is bounded here to keep the
+                // backoff meaningful when there is nothing listening at all.
+                let attempt = timeout(timing.registration_timeout(), async {
+                    client.lock().await.register().await
+                })
+                .await;
+
+                match attempt {
+                    Ok(Ok(next)) => {
+                        link_lost = next;
+                        let generation = connection.mark_reconnected();
+                        info!("{kind:?} reconnected to the coordinator (generation {generation})");
+                        break;
+                    }
+                    Ok(Err(error)) => {
+                        debug!("{kind:?} reconnect attempt failed: {error}");
+                    }
+                    Err(_elapsed) => {
+                        debug!("{kind:?} reconnect attempt timed out");
+                    }
+                }
+
+                backoff = (backoff * 2).min(max_backoff);
+            }
+        }
+    });
 }
 
 impl NetworkShipImpl {
@@ -607,10 +697,13 @@ impl NetworkShipImpl {
     /// disconnect detector arms on heartbeat echoes, so a ship that fell silent
     /// because it was busy publishing would lose its view of the coordinator.
     pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
+        // Tells the disconnect detector that silence from the coordinator is
+        // meaningful for this node, because it is asking for a reply.
+        self.connection.mark_heartbeating();
         let ship = std::sync::Arc::clone(self);
         let disconnect = ship.disconnect.clone();
         tokio::spawn(async move {
-            let interval = Duration::from_millis(crate::HEARTBEAT_INTERVAL_MS);
+            let interval = ship.timing.heartbeat_interval();
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {
@@ -628,7 +721,7 @@ impl NetworkShipImpl {
     /// Returns Ok(Some(())) if sent, Ok(None) if skipped (too soon), Err on failure.
     pub async fn send_heartbeat(&self) -> anyhow::Result<Option<()>> {
         let elapsed = self.last_send.lock().await.elapsed();
-        if elapsed < Duration::from_millis(HEARTBEAT_SUPPRESS_MS) {
+        if elapsed < self.timing.heartbeat_suppress() {
             return Ok(None);
         }
 
@@ -671,8 +764,10 @@ impl NetworkShipImpl {
         kind: ShipKind,
         rm_rules_on_disconnect: bool,
         node_mode: Qos,
+        options: crate::NodeOptions,
     ) -> anyhow::Result<Self> {
-        Self::init_with_coord_start(kind, rm_rules_on_disconnect, node_mode, |_| async {}).await
+        Self::init_with_coord_start(kind, rm_rules_on_disconnect, node_mode, options, |_| async {})
+            .await
     }
 
     /// Like `init`, but on registration timeout calls `start_coord` and retries once.
@@ -683,6 +778,7 @@ impl NetworkShipImpl {
         kind: ShipKind,
         rm_rules_on_disconnect: bool,
         node_mode: Qos,
+        options: crate::NodeOptions,
         start_coord: F,
     ) -> anyhow::Result<Self>
     where
@@ -693,6 +789,7 @@ impl NetworkShipImpl {
             kind,
             rm_rules_on_disconnect,
             node_mode,
+            options,
             move |tx| async move {
                 start_coord(tx).await;
                 Ok(())
@@ -710,38 +807,51 @@ impl NetworkShipImpl {
         kind: ShipKind,
         rm_rules_on_disconnect: bool,
         node_mode: Qos,
+        options: crate::NodeOptions,
         start_coord: F,
     ) -> anyhow::Result<Self>
     where
         F: FnOnce(Option<tokio::sync::mpsc::Sender<()>>) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
-        Self::init_with_coord_start_impl(kind, rm_rules_on_disconnect, node_mode, start_coord).await
+        Self::init_with_coord_start_impl(kind, rm_rules_on_disconnect, node_mode, options, start_coord)
+            .await
     }
 
     async fn init_with_coord_start_impl<F, Fut>(
         kind: ShipKind,
         rm_rules_on_disconnect: bool,
         node_mode: Qos,
+        options: crate::NodeOptions,
         start_coord: F,
     ) -> anyhow::Result<Self>
     where
         F: FnOnce(Option<tokio::sync::mpsc::Sender<()>>) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
+        let timing = options.timing;
+        let reconnect = options.reconnect_policy(node_mode);
         let mut start_coord = Some(start_coord);
 
         // Create torpedo channel before potentially starting an embedded coordinator so that
         // the coordinator can signal this node to shut down via the torpedo mechanism.
         let (torpedo_tx, mut torpedo_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-        let client = Client::init(kind.clone(), rm_rules_on_disconnect, node_mode).await?;
+        let connection = Arc::new(crate::ConnectionState::new());
+        let client = Client::init(
+            kind.clone(),
+            rm_rules_on_disconnect,
+            node_mode,
+            timing,
+            Arc::clone(&connection),
+        )
+        .await?;
         let client = Arc::new(tokio::sync::Mutex::new(client));
 
         info!("{:?} Registering for network...", &kind);
 
         let try_register = || async {
-            timeout(Duration::from_millis(REGISTRATION_TIMEOUT_MS), async {
+            timeout(timing.registration_timeout(), async {
                 client.lock().await.register().await
             })
             .await
@@ -779,11 +889,15 @@ impl NetworkShipImpl {
         };
 
         let disconnect = CancellationToken::new();
-        let disconnect_cancel = disconnect.clone();
-        tokio::spawn(async move {
-            let _ = disconnect_rx.await;
-            disconnect_cancel.cancel();
-        });
+        spawn_connection_supervisor(
+            Arc::clone(&client),
+            Arc::clone(&connection),
+            disconnect.clone(),
+            disconnect_rx,
+            reconnect,
+            timing,
+            kind.clone(),
+        );
 
         // Cancel disconnect when the embedded coordinator fires a torpedo (if one was started).
         let disconnect_torpedo = disconnect.clone();
@@ -812,13 +926,15 @@ impl NetworkShipImpl {
             runtime_handle: tokio::runtime::Handle::current(),
             // Initialize far enough in the past so the first heartbeat fires immediately
             last_send: Arc::new(tokio::sync::Mutex::new(
-                Instant::now() - Duration::from_millis(REGISTRATION_TIMEOUT_MS),
+                Instant::now() - timing.registration_timeout(),
             )),
             disconnect,
             async_sends_in_flight,
             route_cache,
             peer_monitor,
             bypass_cache,
+            timing,
+            connection,
         };
 
         // Background task: listen for RatAction packets pushed by the coordinator,
@@ -919,6 +1035,7 @@ impl NetworkShipImpl {
                                                             peer.clone(),
                                                             sender,
                                                             shutdown.clone(),
+                                                            timing,
                                                         ));
                                                         peer_monitor_bg
                                                             .write()

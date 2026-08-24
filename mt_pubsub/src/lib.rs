@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::Arc};
 use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
 use tokio_util::sync::CancellationToken;
 
-pub use mt_sea::{ArchivedMessage, Qos};
+pub use mt_sea::{ArchivedMessage, NodeOptions, Qos, ReconnectPolicy, Timing};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum CoordMode {
@@ -30,6 +30,8 @@ pub struct NodeConfig {
     mode: Qos,
     /// Controls coordinator startup behavior.
     coord_mode: CoordMode,
+    /// Timing and reconnect policy.
+    options: NodeOptions,
 }
 
 impl NodeConfig {
@@ -38,7 +40,36 @@ impl NodeConfig {
             name: name.into(),
             mode: Qos::Reliable,
             coord_mode: CoordMode::AutoStart,
+            options: NodeOptions::default(),
         }
+    }
+
+    /// Set timing and reconnect policy in one go.
+    pub fn options(mut self, options: NodeOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Use timing suited to a link that is expected to wobble, and reconnect
+    /// when it drops. Shorthand for `.options(NodeOptions::wan())`.
+    ///
+    /// Note this does not by itself make a `Qos::Reliable` node resilient —
+    /// that QoS is fatal by contract. Pair it with `Qos::TryReliable`.
+    pub fn wan(mut self) -> Self {
+        self.options = NodeOptions::wan();
+        self
+    }
+
+    /// Set how patient this node and the coordinator are with each other.
+    pub fn timing(mut self, timing: Timing) -> Self {
+        self.options.timing = timing;
+        self
+    }
+
+    /// Set what happens when the coordinator link drops.
+    pub fn reconnect(mut self, policy: ReconnectPolicy) -> Self {
+        self.options.reconnect = Some(policy);
+        self
     }
 
     /// Set the node mode (Reliable or BestEffort).
@@ -65,6 +96,10 @@ impl NodeConfig {
         self.coord_mode
     }
 
+    pub fn node_options(&self) -> NodeOptions {
+        self.options
+    }
+
     /// Restrict this node, and any embedded coordinator it starts, to this machine.
     pub fn local_only(self, local_only: bool) -> Self {
         mt_sea::network::set_local_only(local_only);
@@ -72,18 +107,109 @@ impl NodeConfig {
     }
 }
 
+
+/// Send a `RegisterShipAtVar` and wait for the coordinator to acknowledge it.
+///
+/// Resolves the coordinator channels from the client at call time rather than
+/// capturing them, because a reconnect replaces both. Returns the sender that
+/// was live for this registration.
+async fn register_at_var(
+    ship: &Arc<NetworkShipImpl>,
+    ship_name: &str,
+    topic: &str,
+    kind: net::RatPubRegisterKind,
+    qos: Qos,
+) -> anyhow::Result<tokio::sync::mpsc::Sender<Packet>> {
+    let (coord_tx, mut coord_rx) = {
+        let client = ship.client.lock().await;
+        let coord_tx = client
+            .coordinator_send
+            .read()
+            .unwrap()
+            .as_ref()
+            .ok_or_else(|| anyhow!("not registered with a coordinator"))?
+            .clone();
+        // Subscribed before the request is sent, so an immediate acknowledgement
+        // cannot land before there is anything listening for it.
+        let coord_rx = client
+            .coordinator_receive
+            .read()
+            .unwrap()
+            .as_ref()
+            .ok_or_else(|| anyhow!("not registered with a coordinator"))?
+            .subscribe();
+        (coord_tx, coord_rx)
+    };
+
+    coord_tx
+        .send(Packet {
+            header: mt_sea::net::Header::default(),
+            data: net::PacketKind::RegisterShipAtVar {
+                ship: ship_name.to_owned(),
+                var: topic.to_owned(),
+                kind,
+                node_mode: qos,
+            },
+        })
+        .await?;
+
+    loop {
+        match coord_rx.recv().await {
+            Ok((packet, _)) => match packet.data {
+                net::PacketKind::Acknowledge => return Ok(coord_tx),
+                net::PacketKind::RegistrationError(message) => return Err(anyhow!(message)),
+                _ => continue,
+            },
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(error) => return Err(anyhow!("coordinator channel closed: {error}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Publisher<T: Sendable> {
     topic: String,
+    qos: Qos,
     ship: Arc<NetworkShipImpl>,
+    name: String,
+    /// The connection generation this publisher last registered against. When
+    /// the live generation moves past it, the registration belonged to a
+    /// connection that no longer exists and has to be redone.
+    registered_generation: Arc<std::sync::atomic::AtomicU64>,
     _phantom: PhantomData<T>,
 }
 
 impl<T: Sendable> Publisher<T> {
+    /// Re-register this publisher if the link was rebuilt since it last did.
+    ///
+    /// Cheap in the common case: one atomic load that matches.
+    async fn ensure_registered(&self) -> anyhow::Result<()> {
+        let live = self.ship.connection.generation();
+        if self.registered_generation.load(std::sync::atomic::Ordering::Acquire) == live {
+            return Ok(());
+        }
+        register_at_var(
+            &self.ship,
+            &self.name,
+            &self.topic,
+            net::RatPubRegisterKind::Publish,
+            self.qos,
+        )
+        .await?;
+        self.registered_generation
+            .store(live, std::sync::atomic::Ordering::Release);
+        debug!(
+            "Publisher for '{}' re-registered after reconnect (generation {live})",
+            self.topic
+        );
+        Ok(())
+    }
+
     pub async fn publish(&self, data: &T) -> anyhow::Result<()> {
+        self.ensure_registered().await?;
         match self.ship.ask_for_action(&self.topic).await {
             Ok((mt_sea::Action::Sail, _)) => {
-                // debug!("Doing nothing but expected a shoot command {} ", self.topic);
+                debug!("No route for '{}' yet; dropping this publish", self.topic);
                 Ok(())
             }
             Ok((mt_sea::Action::Shoot { target, id }, _)) => {
@@ -114,7 +240,9 @@ pub struct Subscriber<T: Sendable> {
     /// subscriber can be given up without keeping the node around.
     ship: String,
     topic: String,
-    coord_tx: tokio::sync::mpsc::Sender<Packet>,
+    /// The sender is resolved from here at unsubscribe time rather than
+    /// captured, because a reconnect replaces the coordinator channels.
+    ship_handle: Arc<NetworkShipImpl>,
 }
 
 impl<T: Sendable> Subscriber<T> {
@@ -124,7 +252,12 @@ impl<T: Sendable> Subscriber<T> {
     /// on sending, which for a large stream is most of the cost. Call this to
     /// actually get rid of the traffic.
     pub async fn unsubscribe(self) -> anyhow::Result<()> {
-        self.coord_tx
+        let coord_tx = {
+            let client = self.ship_handle.client.lock().await;
+            let sender = client.coordinator_send.read().unwrap().clone();
+            sender.ok_or_else(|| anyhow!("not registered with a coordinator"))?
+        };
+        coord_tx
             .send(Packet {
                 header: mt_sea::net::Header::default(),
                 data: net::PacketKind::UnregisterShipAtVar {
@@ -135,6 +268,19 @@ impl<T: Sendable> Subscriber<T> {
             })
             .await?;
         Ok(())
+    }
+
+    /// Take the next message if one is already waiting, without blocking.
+    ///
+    /// `None` means nothing is queued *right now*; unlike [`Subscriber::next`]
+    /// returning `None`, it does not mean the subscription has ended. Use it
+    /// when a caller wants to drain what has arrived without giving up control.
+    pub fn try_next(&mut self) -> Option<T> {
+        self.chan.try_recv().ok().map(|message| {
+            message
+                .deserialize()
+                .expect("validated message must deserialize")
+        })
     }
 
     /// Receive and deserialize the next message into an owned `T`.
@@ -170,67 +316,27 @@ impl Node {
         topic: String,
         qos: Qos,
     ) -> anyhow::Result<Publisher<T>> {
-        let (coord_tx, mut coord_rx) = {
-            let client = self.ship.client.lock().await;
-            let client_send_lock = client.coordinator_send.read().unwrap();
-            let coord_tx = client_send_lock
-                .as_ref()
-                .expect("Sender does not exist after creation.")
-                .clone();
+        register_at_var(
+            &self.ship,
+            &self.name,
+            &topic,
+            net::RatPubRegisterKind::Publish,
+            qos,
+        )
+        .await?;
 
-            let client_recv_lock = client.coordinator_receive.read().unwrap();
-            let coord_rx = client_recv_lock
-                .as_ref()
-                .expect("Receiver does not exist after creation")
-                .subscribe();
-            (coord_tx, coord_rx)
-        };
-
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-
-        tokio::spawn(async move {
-            // Signal that we're ready to receive BEFORE entering the receive loop
-            let _ = ready_tx.send(());
-
-            loop {
-                match coord_rx.recv().await {
-                    Ok((packet, _)) => {
-                        if matches!(packet.data, net::PacketKind::Acknowledge) {
-                            let _ = result_tx.send(());
-                            return;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => return,
-                }
-            }
-        });
-
-        // Wait for the receiver task to be ready before sending the request
-        ready_rx
-            .await
-            .map_err(|_| anyhow!("Receiver task failed to start"))?;
-
-        // Request
-        coord_tx
-            .send(Packet {
-                header: mt_sea::net::Header::default(),
-                data: net::PacketKind::RegisterShipAtVar {
-                    ship: self.name.to_owned(),
-                    var: topic.to_owned(),
-                    kind: net::RatPubRegisterKind::Publish,
-                    node_mode: qos,
-                },
-            })
-            .await?;
-
-        // Response
-        result_rx.await?;
-
+        // A publisher re-registers lazily: `publish` notices a generation change
+        // and redoes the registration before sending. Doing it eagerly would
+        // need a task per publisher for something that only matters at the next
+        // send anyway.
         Ok(Publisher {
             topic,
+            qos,
             ship: Arc::clone(&self.ship),
+            name: self.name.clone(),
+            registered_generation: Arc::new(std::sync::atomic::AtomicU64::new(
+                self.ship.connection.generation(),
+            )),
             _phantom: PhantomData,
         })
     }
@@ -241,72 +347,14 @@ impl Node {
         queue_size: usize,
         mode: Qos,
     ) -> anyhow::Result<Subscriber<T>> {
-        let client = self.ship.client.lock().await;
-        let coord_tx = {
-            let client_send_lock = client.coordinator_send.read().unwrap();
-            client_send_lock
-                .as_ref()
-                .expect("Sender does not exist after creation.")
-                .clone()
-        };
-
-        let mut coord_rx = {
-            let client_recv_lock = client.coordinator_receive.read().unwrap();
-            client_recv_lock
-                .as_ref()
-                .expect("Receiver does not exist after creation")
-                .subscribe()
-        };
-
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-
-        tokio::spawn(async move {
-            // Signal that we're ready to receive BEFORE entering the receive loop
-            let _ = ready_tx.send(());
-
-            loop {
-                match coord_rx.recv().await {
-                    Ok((packet, _)) => {
-                        if matches!(packet.data, net::PacketKind::Acknowledge) {
-                            let _ = result_tx.send(Ok(()));
-                            return;
-                        }
-                        if let net::PacketKind::RegistrationError(msg) = packet.data {
-                            let _ = result_tx.send(Err(msg));
-                            return;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => return,
-                }
-            }
-        });
-
-        // Wait for the receiver task to be ready before sending the request
-        ready_rx
-            .await
-            .map_err(|_| anyhow!("Receiver task failed to start"))?;
-
-        // Kept for the unsubscribe, which needs the topic after the loop below
-        // has taken ownership of it.
-        let subscriber_topic = topic.clone();
-
-        // Request
-        coord_tx
-            .send(Packet {
-                header: mt_sea::net::Header::default(),
-                data: net::PacketKind::RegisterShipAtVar {
-                    ship: self.name.to_owned(),
-                    var: topic.to_owned(),
-                    kind: net::RatPubRegisterKind::Subscribe,
-                    node_mode: mode,
-                },
-            })
-            .await?;
-
-        // Response
-        result_rx.await?.map_err(|e| anyhow!(e))?;
+        register_at_var(
+            &self.ship,
+            &self.name,
+            &topic,
+            net::RatPubRegisterKind::Subscribe,
+            mode,
+        )
+        .await?;
 
         // Monitor for out-of-band RegistrationError (e.g. a BE publisher registers after us).
         // The registration check above only fires if the publisher was already registered;
@@ -340,13 +388,68 @@ impl Node {
 
         let rat_ship = Arc::clone(&self.ship);
         let shutdown = self.ship.disconnect.clone();
+        let connection = Arc::clone(&self.ship.connection);
+        let mut reconnects = connection.subscribe();
+        let ship_name = self.name.clone();
+        let subscriber_topic = topic.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(queue_size);
+
         tokio::spawn(async move {
             loop {
                 if tx.is_closed() {
                     return;
                 }
                 tokio::select! {
+                    // Shutdown and reconnect are checked before doing more work,
+                    // so a subscriber never starts a fetch against a dead link.
+                    biased;
+
+                    _ = shutdown.cancelled() => {
+                        return; // drop tx → closes channel → subber.next() returns None
+                    }
+
+                    _ = be_error_token.cancelled() => {
+                        error!(
+                            "Subscriber for '{}' shutting down: topic now has a best-effort publisher",
+                            &topic
+                        );
+                        return; // drop tx → closes channel
+                    }
+
+                    // The link came back on a new registration. Whatever the
+                    // coordinator knew about this subscription belonged to the
+                    // old one, so establish it again and carry on — the caller's
+                    // `Subscriber` never noticed.
+                    generation = reconnects.recv() => {
+                        match generation {
+                            Ok(generation) => {
+                                match register_at_var(
+                                    &rat_ship,
+                                    &ship_name,
+                                    &topic,
+                                    net::RatPubRegisterKind::Subscribe,
+                                    mode,
+                                )
+                                .await
+                                {
+                                    Ok(_) => debug!(
+                                        "Subscriber for '{}' re-registered after reconnect (generation {generation})",
+                                        &topic
+                                    ),
+                                    Err(e) => {
+                                        error!(
+                                            "Subscriber for '{}' could not re-register after reconnect: {e}",
+                                            &topic
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(_) => return,
+                        }
+                    }
+
                     // Put ask_for_action + catch in one branch so catch() is also cancellable.
                     result = async {
                         match rat_ship.ask_for_action(&topic).await {
@@ -382,20 +485,19 @@ impl Node {
                             }
                             Ok(None) => {}
                             Err(e) => {
-                                error!("Subscriber for '{}' failed: {e}", &topic);
-                                return; // drop tx → closes channel
+                                // Never fatal. A fetch fails for the whole
+                                // window around a disconnect — including the
+                                // moment *before* the supervisor has noticed,
+                                // so `is_connected()` is not a reliable test
+                                // here — and killing the subscription then
+                                // would defeat the reconnect it is about to
+                                // get. The subscription ends when the node
+                                // shuts down, which for a non-reconnecting node
+                                // is exactly when the link drops.
+                                debug!("Subscriber for '{}' retrying after: {e}", &topic);
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             }
                         }
-                    }
-                    _ = be_error_token.cancelled() => {
-                        error!(
-                            "Subscriber for '{}' shutting down: topic now has a best-effort publisher",
-                            &topic
-                        );
-                        return; // drop tx → closes channel
-                    }
-                    _ = shutdown.cancelled() => {
-                        return; // drop tx → closes channel → subber.next() returns None
                     }
                 }
             }
@@ -405,7 +507,7 @@ impl Node {
             chan: rx,
             ship: self.name.to_owned(),
             topic: subscriber_topic,
-            coord_tx,
+            ship_handle: Arc::clone(&self.ship),
         })
     }
 
@@ -429,6 +531,7 @@ impl Node {
                     ShipKind::Rat(config.name.clone()),
                     rm_rules,
                     config.mode,
+                    config.options,
                 )
                 .await?
             }
@@ -437,6 +540,7 @@ impl Node {
                     ShipKind::Rat(config.name.clone()),
                     rm_rules,
                     config.mode,
+                    config.options,
                     |torpedo_tx| async move {
                         log::info!("No coordinator found, starting embedded coordinator...");
                         mt_coord::ensure_default_coordinator_ready(torpedo_tx)
@@ -471,9 +575,23 @@ impl Node {
         self.mode
     }
 
-    /// Returns a token that is cancelled when the coordinator connection is lost.
+    /// Returns a token that is cancelled when this node is finished.
+    ///
+    /// For a node that reconnects, this fires only on a real shutdown — an
+    /// explicit close or a torpedo — not on a transient link loss. Watch
+    /// [`Node::connection`] to observe the link itself.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
+    }
+
+    /// Live state of this node's link to the coordinator.
+    ///
+    /// Reports whether the link is currently up and which registration
+    /// generation is live. Publishers and subscriber tasks use this to notice
+    /// that they must re-register; callers can use it to surface connection
+    /// status without having to poll anything.
+    pub fn connection(&self) -> Arc<mt_sea::ConnectionState> {
+        Arc::clone(&self.ship.connection)
     }
 }
 

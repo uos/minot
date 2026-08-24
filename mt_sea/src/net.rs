@@ -178,6 +178,10 @@ pub enum PacketKind {
         remove_rules_on_disconnect: bool,
         domain_id: u16,
         node_mode: Qos,
+        /// How long this client wants the coordinator to wait before declaring
+        /// it gone. Sent by the client because only it knows what kind of link
+        /// it is on. See `crate::Timing`.
+        disconnect_timeout_ms: u64,
     },
     Welcome {
         addr: crate::NetworkShipAddress,
@@ -253,6 +257,8 @@ pub struct ShipHandle {
     pub send: tokio::sync::mpsc::Sender<Packet>,
     pub remove_rules_on_disconnect: bool,
     pub node_mode: Qos,
+    /// How patient this client asked the coordinator to be with it.
+    pub disconnect_timeout_ms: u64,
 }
 
 /// Zenoh-based Sea coordinator
@@ -322,6 +328,7 @@ impl Sea {
                     remove_rules_on_disconnect,
                     domain_id: client_domain_id,
                     node_mode,
+                    disconnect_timeout_ms,
                 } = packet.data
                 {
                     if client_domain_id != domain_id {
@@ -398,9 +405,24 @@ impl Sea {
                                     let aligned = align_bytes(&payload);
                                     match from_bytes::<Packet, rancor::Error>(&aligned) {
                                         Ok(packet) => {
+                                            // A broadcast send fails when nothing is
+                                            // currently subscribed, which is normal and
+                                            // transient: this task is spawned as soon as
+                                            // the join request arrives, but the handler
+                                            // that consumes it only subscribes once the
+                                            // ShipHandle has been picked up. Treating
+                                            // that as fatal killed the client's receive
+                                            // path for good — its heartbeats never
+                                            // reached the coordinator again, so the
+                                            // coordinator never echoed and the client's
+                                            // own disconnect detector never armed.
+                                            // Drop the packet and keep listening; only a
+                                            // failing subscriber means the client is gone.
                                             if let Err(e) = recv_tx_clone.send((packet, None)) {
-                                                debug!("Failed to forward client packet: {}", e);
-                                                break;
+                                                debug!(
+                                                    "Dropping packet from {:?}: no receiver yet ({})",
+                                                    ship_kind_for_disconnect, e
+                                                );
                                             }
                                         }
                                         Err(e) => {
@@ -475,6 +497,7 @@ impl Sea {
                         addr_from_coord: client_addr,
                         remove_rules_on_disconnect,
                         node_mode,
+                        disconnect_timeout_ms,
                     };
 
                     if let Err(e) = clients_tx_inner.send(ship_handle) {

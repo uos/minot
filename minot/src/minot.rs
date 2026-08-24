@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 
 pub mod app;
 pub mod coord;
@@ -173,8 +173,16 @@ pub struct CoordinatorArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct AsyncPlayArgs {
-    /// Path to a bag file or directory (.mcap, .db3, or folder with metadata.yaml)
-    pub path: PathBuf,
+    /// Local bag path or Marina dataset reference.
+    pub target: String,
+
+    /// Marina registry to use when the target is not local.
+    #[arg(long)]
+    pub registry: Option<String>,
+
+    /// Materialise a Marina dataset before playback instead of streaming it.
+    #[arg(long)]
+    pub no_stream: bool,
 
     /// Playback rate multiplier (1.0 = real-time, 2.0 = 2× speed, 0.5 = half speed)
     #[arg(long, default_value_t = 1.0)]
@@ -485,6 +493,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
             false,
             mt_sea::Qos::Reliable,
+            mt_sea::NodeOptions::default(),
         )
         .await?,
     );
@@ -774,13 +783,103 @@ fn missing_qos_profile(qos: AsyncMissingQos) -> mt_net::Qos {
     }
 }
 
+/// Restore the process-wide Minot discovery knobs after Marina has created its
+/// own network session. The async player may publish on a local coordinator
+/// while its bag bytes arrive through a different coordinator (usually an SSH
+/// forward), so letting the registry's settings leak into playback would join
+/// the player to the wrong network.
+struct NetworkSettingsGuard {
+    local_only: bool,
+    coordinator_addr: Option<std::ffi::OsString>,
+}
+
+impl NetworkSettingsGuard {
+    fn for_remote_dataset() -> Self {
+        let guard = Self {
+            local_only: mt_sea::network::is_local_only(),
+            coordinator_addr: std::env::var_os("MINOT_COORD_ADDR"),
+        };
+        // Direct and SSH-backed Marina registries need their configured
+        // endpoint to win over a `minot --local-only` playback setting. A bare
+        // minot:// registry switches this back on itself.
+        mt_sea::network::set_local_only(false);
+        guard
+    }
+}
+
+impl Drop for NetworkSettingsGuard {
+    fn drop(&mut self) {
+        mt_sea::network::set_local_only(self.local_only);
+        // SAFETY: dataset resolution happens before the player starts its
+        // coordinator, ship, turbines, or other application tasks. Marina has
+        // already opened and configured its independent Zenoh session.
+        unsafe {
+            match &self.coordinator_addr {
+                Some(value) => std::env::set_var("MINOT_COORD_ADDR", value),
+                None => std::env::remove_var("MINOT_COORD_ADDR"),
+            }
+        }
+    }
+}
+
+async fn open_playback_bag(
+    target: &str,
+    registry: Option<&str>,
+    no_stream: bool,
+) -> anyhow::Result<mt_bagread::Bagfile> {
+    let path = std::path::Path::new(target);
+    if path.exists() {
+        let mut bagfile = mt_bagread::Bagfile::default();
+        bagfile.reset(Some(path))?;
+        info!("Playing local bag: {}", path.display());
+        return Ok(bagfile);
+    }
+
+    let _network_settings = NetworkSettingsGuard::for_remote_dataset();
+    let mut marina = marina::Marina::load()
+        .context("could not load Marina configuration while resolving the remote dataset")?;
+    let mode = if no_stream {
+        marina::AccessMode::RequireLocal
+    } else {
+        marina::AccessMode::PreferStream
+    };
+    let access = marina
+        .resolve_access(target, registry, mode)
+        .await
+        .with_context(|| format!("could not resolve Marina dataset '{target}'"))?;
+
+    let mut bagfile = mt_bagread::Bagfile::default();
+    match access {
+        marina::DatasetAccess::Local(path) => {
+            bagfile.reset(Some(&path))?;
+            info!("Playing materialised Marina dataset: {}", path.display());
+        }
+        marina::DatasetAccess::Streamed(dataset) => {
+            let remote = dataset.open_mcap().with_context(|| {
+                format!("could not select an MCAP file from Marina dataset '{target}'")
+            })?;
+            bagfile.reset_with_io(Box::new(remote), None)?;
+            info!(
+                "Streaming Marina dataset {} from registry {}",
+                dataset.bag(),
+                registry.unwrap_or("<auto>")
+            );
+        }
+    }
+    Ok(bagfile)
+}
+
 async fn async_play(
-    path: PathBuf,
+    target: String,
+    registry: Option<String>,
+    no_stream: bool,
     rate: f64,
     publish_clock: bool,
     missing_qos: AsyncMissingQos,
 ) -> anyhow::Result<()> {
     mt_log::init_filtered("Minot", "RUST_LOG", "info", mt_log::QUIET_ZENOH);
+
+    let mut bagfile = open_playback_bag(&target, registry.as_deref(), no_stream).await?;
 
     #[allow(unused_mut)]
     let mut ready_rxs: Vec<tokio::sync::oneshot::Receiver<()>> = Vec::new();
@@ -871,6 +970,7 @@ async fn async_play(
         mt_sea::ShipKind::Rat("async_player".to_string()),
         false,
         mt_sea::Qos::Reliable,
+        mt_sea::NodeOptions::default(),
         |_| async {
             mt_coord::start_default();
         },
@@ -889,10 +989,6 @@ async fn async_play(
     for rx in ready_rxs {
         let _ = rx.await;
     }
-
-    let mut bagfile = mt_bagread::Bagfile::default();
-    bagfile.reset(Some(&path))?;
-    info!("Playing bag: {}", path.display());
 
     let mut first_ts: Option<u64> = None;
     let mut last_clock_ts: Option<u64> = None;
@@ -1491,6 +1587,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                                 ShipKind::Rat(COMPARE_NODE_NAME.to_string()),
                                 false,
                                 mt_sea::Qos::Reliable,
+                                mt_sea::NodeOptions::default(),
                             )
                             .await?,
                         );
@@ -1890,9 +1987,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::Sync(tui_args) => tui(tui_args.file).await,
-        Commands::AsyncPlay(args) => async_play(args.path, args.rate, args.clock, args.missing_qos)
-            .await
-            .map_err(|e| e.into()),
+        Commands::AsyncPlay(args) => async_play(
+            args.target,
+            args.registry,
+            args.no_stream,
+            args.rate,
+            args.clock,
+            args.missing_qos,
+        )
+        .await
+        .map_err(|e| e.into()),
         Commands::Coordinator(coord_args) => {
             coord::run(coord_args.file).await.map_err(|e| e.into())
         }
@@ -1920,5 +2024,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             type_names,
             project,
         } => gen_c::add_go_msg_command(type_names, project),
+    }
+}
+
+#[cfg(test)]
+mod streaming_cli_tests {
+    use super::*;
+
+    #[test]
+    fn async_play_accepts_a_marina_target_and_streaming_controls() {
+        let args = Args::try_parse_from([
+            "minot",
+            "async",
+            "team/run:v1",
+            "--registry",
+            "robot",
+            "--no-stream",
+        ])
+        .expect("the async player should accept a Marina dataset reference");
+
+        let Commands::AsyncPlay(play) = args.command else {
+            panic!("the async subcommand should parse as AsyncPlay")
+        };
+        assert_eq!(play.target, "team/run:v1");
+        assert_eq!(play.registry.as_deref(), Some("robot"));
+        assert!(play.no_stream);
     }
 }
