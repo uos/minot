@@ -8,6 +8,9 @@ pub const LOCAL_COORD_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 pub const NETWORK_COORD_ENDPOINT: &str = "tcp/0.0.0.0:7447";
 
 static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
+/// Dedicated services can listen on the LAN without merging with every Minot
+/// router found through multicast discovery.
+static UNICAST_ONLY: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "shm")]
 static SHM_RUNTIME_AVAILABLE: AtomicBool = AtomicBool::new(true);
@@ -27,6 +30,16 @@ pub fn set_local_only(enabled: bool) {
 
 pub fn is_local_only() -> bool {
     LOCAL_ONLY.load(Ordering::SeqCst)
+}
+
+/// Disable discovery for subsequently created sessions while retaining the
+/// network listening address. Must be called before creating any sessions.
+pub fn set_unicast_only(enabled: bool) {
+    UNICAST_ONLY.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_unicast_only() -> bool {
+    UNICAST_ONLY.load(Ordering::SeqCst)
 }
 
 #[cfg(feature = "shm")]
@@ -60,6 +73,7 @@ pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
     config_for(
         role,
         is_local_only(),
+        is_unicast_only(),
         std::env::var("MINOT_COORD_ADDR").ok(),
         role == NetworkRole::Coordinator && local_router_is_running(),
     )
@@ -147,6 +161,7 @@ fn disable_implicit_shm_transport(config: &mut zenoh::Config) -> anyhow::Result<
 fn config_for(
     role: NetworkRole,
     local_only: bool,
+    unicast_only: bool,
     coordinator_addr: Option<String>,
     local_router_running: bool,
 ) -> zenoh::Config {
@@ -177,8 +192,9 @@ fn config_for(
     }
 
     if role == NetworkRole::Coordinator {
+        let multicast = if unicast_only { "false" } else { "true" };
         let json5 = format!(
-            r#"{{mode:"router",scouting:{{multicast:{{enabled:true}}}},listen:{{endpoints:["{}"]}}}}"#,
+            r#"{{mode:"router",scouting:{{multicast:{{enabled:{multicast}}},gossip:{{enabled:{multicast}}}}},listen:{{endpoints:["{}"]}}}}"#,
             NETWORK_COORD_ENDPOINT
         );
         info!(
@@ -187,6 +203,16 @@ fn config_for(
         );
         return zenoh::Config::from_json5(&json5)
             .expect("internal network coordinator Zenoh configuration must be valid");
+    }
+
+    if unicast_only && coordinator_addr.is_none() {
+        let json5 = format!(
+            r#"{{mode:"client",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
+            LOCAL_COORD_ENDPOINT
+        );
+        info!("Client using local unicast coordinator: {LOCAL_COORD_ENDPOINT}");
+        return zenoh::Config::from_json5(&json5)
+            .expect("internal unicast Zenoh configuration must be valid");
     }
 
     if let Some(addr) = coordinator_addr {
@@ -236,7 +262,7 @@ mod tests {
 
     #[test]
     fn local_coordinator_only_listens_on_loopback() {
-        let config = config_for(NetworkRole::Coordinator, true, None, false);
+        let config = config_for(NetworkRole::Coordinator, true, false, None, false);
         let endpoints = value(&config, "listen/endpoints");
         assert_eq!(value(&config, "mode"), r#""router""#);
         assert!(endpoints.contains(LOCAL_COORD_ENDPOINT));
@@ -247,7 +273,7 @@ mod tests {
 
     #[test]
     fn disabled_shm_config_does_not_advertise_shm_capability() {
-        let mut config = config_for(NetworkRole::Client, true, None, false);
+        let mut config = config_for(NetworkRole::Client, true, false, None, false);
         disable_shm_in_config(&mut config).unwrap();
         assert_eq!(value(&config, "transport/shared_memory/enabled"), "false");
         assert_eq!(
@@ -261,7 +287,7 @@ mod tests {
 
     #[test]
     fn network_coordinator_listens_on_all_ipv4_interfaces() {
-        let config = config_for(NetworkRole::Coordinator, false, None, false);
+        let config = config_for(NetworkRole::Coordinator, false, false, None, false);
         let endpoints = value(&config, "listen/endpoints");
         assert_eq!(value(&config, "mode"), r#""router""#);
         assert!(endpoints.contains(NETWORK_COORD_ENDPOINT));
@@ -271,7 +297,7 @@ mod tests {
 
     #[test]
     fn local_client_connects_to_loopback_and_retries() {
-        let config = config_for(NetworkRole::Client, true, None, false);
+        let config = config_for(NetworkRole::Client, true, false, None, false);
         assert_eq!(value(&config, "mode"), r#""client""#);
         assert!(value(&config, "connect/endpoints").contains(LOCAL_COORD_ENDPOINT));
         assert_eq!(value(&config, "connect/exit_on_failure"), "false");
@@ -284,6 +310,7 @@ mod tests {
         let config = config_for(
             NetworkRole::Client,
             true,
+            false,
             Some("tcp/192.0.2.1:7447".to_owned()),
             false,
         );
@@ -296,6 +323,7 @@ mod tests {
     fn unicast_client_disables_multicast() {
         let config = config_for(
             NetworkRole::Client,
+            false,
             false,
             Some("tcp/192.0.2.1:7447".to_owned()),
             false,
@@ -312,10 +340,22 @@ mod tests {
 
     #[test]
     fn local_coordinator_joins_an_existing_router() {
-        let config = config_for(NetworkRole::Coordinator, true, None, true);
+        let config = config_for(NetworkRole::Coordinator, true, false, None, true);
 
         assert_eq!(value(&config, "mode"), r#""client""#);
         assert!(value(&config, "connect/endpoints").contains(LOCAL_COORD_ENDPOINT));
         assert_eq!(value(&config, "scouting/multicast/enabled"), "false");
+    }
+
+    #[test]
+    fn unicast_only_coordinator_does_not_merge_with_lan_peers() {
+        let coordinator = config_for(NetworkRole::Coordinator, false, true, None, false);
+        assert!(value(&coordinator, "listen/endpoints").contains(NETWORK_COORD_ENDPOINT));
+        assert_eq!(value(&coordinator, "scouting/multicast/enabled"), "false");
+        assert_eq!(value(&coordinator, "scouting/gossip/enabled"), "false");
+
+        let client = config_for(NetworkRole::Client, false, true, None, true);
+        assert!(value(&client, "connect/endpoints").contains(LOCAL_COORD_ENDPOINT));
+        assert_eq!(value(&client, "scouting/multicast/enabled"), "false");
     }
 }
