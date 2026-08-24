@@ -233,9 +233,10 @@ impl Scope {
                                 "[SCOPE] Sonar response — reliable: {:?}, best_effort: {:?}",
                                 reliable, best_effort
                             );
-                            // Accumulate best-effort names — never remove, so a dying
-                            // best-effort node is still recognisable as best-effort even
-                            // after the coordinator has already removed it from its own set.
+                            // Legacy field name: this contains every nonfatal
+                            // node (BestEffort and TryReliable). Never remove
+                            // names, so a node remains recognisable after the
+                            // coordinator has removed it from its live set.
                             if let Some(be_set) = BEST_EFFORT_CLIENTS.get() {
                                 let mut be = be_set.lock().await;
                                 be.extend(best_effort);
@@ -293,7 +294,8 @@ impl Scope {
         } else {
             let all_lost: Vec<_> = clients.difference(&clients_current).cloned().collect();
 
-            // Filter out best-effort nodes — losing them should not trigger Torpedo
+            // Filter out nonfatal nodes — losing BestEffort or TryReliable
+            // clients is routine and must not trigger a Torpedo.
             let best_effort = BEST_EFFORT_CLIENTS
                 .get()
                 .and_then(|arc| arc.try_lock().ok());

@@ -20,6 +20,7 @@ log.workspace = true
 mt_log = { workspace = true, features = ["env"] }
 nalgebra.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 mt_net.workspace = true

@@ -30,6 +30,17 @@ fn peer_dead_fires_torpedo(mode: Option<Qos>) -> bool {
     mode.is_some_and(Qos::fires_torpedo)
 }
 
+/// Names Scope must never turn into a global Torpedo when they disappear.
+/// `ClientsHash::best_effort` predates `TryReliable`; on the wire that field is
+/// now the compatibility bucket for every nonfatal QoS.
+fn nonfatal_client_names(client_qos: &HashMap<String, Qos>) -> HashSet<String> {
+    client_qos
+        .iter()
+        .filter(|(_, mode)| !mode.fires_torpedo())
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 #[derive(Debug)]
 enum MinotTask {
     AppendRule {
@@ -648,13 +659,12 @@ fn run_coordinator_with_ready(
                                                                     .read()
                                                                     .unwrap()
                                                                     .clone();
-                                                                let best_effort = client_qos_inner
-                                                                    .read()
-                                                                    .unwrap()
-                                                                    .iter()
-                                                                    .filter(|(_, mode)| **mode == Qos::BestEffort)
-                                                                    .map(|(name, _)| name.clone())
-                                                                    .collect::<HashSet<_>>();
+                                                                // Legacy wire name: this contains
+                                                                // every nonfatal client, including
+                                                                // TryReliable.
+                                                                let best_effort = nonfatal_client_names(
+                                                                    &client_qos_inner.read().unwrap(),
+                                                                );
                                                                 let _ = client
                                                                     .send
                                                                     .send(Packet {
@@ -1431,5 +1441,19 @@ mod tests {
         assert!(!peer_dead_fires_torpedo(Some(Qos::TryReliable)));
         assert!(!peer_dead_fires_torpedo(Some(Qos::BestEffort)));
         assert!(peer_dead_fires_torpedo(Some(Qos::Reliable)));
+    }
+
+    #[test]
+    fn scope_treats_try_reliable_clients_as_nonfatal() {
+        let qos = HashMap::from([
+            ("server".to_string(), Qos::Reliable),
+            ("streaming-client".to_string(), Qos::TryReliable),
+            ("viewer".to_string(), Qos::BestEffort),
+        ]);
+
+        assert_eq!(
+            nonfatal_client_names(&qos),
+            HashSet::from(["streaming-client".to_string(), "viewer".to_string()])
+        );
     }
 }

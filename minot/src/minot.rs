@@ -880,7 +880,22 @@ async fn async_play(
 ) -> anyhow::Result<()> {
     mt_log::init_filtered("Minot", "RUST_LOG", "info", mt_log::QUIET_ZENOH);
 
-    let mut bagfile = open_playback_bag(&target, registry.as_deref(), no_stream).await?;
+    // Keep exactly one signal listener alive for the command's whole lifetime.
+    // Previously Ctrl-C was only observed while sleeping between messages, so
+    // a signal during a remote read or publish was simply lost.
+    let stop = tokio_util::sync::CancellationToken::new();
+    let stop_on_signal = stop.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("Ctrl-C received — stopping bag playback.");
+            stop_on_signal.cancel();
+        }
+    });
+
+    let mut bagfile = tokio::select! {
+        result = open_playback_bag(&target, registry.as_deref(), no_stream) => result?,
+        _ = stop.cancelled() => return Ok(()),
+    };
 
     #[allow(unused_mut)]
     let mut ready_rxs: Vec<tokio::sync::oneshot::Receiver<()>> = Vec::new();
@@ -991,7 +1006,10 @@ async fn async_play(
 
     // Wait for all embedded turbines to signal they are connected and ready.
     for rx in ready_rxs {
-        let _ = rx.await;
+        tokio::select! {
+            _ = rx => {}
+            _ = stop.cancelled() => return Ok(()),
+        }
     }
 
     let mut first_ts: Option<u64> = None;
@@ -1001,6 +1019,10 @@ async fn async_play(
     let disconnect = ship.disconnect.clone();
     loop {
         let msg_opt = tokio::task::block_in_place(|| bagfile.next_message_with_timestamp())?;
+
+        if stop.is_cancelled() {
+            return Ok(());
+        }
 
         let (ts, absolute_ts, mut msg) = match msg_opt {
             Some(m) => m,
@@ -1017,7 +1039,7 @@ async fn async_play(
                     info!("Torpedo received — stopping bag playback.");
                     return Ok(());
                 }
-                _ = tokio::signal::ctrl_c() => {
+                _ = stop.cancelled() => {
                     return Ok(());
                 }
             }
@@ -1045,7 +1067,10 @@ async fn async_play(
             at_var: None,
         });
 
-        ship.send_wind(wind).await?;
+        tokio::select! {
+            result = ship.send_wind(wind) => result?,
+            _ = stop.cancelled() => return Ok(()),
+        }
     }
 
     info!("Bag playback complete.");
