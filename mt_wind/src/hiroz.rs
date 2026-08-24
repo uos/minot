@@ -55,14 +55,16 @@ fn type_hash_or_zero(
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
-    let ship =
+    let ship = std::sync::Arc::new(
         mt_sea::ship::NetworkShipImpl::init(
             kind.clone(),
             false,
             mt_sea::Qos::Reliable,
             mt_sea::NodeOptions::default(),
         )
-        .await?;
+        .await?,
+    );
+    ship.spawn_heartbeat();
     info!("Wind initialized with ship {:?}", kind);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

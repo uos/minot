@@ -497,6 +497,7 @@ async fn tui(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?,
     );
+    comparer.spawn_heartbeat();
 
     // remove searching feedback
     print!("\x1b[1A");
@@ -966,16 +967,19 @@ async fn async_play(
         info!("Coordinator already running in the network, connecting as client.");
     }
 
-    let ship = mt_sea::ship::NetworkShipImpl::init_with_coord_start(
-        mt_sea::ShipKind::Rat("async_player".to_string()),
-        false,
-        mt_sea::Qos::Reliable,
-        mt_sea::NodeOptions::default(),
-        |_| async {
-            mt_coord::start_default();
-        },
-    )
-    .await?;
+    let ship = std::sync::Arc::new(
+        mt_sea::ship::NetworkShipImpl::init_with_coord_start(
+            mt_sea::ShipKind::Rat("async_player".to_string()),
+            false,
+            mt_sea::Qos::Reliable,
+            mt_sea::NodeOptions::default(),
+            |_| async {
+                mt_coord::start_default();
+            },
+        )
+        .await?,
+    );
+    ship.spawn_heartbeat();
 
     // Wire the torpedo signal (from the embedded coordinator) to the ship's disconnect token.
     let ship_disconnect = ship.disconnect.clone();
@@ -1591,6 +1595,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                             )
                             .await?,
                         );
+                        comparer.spawn_heartbeat();
 
                         let (ndata_tx, ndata_rx) = tokio::sync::mpsc::channel(10);
                         let (dyn_wind_tx, dyn_wind_rx) = tokio::sync::mpsc::channel(10);
