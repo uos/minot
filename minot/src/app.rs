@@ -1804,10 +1804,10 @@ impl App {
                                 });
                                 match opened {
                                     Err(e) => {
-                                        warn!(
-                                            "Could not resolve bagfile or Marina dataset {path:?}: {e}, skipping to next action"
+                                        error!(
+                                            "Could not resolve required bagfile or Marina dataset {path:?}: {e:#}"
                                         );
-                                        continue;
+                                        std::process::exit(1);
                                     }
                                     Ok(opened) => {
                                         let mut wc = wind_cursor_worker.write().unwrap();

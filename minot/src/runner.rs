@@ -226,9 +226,12 @@ pub async fn run(
         }
     }
 
-    // Cleanup
-    let _ = child.kill().await;
-    Ok(())
+    let status = child.wait().await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("Minot server exited with status {status}").into())
+    }
 }
 
 async fn send_message<W: AsyncWriteExt + Unpin>(
