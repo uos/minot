@@ -113,7 +113,7 @@ hiroz-msgs = { version = "0.2.0", git = "https://github.com/ZettaScaleLabs/hiroz
   "rosgraph_msgs",
 ] }
 ros2-client = { version = "0.10.0" }
-ros2-interfaces-jazzy-serde = { version = "0.0.4", features = [
+ros2-interfaces-jazzy-serde = { version = "0.0.5", features = [
   "std_msgs",
   "geometry_msgs",
   "sensor_msgs",
