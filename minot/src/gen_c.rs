@@ -1812,7 +1812,7 @@ func main() {{
 		fmt.Printf("result state=%d payload=%s\n", state, result.Data)
 	}}
 
-	fmt.Println("action completed; waiting for shutdown (Ctrl+C)")
+	fmt.Println("action completed. Waiting for shutdown (Ctrl+C)")
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	select {{

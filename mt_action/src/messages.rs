@@ -76,7 +76,7 @@ pub struct ActionSendGoalResponse {
 }
 
 /**
- * almost like ROS (but with Option instead of != 0):
+ * follows ROS semantics with `Option` for optional fields:
  * - id == None && time == None -> cancel all goals
  * - id == None && time != None -> cancel all goals accepted before given timestamp (inclusive)
  * - id != None && time == None -> cancel the given goal, if it exists

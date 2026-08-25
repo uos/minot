@@ -6,7 +6,7 @@ use crate::format::{Format, Record, SOURCE_VAR, colour_stderr};
 
 /// Install a console logger in the house format.
 ///
-/// `source` is what this process calls itself; it is printed only when a
+/// `source` is what this process calls itself. It is printed when a
 /// parent asked for it through `MT_LOG_FORMAT`, so a direct run stays terse
 /// and a captured one is unambiguous. `default_spec` is used when `RUST_LOG`
 /// says nothing.

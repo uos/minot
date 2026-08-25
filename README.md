@@ -65,7 +65,7 @@ Building from source will create huge incremental cache artifacts. To save time 
 
 ### VS Code Extension
 
-Search for "Minot" in the extension marketplace an install. The plugin requires a Minot binary in your `$PATH`. The extension will add syntax highlighting for `.mt` files and automatically activates as soon as you open a Minot file. You will see some buttons in the editor footer. Maybe start by selecting some lines and run them with `Run Selection`. Minot will be started automatically for you in the background.
+Install "Minot" from the extension marketplace and place the Minot binary in `$PATH`. Opening an `.mt` file enables syntax highlighting and editor actions. Select a few lines and choose `Run Selection` to start Minot in the background.
 
 More information about the extension can be found at the [Marketplace](https://marketplace.visualstudio.com/items?itemName=stelzo.minot).
 

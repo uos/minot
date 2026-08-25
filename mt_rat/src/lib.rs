@@ -103,9 +103,7 @@ pub fn init(
     runtime: Option<Arc<tokio::runtime::Runtime>>,
 ) -> anyhow::Result<()> {
     if tokio::runtime::Handle::try_current().is_ok() {
-        return Err(anyhow!(
-            "init() cannot be called from a Tokio runtime; use init_async().await"
-        ));
+        return Err(anyhow!("call init_async().await from a Tokio runtime"));
     }
 
     let mut srt = RT.lock().unwrap();
@@ -162,9 +160,7 @@ where
     T: Send + Sync,
 {
     if tokio::runtime::Handle::try_current().is_ok() {
-        return Err(anyhow!(
-            "bacon() cannot be called from a Tokio runtime; use bacon_async().await"
-        ));
+        return Err(anyhow!("call bacon_async().await from a Tokio runtime"));
     }
 
     let srt = RT.lock().unwrap();

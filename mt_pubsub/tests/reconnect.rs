@@ -48,8 +48,7 @@ struct Coordinator {
 impl Coordinator {
     /// Start a coordinator and wait until it is actually accepting connections.
     ///
-    /// Readiness is polled rather than slept on: the coordinator also brings up
-    /// an embedded scope node, so how long it takes to bind varies with load.
+    /// Poll readiness because coordinator startup time varies with load.
     async fn start() -> Option<Self> {
         let binary = coordinator_binary()?;
         let child = Command::new(binary)
@@ -93,7 +92,7 @@ impl Coordinator {
 
 impl Drop for Coordinator {
     fn drop(&mut self) {
-        // Async cleanup is not available here; the blocking kill is enough to
+        // The blocking kill completes cleanup here.
         // stop the process leaking out of the test run.
         let _ = self.child.kill();
         let _ = self.child.wait();

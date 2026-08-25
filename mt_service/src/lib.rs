@@ -83,7 +83,7 @@ where
         let mut subber = this.subber.lock().await;
         let mut clients = this.clients.lock().await;
 
-        // Only the client id is read here; the request body stays in its rkyv
+        // Read the client id here. The request body stays in its rkyv
         // buffer and is deserialized by the per-client handler. Doing it here
         // would put the cost of every request body on this single loop.
         while let Some(request) = subber.next_archived().await {
@@ -144,8 +144,7 @@ where
         };
 
         while let Some(message) = requests.recv().await {
-            // Deserializing here keeps it on the per-client task rather than on
-            // the server's single dispatch loop.
+            // Deserialize on the per-client task to keep the server dispatcher free.
             let (_, seq_num, request) = match message.deserialize() {
                 Ok(request) => request,
                 Err(e) => {
@@ -291,7 +290,7 @@ where
         pending: Arc<PendingResponses<RES>>,
     ) {
         loop {
-            // Only the sequence number is read here; the response body is
+            // Read the sequence number here. The response body is
             // deserialized by whichever task is awaiting it.
             match subber.next_archived().await {
                 Some(message) => {

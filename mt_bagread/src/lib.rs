@@ -289,10 +289,10 @@ fn metadata_from_summary(summary: &Summary) -> Metadata {
 /// buffer, or a range-fetching client for a dataset on another machine.
 ///
 /// `Send + Sync` because a `Bagfile` is routinely shared across threads behind
-/// an `Arc<RwLock<_>>`; a remote implementation should keep its connection
-/// state behind its own lock rather than relax this.
+/// an `Arc<RwLock<_>>`. A remote implementation should keep connection state
+/// behind its own lock.
 ///
-/// Blanket-implemented; there is nothing to write by hand.
+/// Blanket-implemented for every compatible source.
 pub trait BagIo: Read + Seek + Send + Sync {}
 impl<T: Read + Seek + Send + Sync> BagIo for T {}
 
@@ -887,7 +887,7 @@ impl Bagfile {
         }
     }
 
-    /// Point this bag at an arbitrary byte source instead of a path.
+    /// Point this bag at an arbitrary byte source.
     ///
     /// `metadata` is the parsed `metadata.yaml` when one is available. Pass
     /// `None` and it is derived from the MCAP summary, exactly as for a
@@ -929,7 +929,7 @@ impl Bagfile {
             }
             reader
                 .finish()
-                .ok_or_else(|| anyhow!("MCAP has no summary section; it may be truncated"))?
+                .ok_or_else(|| anyhow!("MCAP summary missing. Check that the file is complete"))?
         };
 
         self.metadata = Some(metadata.unwrap_or_else(|| metadata_from_summary(&summary)));

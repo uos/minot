@@ -111,8 +111,7 @@ impl log::Log for Logger {
         if self.owns_screen.load(Ordering::Relaxed) {
             self.buffer.push(level, target, message);
         } else {
-            // A parent that asked to be told who is speaking gets our name;
-            // a human at a terminal already knows.
+            // Captured child output includes the source label.
             let line = self
                 .buffer
                 .record(level, target, &message)

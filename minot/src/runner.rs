@@ -183,7 +183,7 @@ pub async fn run(
     .await
     .map_err(|e| format!("Failed to wait for CompileExecute response: {}", e))?;
 
-    // If compilation failed, send Quit and return an error; if it succeeded, keep the server running.
+    // Send Quit after a compilation failure. Successful builds keep the server running.
     match compile_resp {
         ServerMessage::CommandResponse(resp) => {
             if resp.status != "ok" {

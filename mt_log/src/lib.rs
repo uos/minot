@@ -12,7 +12,7 @@
 //! A process logging for itself prints `[INFO] started`. A parent that wants
 //! its children's output back without guessing gives them [`child_env`], and
 //! they answer in a format [`parse`] reads exactly — level, source and target
-//! intact, rather than recovered by looking for the word "error".
+//! intact through structured fields.
 //!
 //! # Features
 //!

@@ -36,7 +36,7 @@ pub enum Format {
 impl Format {
     /// Read the format a parent asked for, defaulting to plain text.
     ///
-    /// Unrecognised values fall back to text rather than failing: a log
+    /// Unrecognised values use text formatting. A log
     /// format is never worth aborting a run over.
     pub fn from_env() -> Self {
         match std::env::var(FORMAT_VAR).ok().as_deref() {
@@ -428,7 +428,7 @@ fn guess_level(line: &str) -> LogLevel {
 /// codes and all. Writing those bytes into cells hands them to the real
 /// terminal, which moves the cursor and scrambles the pane around them, so the
 /// escapes are dropped once, on the way in. Newlines and tabs become spaces
-/// rather than vanishing, so words on either side stay apart.
+/// as a space so adjacent words stay apart.
 pub fn sanitize(message: String) -> String {
     if !message
         .chars()
@@ -440,7 +440,7 @@ pub fn sanitize(message: String) -> String {
     let mut characters = message.chars();
     while let Some(character) = characters.next() {
         match character {
-            // CSI and OSC run until their own terminator; anything else after
+            // CSI and OSC run until their own terminator. Anything else after
             // the escape is a two-character sequence.
             '\u{1b}' => match characters.next() {
                 Some('[') => {

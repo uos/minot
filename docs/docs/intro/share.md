@@ -45,5 +45,4 @@ gcc mt_rat/examples/rat2.c -o rat2 -L./target/release -l:librat.a -lm -Wl,-z,noe
 cd .. && rm -rf minot
 ~~~
 
-Notably, this example does not even run the Minot binary but just a minimal subset for network communication.
-
+This example runs the networking crates directly with a minimal dependency set.

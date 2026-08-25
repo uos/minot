@@ -377,7 +377,7 @@ impl Rules {
     ///   cache registrations for that variable are used to update/regenerate
     ///   the Shoot rules based on the combined set of publishers and subscribers
     ///   from the store and cache. The cache entry is removed.
-    /// - If a variable is NOT in the store, OR is in the store but lacks Shoot rules,
+    /// - Variables without Shoot rules
     ///   it requires a publisher/subscriber pair *within the cache* to generate new
     ///   Shoot rules. These are added (either to a new entry or by extending
     ///   a non-Shoot entry in the store). If no pair exists in the cache,
@@ -478,7 +478,7 @@ impl Rules {
                         self.store.insert(var_name.clone(), generated_rules);
                     }
                     None => {
-                        // Case 2: Variable was NOT in store, OR was in store but only had non-Shoot rules.
+                        // Case 2: The variable has no Shoot rules.
                         // Require a publisher/subscriber pair *in the cache* to generate rules.
                         if !new_pubs.is_empty() && !new_subs.is_empty() {
                             // Generate Shoot rules (new_pubs -> new_subs) from the cache pair
@@ -1812,8 +1812,8 @@ mod unregister_tests {
         assert!(!rules.store.contains_key("clouds"));
     }
 
-    /// Unsubscribing twice, or from something never subscribed, is not an error
-    /// but must report that nothing changed so the coordinator can skip work.
+    /// Duplicate and unknown unsubscribe requests report an unchanged state so
+    /// the coordinator can skip work.
     #[test]
     fn unregistering_what_was_never_registered_reports_no_change() {
         let mut rules = rules();

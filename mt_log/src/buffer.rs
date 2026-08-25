@@ -12,7 +12,7 @@ const MAX_LOG_ENTRIES: usize = 10_000;
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     /// Seconds since the run started. Wall clock is not useful while watching
-    /// a live run; time since start lines up with everything else on screen.
+    /// a live run. Time since start lines up with everything else on screen.
     pub timestamp: f64,
     pub level: LogLevel,
     pub target: String,
@@ -22,7 +22,7 @@ pub struct LogEntry {
 pub struct LogBuffer {
     entries: Mutex<Vec<LogEntry>>,
     started: Instant,
-    /// Target reported for records this process emitted itself; everything
+    /// Target reported for records this process emitted itself. Everything
     /// else counts as foreign and can be filtered out in the pane.
     own_target: String,
 }

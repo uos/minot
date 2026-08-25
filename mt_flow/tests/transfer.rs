@@ -101,7 +101,7 @@ fn unique(prefix: &str) -> String {
 }
 
 /// Deterministic, position-dependent bytes, so a mis-ordered or duplicated
-/// chunk shows up as a mismatch rather than passing by luck.
+/// chunk produces a deterministic mismatch.
 fn payload(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i.wrapping_mul(31) % 251) as u8).collect()
 }
@@ -139,7 +139,7 @@ async fn a_multi_chunk_payload_arrives_intact() {
         retransmit_after: Duration::from_millis(300),
     };
     // Deliberately not a whole number of chunks, so the final short chunk is
-    // exercised rather than a clean boundary.
+    // exercised across a partial final chunk.
     let expected = payload(4096 * 20 + 1234);
     let flow = unique("intact");
 
@@ -185,7 +185,7 @@ async fn a_transfer_survives_a_coordinator_restart() {
     let receiver_node = Arc::new(node(&unique("resume_rx")).await);
 
     // Wait until both links are genuinely carrying traffic, so the kill below
-    // interrupts a real transfer rather than a still-forming one.
+    // interrupts a transfer with active data.
     for node in [&sender_node, &receiver_node] {
         assert!(
             wait_until(Duration::from_secs(30), || node

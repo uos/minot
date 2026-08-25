@@ -78,8 +78,7 @@ impl Action<std_msgs::msg::String, (u64, geometry_msgs::msg::Twist), std_msgs::m
             return Ok(());
         }
 
-        // explicit stop afterwards
-        // not sure if this is needed but whatever
+        // Publish zero velocity after the movement completes.
         let twist = geometry_msgs::msg::Twist {
             linear: geometry_msgs::msg::Vector3 {
                 x: 0.0,

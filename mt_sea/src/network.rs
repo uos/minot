@@ -61,7 +61,7 @@ pub(crate) fn disable_shm_runtime() {
 
 /// Return whether something is accepting connections on the local coordinator endpoint.
 /// This is used to decide whether an auto-start node must create the router before
-/// opening its client session; it never changes local-only configuration.
+/// opening its client session. It preserves local-only configuration.
 pub fn local_router_is_running() -> bool {
     let address: SocketAddr = "127.0.0.1:7447"
         .parse()
@@ -111,7 +111,7 @@ pub(crate) fn open_zenoh_session(role: NetworkRole) -> anyhow::Result<zenoh::Ses
                 if !is_shm_initialization_error(&error.to_string()) {
                     return Err(anyhow::anyhow!("Failed to open Zenoh session: {error}"));
                 }
-                warn!("Zenoh SHM initialization failed: {error}; retrying without shared memory");
+                warn!("Zenoh SHM initialization failed: {error}. Retrying with network transport");
                 disable_shm_runtime();
                 let mut fallback = zenoh_config(role);
                 disable_shm_in_config(&mut fallback)?;
@@ -167,10 +167,7 @@ fn config_for(
 ) -> zenoh::Config {
     if local_only {
         if coordinator_addr.is_some() {
-            warn!(
-                "--local-only overrides MINOT_COORD_ADDR; using {}",
-                LOCAL_COORD_ENDPOINT
-            );
+            warn!("--local-only selected. Using {}", LOCAL_COORD_ENDPOINT);
         }
 
         let json5 = match (role, local_router_running) {

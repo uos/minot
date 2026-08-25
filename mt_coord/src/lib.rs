@@ -46,7 +46,7 @@ fn peer_dead_fires_torpedo(mode: Option<Qos>) -> bool {
 }
 
 /// Names Scope must never turn into a global Torpedo when they disappear.
-/// `ClientsHash::best_effort` predates `TryReliable`; on the wire that field is
+/// `ClientsHash::best_effort` predates `TryReliable`. On the wire that field is
 /// now the compatibility bucket for every nonfatal QoS.
 fn nonfatal_client_names(client_qos: &HashMap<String, Qos>) -> HashSet<String> {
     client_qos
@@ -152,8 +152,8 @@ fn run_coordinator_with_ready(
         std::sync::Arc::new(std::sync::RwLock::new(HashSet::new()));
 
     // Delivery mode per connected client. Read from sync contexts that cannot
-    // touch the async `rat_qs` lock, so the mode is mirrored here rather than
-    // re-derived. Absent means the client is gone.
+    // touch the async `rat_qs` lock. The mirrored mode serves those contexts.
+    // Absent means the client is gone.
     let client_qos: std::sync::Arc<std::sync::RwLock<HashMap<String, Qos>>> =
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
 
@@ -218,14 +218,14 @@ fn run_coordinator_with_ready(
                         .collect::<Vec<_>>();
                     if !current.is_empty() {
                         if waiting_for_wind {
-                            info!("Wind client connected; resuming queued wind forwarding.");
+                            info!("Wind client connected. Resuming queued wind forwarding.");
                             waiting_for_wind = false;
                         }
                         break current;
                     }
                     if !waiting_for_wind {
                         warn!(
-                            "Received wind data but no connected winds; pausing forwarding until a wind client connects."
+                            "Wind data is waiting for a Wind client. Forwarding will resume after one connects."
                         );
                         waiting_for_wind = true;
                     }
@@ -301,7 +301,7 @@ fn run_coordinator_with_ready(
         let cc_for_spawn = std::sync::Arc::clone(&connected_clients);
         let qos_for_spawn = std::sync::Arc::clone(&client_qos);
         let wind_clients_for_spawn = std::sync::Arc::clone(&wind_clients);
-        // Keep a clone for the coord_rx loop; torpedo_tx itself is moved into the inner spawn.
+        // Keep a clone for the coord_rx loop. The inner task owns torpedo_tx.
         let torpedo_tx_for_coord = torpedo_tx.clone();
         let client_handlers: std::sync::Arc<
             std::sync::Mutex<HashMap<String, tokio::task::AbortHandle>>,
@@ -919,9 +919,7 @@ fn run_coordinator_with_ready(
                     {
                         let minot_tui_connected = minot_client_connected.read().unwrap();
                         if !*minot_tui_connected {
-                            error!(
-                                "Wants to ask Minot TUI for wind for var {var} but is not connected."
-                            );
+                            error!("Wind request for {var} requires a connected Minot TUI.");
                             continue;
                         }
                     }

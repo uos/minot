@@ -24,7 +24,7 @@ pub struct CoordinatorImpl {
     pub new_client_notify: tokio::sync::broadcast::Sender<String>,
     /// Per-subscription delivery-mode overrides: (ship_name, var_name) -> Qos.
     /// A node registered `Reliable` can still subscribe to one topic as
-    /// `BestEffort` or `TryReliable`; the override applies to that topic only.
+    /// `BestEffort` or `TryReliable`. The override applies to that topic only.
     pub sub_qos_overrides:
         std::sync::Arc<std::sync::RwLock<HashMap<(String, String), crate::net::Qos>>>,
     /// Variable names that have at least one best-effort publisher

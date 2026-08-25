@@ -64,7 +64,7 @@ deterministic replay where a missing participant invalidates the result.
 
 `TryReliable` keeps reliable delivery and ordering but drops the fatal part. It behaves
 like a ROS 2 DDS `RELIABLE` subscriber: a write that cannot land within its deadline
-fails on its own instead of taking the participant down, and no peer is torpedoed. Sends
+reports its own deadline failure while peers stay connected. Sends
 are dispatched off the caller's thread, so a slow or roaming link cannot wedge a
 publisher's loop.
 

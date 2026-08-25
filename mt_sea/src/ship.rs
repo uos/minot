@@ -65,7 +65,7 @@ pub struct NetworkShipImpl {
     /// Cancelled when the coordinator connection is lost.
     pub disconnect: CancellationToken,
     /// (target, variable) pairs that already have one asynchronous delivery in
-    /// progress. A new message for a busy pair is dropped before serialization;
+    /// progress. A new message for a busy pair is dropped before serialization.
     /// other variables to the same target are unaffected.
     async_sends_in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
     /// Cached routing decisions pushed by the coordinator.
@@ -77,7 +77,7 @@ pub struct NetworkShipImpl {
     bypass_cache: bool,
     /// This node's timing policy, used by the heartbeat and peer monitors.
     timing: crate::Timing,
-    /// Live coordinator-link state. Survives reconnects; see `ConnectionState`.
+    /// Live coordinator-link state. See `ConnectionState` for reconnect behavior.
     pub connection: Arc<crate::ConnectionState>,
 }
 
@@ -92,7 +92,7 @@ impl crate::Cannon for NetworkShipImpl {
         variable_name: &str,
     ) -> anyhow::Result<()> {
         // The archived representation is identical for every target. Keep one aligned
-        // allocation alive across the whole fan-out instead of serializing per target.
+        // allocation alive across the whole fan-out for one serialization pass.
         let data_bytes =
             Arc::new(to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data"));
 
@@ -569,7 +569,7 @@ async fn monitor_peer(
                         ship: peer_name.clone(),
                     },
                 };
-                // Best-effort notify coordinator; may fail if it is also gone.
+                // Notify the coordinator when it remains reachable.
                 coord_tx.send(packet).await.ok();
                 return;
             }
@@ -584,7 +584,7 @@ async fn monitor_peer(
 /// token, which made every disconnect terminal. Now it is the top of a loop: on
 /// a drop, a node whose policy allows it re-registers with backoff and
 /// publishes a new generation, and everything holding a publisher or subscriber
-/// re-establishes itself against the new registration rather than dying.
+/// re-establishes itself against the new registration.
 ///
 /// The coordinator is already built for this — a `JoinRequest` from a name it
 /// knows aborts the stale handler and rejoins, and rules for a node that does
@@ -697,7 +697,7 @@ impl NetworkShipImpl {
     /// the `Arc` decides. The task ends when the connection is lost.
     ///
     /// Cost is one small control message per `HEARTBEAT_INTERVAL_MS`. The
-    /// heartbeat uses its own real-time-priority publisher and bounded channel;
+    /// heartbeat uses its own real-time-priority publisher and bounded channel.
     /// application traffic cannot queue ahead of it. Only another heartbeat
     /// suppresses it, so a busy ship still beats on schedule.
     pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {

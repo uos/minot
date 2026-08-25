@@ -5,7 +5,7 @@ use ros2_interfaces_jazzy_rkyv::std_msgs::msg;
 ///
 /// A best-effort subscriber tells the coordinator that it is allowed to be skipped
 /// if it is slow or unresponsive. The publisher will fire-and-forget to this subscriber
-/// instead of blocking until delivery is confirmed.
+/// and returns after queueing each message.
 ///
 /// Required when subscribing to a topic published by a best-effort node.
 #[tokio::main]

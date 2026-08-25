@@ -185,7 +185,7 @@ pf! any .. 1.
 
 !!! warning
 
-    With this code, Minot will load the entire content of the Bagfile into memory first, which is probably not want you want. Also, you can not stop publishing mid-way through. This is why you should still use `minot async` for this use case — but it still beautifully demonstrates the flexibility of Minots query feature.
+    This command loads the full bag into memory and runs to EOF. Use `minot async` for real-time, interruptible playback.
 
 ## Real-time Playback (`minot async`)
 

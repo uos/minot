@@ -36,7 +36,7 @@ fn a_tagged_line_round_trips_through_the_parser() {
 }
 
 /// JSON keeps what text has to re-derive: a message with a colon in it is
-/// not mistaken for a target, and the level is read rather than guessed.
+/// stays separate from the target and provides the explicit level.
 #[cfg(feature = "json")]
 #[test]
 fn a_json_line_round_trips_with_every_field_intact() {
@@ -72,7 +72,7 @@ fn colour_codes_do_not_hide_the_level() {
     assert_eq!(parsed.message, "Using ZID: 9d687664");
 }
 
-/// `[Minot] minot::app:` says Minot twice; the module is what the tag does
+/// `[Minot] minot::app:` says Minot twice. The module is what the tag does
 /// not already say.
 #[test]
 fn a_target_that_repeats_its_source_is_trimmed() {
@@ -197,7 +197,7 @@ mod tui {
         assert!(!buffer.is_own(&entries[1]));
     }
 
-    /// A foreign crate is named; our own module paths are not, because the
+    /// A foreign crate is named. Our own module paths use the process label.
     /// line is already known to be ours.
     #[test]
     fn a_console_line_names_only_a_foreign_target() {
@@ -250,7 +250,7 @@ mod tui {
         assert_eq!(wrapped.join(" "), "the quick brown fox jumps");
     }
 
-    /// The header only shortens the first line; the rest get the wider
+    /// The header shortens the first line. The rest get the wider
     /// hanging indent's worth of room.
     #[test]
     fn wrapping_gives_the_first_line_its_own_width() {
@@ -272,7 +272,7 @@ mod tui {
 #[cfg(all(feature = "env", feature = "tui"))]
 mod quieted_spec {
     // env_filter comes in with the `tui` feature, which is what parses a spec
-    // at runtime; these assert against that same engine.
+    // at runtime. These assert against that same engine.
 
     use crate::quieted;
 
@@ -333,7 +333,7 @@ mod quieted_spec {
     }
 
     /// A full spec is capped just the same, since a process may be handed one
-    /// through the environment rather than a bare level from its config.
+    /// through the environment with its configured level.
     #[test]
     fn a_full_spec_is_capped_without_losing_what_it_said() {
         let spec = quieted("info,polarstern=debug");

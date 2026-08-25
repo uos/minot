@@ -67,7 +67,7 @@ pub(crate) struct Args {
     #[arg(long, global = true, default_value = "16MiB", value_parser = parse_bytesize)]
     pub shm_size: ByteSize,
 
-    /// Minimum payload size to send through SHM instead of ordinary Zenoh transport.
+    /// Minimum payload size for SHM transport.
     #[cfg(feature = "shm")]
     #[arg(long, global = true, default_value = "1MiB", value_parser = parse_bytesize)]
     pub shm_threshold: ByteSize,
@@ -128,7 +128,7 @@ fn spawn_shm_stats_logger() {
             };
 
             info!(
-                "Payload transport over last {interval_secs}s: TX shm={} ({} msgs), non-shm={} ({} msgs), {:.1}% via SHM; RX shm={} ({} msgs), non-shm={} ({} msgs), {:.1}% via SHM; SHM fallbacks={}",
+                "Payload transport over {interval_secs}s: TX SHM {} bytes in {} messages, network {} bytes in {} messages, {:.1}% SHM. RX SHM {} bytes in {} messages, network {} bytes in {} messages, {:.1}% SHM. SHM fallbacks {}",
                 ByteSize::b(delta.send_bytes),
                 delta.send_successes,
                 ByteSize::b(delta.network_send_bytes),
@@ -207,7 +207,7 @@ pub struct AsyncPlayArgs {
     #[arg(long)]
     pub registry: Option<String>,
 
-    /// Materialise a Marina dataset before playback instead of streaming it.
+    /// Materialise a Marina dataset before playback.
     #[arg(long)]
     pub no_stream: bool,
 

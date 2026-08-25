@@ -29,7 +29,7 @@ pub const REGISTRATION_TIMEOUT_MS: u64 = 2000;
 /// [peer-heartbeat] Consecutive ping failures before declaring a peer dead.
 pub const PEER_DEAD_THRESHOLD: u32 = 3;
 
-/// Everything about a node that is policy rather than identity.
+/// Policy shared by every node.
 ///
 /// Carried as one value so adding a knob later does not churn every call site.
 /// `Default` reproduces the behaviour Minot had before these existed: LAN
@@ -80,7 +80,7 @@ impl NodeOptions {
 /// and subscriber the caller is holding — stays alive across it.
 ///
 /// Each successful registration is a **generation**. Long-lived tasks watch the
-/// generation rather than a one-shot disconnect signal: when it changes, the
+/// generation. When it changes, the
 /// channels they captured are stale and whatever registration they did with the
 /// coordinator has to be redone.
 #[derive(Debug)]
@@ -134,7 +134,7 @@ impl ConnectionState {
     /// This becomes true once it echoes a heartbeat, which is also the point at
     /// which the node's own disconnect detector arms — before then, a
     /// coordinator that dies cannot be noticed. Wait on this when you need the
-    /// link to be genuinely established rather than merely registered.
+    /// link to be established and ready for traffic.
     pub fn is_link_proven(&self) -> bool {
         self.link_proven.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -241,7 +241,7 @@ impl ReconnectPolicy {
 /// A node carries its own `Timing` and tells the coordinator about it when it
 /// joins, so the two sides agree on how patient to be with each other.
 ///
-/// The fields are interdependent; [`Timing::validate`] checks the relationships
+/// The fields are interdependent. [`Timing::validate`] checks the relationships
 /// that the rest of the system relies on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timing {
@@ -275,10 +275,8 @@ impl Timing {
     /// Timing for a link that is expected to wobble: off-LAN, tunnelled,
     /// wireless, or otherwise not under your control.
     ///
-    /// Roughly 5× more patient than the default across the board. The cost is
-    /// that a genuinely dead node takes ~10 s rather than ~800 ms to notice,
-    /// which is the right trade when the alternative is tearing down a healthy
-    /// stream because a packet was late.
+    /// Roughly 5× more patient than the default. Dead-node detection takes about
+    /// 10 seconds.
     pub fn wan() -> Self {
         Self {
             heartbeat_interval_ms: 2_000,
@@ -292,7 +290,7 @@ impl Timing {
     /// Check the relationships the rest of the system relies on.
     ///
     /// Called when a node is built, so a bad custom `Timing` fails loudly at
-    /// startup rather than as mysterious spurious disconnects later.
+    /// startup with a concrete configuration error.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.heartbeat_interval_ms == 0 {
             anyhow::bail!("Timing::heartbeat_interval_ms must be greater than zero");
@@ -354,7 +352,7 @@ pub const TRY_RELIABLE_RETRY_BACKOFF_MS: u64 = 50;
 pub const BEST_EFFORT_ATTEMPT_TIMEOUT_MS: u64 = 250;
 
 /// [coordinator] Last-resort timeout for coordinator-side per-client handler.
-/// Nodes no longer heartbeat the coordinator directly; this only fires for
+/// This fires for
 /// truly isolated or zombie clients that sent no packet for this long.
 pub const COORD_CLIENT_IDLE_TIMEOUT_MS: u64 = 30_000;
 

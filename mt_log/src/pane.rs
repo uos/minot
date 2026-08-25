@@ -23,9 +23,8 @@ const PAGE_LINES: usize = 20;
 /// A subtle one-column inset, without putting a border around the pane.
 const LEFT_GUTTER: usize = 1;
 /// Below this pane width the header is compacted: the level shrinks to its
-/// initial and wrapped text hangs by two columns instead of lining up under
-/// the message column. Alignment is worth its cost on a wide pane and nothing
-/// but cost on a narrow one, where it eats a third of every wrapped line.
+/// initial and wrapped text uses a two-column hanging indent. Wide panes keep
+/// full alignment. Narrow panes preserve more message width.
 const COMPACT_WIDTH: u16 = 72;
 /// Columns the "↳ " marker on a wrapped line occupies.
 const HANGING_INDENT: usize = 2;
@@ -43,11 +42,11 @@ pub fn level_color(level: LogLevel) -> Color {
 
 /// Scroll state for the log pane.
 ///
-/// The scroll position is an *entry* index rather than a line, so wrapping a
-/// long message does not move the reader's place.
+/// The scroll position uses an *entry* index, so wrapping a long message keeps
+/// the reader's place.
 #[derive(Default)]
 pub struct LogView {
-    /// `None` follows the tail; `Some` holds a pinned entry index.
+    /// `None` follows the tail. `Some` holds a pinned entry index.
     scroll: Option<usize>,
 }
 
@@ -66,8 +65,7 @@ impl LogView {
         }
     }
 
-    /// Reaching the bottom resumes following, rather than sticking one entry
-    /// short of the newest line forever.
+    /// Reaching the bottom resumes following the newest entry.
     pub fn scroll_down(&mut self, total: usize) {
         if let Some(position) = self.scroll {
             if position + 1 >= total.saturating_sub(1) {
@@ -102,10 +100,9 @@ impl LogView {
 /// Split a message into chunks that fit the pane, never inside a character.
 ///
 /// The first line has the header beside it and the rest sit under a shorter
-/// indent, so the two widths are given separately rather than wrapping
-/// everything to the narrower one and leaving the first line short. Long
+/// indent, so the two widths are given separately. Long
 /// single-token lines still have to break somewhere, so a word wider than the
-/// pane falls back to a hard split rather than overflowing.
+/// pane uses a hard split to stay within its width.
 pub fn wrap(message: &str, first_width: usize, rest_width: usize) -> Vec<String> {
     let first_width = first_width.max(1);
     let rest_width = rest_width.max(1);
@@ -166,7 +163,7 @@ pub fn render(
         }
     };
     // A floor keeps the message column from shifting as the run passes 10s
-    // and 100s; past that the column grows with the timestamps.
+    // and 100s. After that the column grows with the timestamps.
     let floor = if compact { 5 } else { 8 };
     let time_width = visible
         .iter()

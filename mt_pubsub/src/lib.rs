@@ -109,8 +109,8 @@ impl NodeConfig {
 
 /// Send a `RegisterShipAtVar` and wait for the coordinator to acknowledge it.
 ///
-/// Resolves the coordinator channels from the client at call time rather than
-/// capturing them, because a reconnect replaces both. Returns the sender that
+/// Resolves coordinator channels from the client at call time because reconnect
+/// replaces both. Returns the sender that
 /// was live for this registration.
 async fn register_at_var(
     ship: &Arc<NetworkShipImpl>,
@@ -212,7 +212,7 @@ impl<T: Sendable> Publisher<T> {
         self.ensure_registered().await?;
         match self.ship.ask_for_action(&self.topic).await {
             Ok((mt_sea::Action::Sail, _)) => {
-                debug!("No route for '{}' yet; dropping this publish", self.topic);
+                debug!("No route for '{}'. Dropping this publish", self.topic);
                 Ok(())
             }
             Ok((mt_sea::Action::Shoot { target, id }, _)) => {
@@ -243,17 +243,16 @@ pub struct Subscriber<T: Sendable> {
     /// subscriber can be given up without keeping the node around.
     ship: String,
     topic: String,
-    /// The sender is resolved from here at unsubscribe time rather than
-    /// captured, because a reconnect replaces the coordinator channels.
+    /// The sender is resolved here at unsubscribe time because reconnect can
+    /// replace the coordinator channels.
     ship_handle: Arc<NetworkShipImpl>,
 }
 
 impl<T: Sendable> Subscriber<T> {
     /// Stop delivery of this topic to this node.
     ///
-    /// Dropping a subscriber only stops it being read; the coordinator carries
-    /// on sending, which for a large stream is most of the cost. Call this to
-    /// actually get rid of the traffic.
+    /// Dropping a subscriber stops local reads. Call this method to stop the
+    /// coordinator traffic as well.
     pub async fn unsubscribe(self) -> anyhow::Result<()> {
         let coord_tx = {
             let client = self.ship_handle.client.lock().await;
@@ -275,9 +274,8 @@ impl<T: Sendable> Subscriber<T> {
 
     /// Take the next message if one is already waiting, without blocking.
     ///
-    /// `None` means nothing is queued *right now*; unlike [`Subscriber::next`]
-    /// returning `None`, it does not mean the subscription has ended. Use it
-    /// when a caller wants to drain what has arrived without giving up control.
+    /// `None` means nothing is queued *right now*. Use this when a caller wants
+    /// to drain available messages and keep control.
     pub fn try_next(&mut self) -> Option<T> {
         self.chan.try_recv().ok().map(|message| {
             message
@@ -360,8 +358,8 @@ impl Node {
         .await?;
 
         // Monitor for out-of-band RegistrationError (e.g. a BE publisher registers after us).
-        // The registration check above only fires if the publisher was already registered;
-        // this persistent task catches the reverse ordering.
+        // The registration check above covers an existing publisher. This task
+        // handles publishers that register later.
         let be_error_token = CancellationToken::new();
         {
             let be_error_token_clone = be_error_token.clone();
@@ -591,7 +589,7 @@ impl Node {
     ///
     /// Reports whether the link is currently up and which registration
     /// generation is live. Publishers and subscriber tasks use this to notice
-    /// that they must re-register; callers can use it to surface connection
+    /// that they must re-register. Callers can use it to surface connection
     /// status without having to poll anything.
     pub fn connection(&self) -> Arc<mt_sea::ConnectionState> {
         Arc::clone(&self.ship.connection)

@@ -4,17 +4,12 @@
 //! the two things a bulk transfer over an unreliable link needs on top of that:
 //!
 //! - **Chunking.** A multi-gigabyte object is never one message.
-//! - **A window.** The receiver says how far ahead the sender may run, so a slow
-//!   or stalled consumer bounds the sender's memory instead of either dropping
-//!   data (`Qos::BestEffort`) or wedging the sender forever (`Qos::Reliable`).
+//! - **A window.** The receiver limits sender lookahead and memory use.
 //! - **Resume.** When the link drops and comes back, the transfer continues from
-//!   the receiver's watermark rather than starting over.
+//!   the receiver's watermark.
 //!
-//! Minot itself now keeps a node alive across a coordinator restart — publishers
-//! and subscribers re-register against the new connection generation instead of
-//! dying (see `mt_sea::ConnectionState`). What that does *not* do is replace the
-//! messages that were in flight when the link went down. That is this crate's
-//! job, and it is the whole job.
+//! Connection generations restore publishers and subscribers after a coordinator
+//! restart. This crate retains in-flight chunks and resumes their transfer.
 //!
 //! # The window is also the resume protocol
 //!
@@ -45,8 +40,7 @@ pub struct Chunk {
     /// Position in the stream, starting at 1. Zero means "nothing yet" and is
     /// the initial value of a watermark, so it is never a valid chunk number.
     pub seq: u64,
-    /// Set on the final chunk. The receiver uses it to finish rather than
-    /// waiting for a message that will never come.
+    /// Set on the final chunk. The receiver finishes immediately when it arrives.
     pub last: bool,
     pub payload: Vec<u8>,
 }
@@ -156,11 +150,11 @@ async fn publish_tolerantly<T: mt_sea::Sendable>(
 /// Split out from [`FlowSender`] with no transport in it, because this is where
 /// the subtle rules live — a stale window must never move a watermark backwards,
 /// and a resume must never be promised for a chunk that has already been
-/// dropped. Those are worth testing directly rather than only through a network.
+/// dropped. Direct tests cover these transitions precisely.
 #[derive(Debug)]
 struct SenderWindow {
     /// Chunks sent but not yet acknowledged, oldest first. This is the replay
-    /// buffer a resume draws on; it is bounded by the window, because the sender
+    /// buffer used by resume. It is bounded by the window because the sender
     /// never runs further ahead than the receiver allowed.
     retained: std::collections::VecDeque<Chunk>,
     /// Highest sequence handed to the wire.
@@ -366,7 +360,7 @@ impl FlowSender {
                     source_exhausted = reached_end;
                     // Recorded before it is sent: if the publish is lost to a
                     // disconnect the chunk is already retained, so the repair
-                    // step will send it again rather than it vanishing.
+                    // step sends it again.
                     self.window.record(chunk.clone());
                     publish_tolerantly(&self.chunks, &chunk, &self.connection, "a chunk").await?;
                     last_progress = tokio::time::Instant::now();
@@ -406,8 +400,7 @@ impl FlowSender {
 
 /// Where a [`FlowSender`] gets its bytes.
 ///
-/// Reads are by absolute offset rather than sequential, because a resume moves
-/// the position backwards to wherever the receiver actually got to.
+/// Reads use absolute offsets so resume can return to the receiver's watermark.
 pub trait ChunkSource {
     fn read_at(&mut self, offset: u64, len: usize) -> Result<Vec<u8>>;
 
@@ -546,7 +539,7 @@ impl FlowReceiver {
                     last_progress = tokio::time::Instant::now();
                     if chunk.seq <= self.ack_through {
                         // A replay of something already written. Expected after
-                        // a reconnect; the sender cannot know what landed.
+                        // a reconnect. The sender cannot know what landed.
                         continue;
                     }
                     if chunk.last {
@@ -566,7 +559,7 @@ impl FlowReceiver {
 
                     if self.final_seq == Some(self.ack_through) {
                         self.complete = true;
-                        // Tell the sender it can stop; repeated because this is
+                        // Tell the sender it can stop. This is repeated because
                         // the message whose loss would hang the sender.
                         let window = self.window();
                         for _ in 0..3 {
@@ -752,7 +745,7 @@ mod tests {
 
         // Now a window arrives claiming *less* progress than a previous one.
         // The watermark refuses to move backwards, which is exactly what keeps
-        // this recoverable rather than a request for bytes that are gone.
+        // this recoverable while the bytes remain available.
         state.apply(window(2, 20));
         assert_eq!(state.ack_through, 5);
         assert!(state.resume_is_possible());

@@ -228,9 +228,7 @@ impl std::fmt::Debug for Client {
 }
 
 impl Client {
-    pub(crate) fn coordinator_heartbeat_send(
-        &self,
-    ) -> Option<tokio::sync::mpsc::Sender<()>> {
+    pub(crate) fn coordinator_heartbeat_send(&self) -> Option<tokio::sync::mpsc::Sender<()>> {
         self.coordinator_heartbeat_send.read().unwrap().clone()
     }
 }
@@ -429,7 +427,7 @@ impl Client {
         let max_message_size = get_shm_max_message_size();
         if total_len > max_message_size {
             warn!(
-                "Message of {} bytes exceeds MINOT_SHM_MAX_MESSAGE_SIZE ({} bytes); falling back to network transport",
+                "Message size {} exceeds the {} byte SHM limit. Using network transport",
                 total_len, max_message_size
             );
             return None;
@@ -445,7 +443,7 @@ impl Client {
                 Some(provider) => provider,
                 None => {
                     warn!(
-                        "Could not grow SHM pool for {} bytes; falling back to network transport",
+                        "Could not grow the SHM pool for {} bytes. Using network transport",
                         total_len
                     );
                     return None;
@@ -466,7 +464,7 @@ impl Client {
                 Ok(result) => result,
                 Err(_) => {
                     warn!(
-                        "SHM allocation for {} bytes timed out; falling back to network transport",
+                        "SHM allocation for {} bytes timed out. Using network transport",
                         total_len
                     );
                     return None;
@@ -946,7 +944,7 @@ impl Client {
                                 if matches!(packet.data, PacketKind::Heartbeat) {
                                     if !received_first {
                                         debug!(
-                                            "{ship_kind_clone:?} coordinator link proven; disconnect detector armed at {disconnect_timeout:?}"
+                                            "{ship_kind_clone:?} coordinator link ready. Disconnect threshold {disconnect_timeout:?}"
                                         );
                                         connection_for_watch.mark_link_proven();
                                     }
@@ -1151,7 +1149,7 @@ impl Client {
             .await
             .map_err(|e| anyhow::anyhow!("data query completed without a reply: {e}"))?;
         reply.result().map(|_| ()).map_err(|e| {
-            // The reason is the reply's payload, which is text; the struct
+            // The reason is the reply's text payload. The struct
             // around it is a wrapper whose debug form buries that one word in
             // a byte dump of it.
             let payload = e.payload().to_bytes();

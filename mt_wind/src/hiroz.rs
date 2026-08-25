@@ -169,7 +169,7 @@ fn env_bool_or_default(key: &str, default: bool) -> anyhow::Result<bool> {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" => Ok(false),
         _ => Err(anyhow!(
-            "Invalid boolean value '{}' for {}; expected true/false",
+            "Invalid boolean value '{}' for {}. Choose true or false",
             value,
             key
         )),
@@ -236,7 +236,7 @@ fn hiroz_context_builder(
         Ok(builder) => Ok(builder.with_shm_threshold(threshold)),
         Err(error) => {
             warn!(
-                "Hiroz SHM initialization failed: {}; continuing without SHM",
+                "Hiroz SHM initialization failed: {}. Using network transport",
                 error
             );
             Ok(base()

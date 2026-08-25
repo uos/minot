@@ -89,10 +89,7 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
 ///   answering ([`Qos::is_monitored`], [`Qos::fires_torpedo`],
 ///   [`Qos::removes_rules_on_exit`]).
 ///
-/// Always ask through the predicates below rather than comparing variants.
-/// Matching on `== Qos::Reliable` and `== Qos::BestEffort` spells the same
-/// question two opposite ways, so a third variant silently lands on different
-/// sides of the two spellings.
+/// Use the predicates below to interpret delivery behavior across every variant.
 #[derive(Serialize, Deserialize, Archive, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Qos {
     /// Reliable wire delivery, and a node whose loss is fatal to the system:
@@ -104,7 +101,7 @@ pub enum Qos {
     ///
     /// Comparable to a ROS 2 DDS `RELIABLE` subscriber: writes are retried and
     /// ordered, a write that cannot land within its deadline fails on its own
-    /// rather than taking the participant down, and nothing tears down peers.
+    /// while peers remain connected.
     /// Sends are dispatched off the caller's thread, so a slow or roaming link
     /// cannot wedge the publisher's loop. Intended for links where latency is
     /// unpredictable — WiFi viewers, tablets, anything off the LAN.
@@ -116,7 +113,7 @@ pub enum Qos {
 
 impl Qos {
     /// Wire reliability. Note this is close to free over TCP, which already
-    /// retransmits and orders; it bites on lossy transports.
+    /// retransmits and orders. This setting affects lossy transports.
     pub fn reliability(self) -> zenoh::qos::Reliability {
         match self {
             Qos::Reliable | Qos::TryReliable => zenoh::qos::Reliability::Reliable,
@@ -128,7 +125,7 @@ impl Qos {
     ///
     /// `Reliable` blocks indefinitely, which is what wedges a publisher when the
     /// link stalls. `TryReliable` uses `BlockFirst`: wait for the first message,
-    /// drop later ones instead of stalling without bound.
+    /// drop later ones when the bounded queue is full.
     pub fn congestion_control(self) -> zenoh::qos::CongestionControl {
         match self {
             Qos::Reliable => zenoh::qos::CongestionControl::Block,
@@ -399,8 +396,7 @@ impl Sea {
                     // Key for client -> coordinator messages
                     let client_to_coord_key =
                         format!("minot/{}/clients/{}/coord", domain_id, ship_name_key);
-                    let heartbeat_to_coord_key =
-                        client_heartbeat_key(domain_id, &ship_name_key);
+                    let heartbeat_to_coord_key = client_heartbeat_key(domain_id, &ship_name_key);
 
                     // Subscriber for receiving from client
                     let client_subscriber = session_clone
@@ -425,16 +421,8 @@ impl Sea {
                                             // A broadcast send fails when nothing is
                                             // currently subscribed, which is normal and
                                             // transient: this task is spawned as soon as
-                                            // the join request arrives, but the handler
-                                            // that consumes it only subscribes once the
-                                            // ShipHandle has been picked up. Treating
-                                            // that as fatal killed the client's receive
-                                            // path for good — its heartbeats never
-                                            // reached the coordinator again, so the
-                                            // coordinator never echoed and the client's
-                                            // own disconnect detector never armed.
-                                            // Drop the packet and keep listening; only a
-                                            // failing subscriber means the client is gone.
+                                            // Join packets can arrive before the ShipHandle
+                                            // consumer subscribes. Keep the receive path alive.
                                             if let Err(e) = recv_tx_clone.send((packet, None)) {
                                                 debug!(
                                                     "Dropping packet from {:?}: no receiver yet ({})",
@@ -481,10 +469,9 @@ impl Sea {
                             header: Header::default(),
                             data: PacketKind::Heartbeat,
                         };
-                        let heartbeat_bytes = rkyv::api::high::to_bytes::<rancor::Error>(
-                            &heartbeat_packet,
-                        )
-                        .expect("Failed to serialize heartbeat");
+                        let heartbeat_bytes =
+                            rkyv::api::high::to_bytes::<rancor::Error>(&heartbeat_packet)
+                                .expect("Failed to serialize heartbeat");
                         while heartbeat_subscriber.recv_async().await.is_ok() {
                             let _ = heartbeat_recv_tx.send((heartbeat_packet.clone(), None));
                             if let Err(error) =
@@ -669,7 +656,7 @@ mod qos_tests {
     }
 
     /// A best-effort publisher drops samples, so any subscriber that expects
-    /// delivery has to be rejected rather than silently starved.
+    /// delivery must be rejected when it cannot make progress.
     #[test]
     fn best_effort_is_the_only_mode_that_tolerates_dropped_samples() {
         assert!(Qos::Reliable.expects_reliable_delivery());
@@ -678,7 +665,7 @@ mod qos_tests {
     }
 
     /// `Reliable` is the default, so an unknown or departed client is treated
-    /// as fatal rather than silently downgraded.
+    /// as fatal.
     #[test]
     fn default_mode_is_reliable() {
         assert_eq!(Qos::default(), Qos::Reliable);
