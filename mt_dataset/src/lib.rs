@@ -1,7 +1,7 @@
 //! Shared dataset management for Minot and Marina.
 //!
 //! This crate is the dataset *kernel*: configuration, the local cache, registry
-//! drivers, and the client half of the `minot://` transport — everything needed
+//! drivers, and the client half of the `minot://` transport: everything needed
 //! to resolve, pull, and stream a dataset. Both applications depend on it, and
 //! it depends on neither.
 //!

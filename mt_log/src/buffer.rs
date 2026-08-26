@@ -86,7 +86,7 @@ impl LogBuffer {
     /// One entry as a record.
     ///
     /// The target is kept only when it is not ours: a foreign crate's name is
-    /// worth the width, and our own module paths are not — the process is
+    /// worth the width, and our own module paths are not. The process is
     /// already identified by the line it is printed on.
     pub fn record(&self, level: LogLevel, target: &str, message: &str) -> Record {
         let mut record = Record::new(level, message);

@@ -1,12 +1,11 @@
 //! A registry reached over a Minot network.
 //!
-//! `minot://` is deliberately not a new kind of registry — it is a *transport*
-//! in front of an existing one. A `marina serve` process on the far side holds
-//! a folder or SSH registry and answers on its behalf, so this driver
-//! implements [`RegistryDriver`] with the same semantics as the registry behind
-//! it.
+//! `minot://` is a *transport* in front of an existing registry. A
+//! `marina serve` process on the far side holds a folder or SSH registry and
+//! answers on its behalf, so this driver implements [`RegistryDriver`] with the
+//! same semantics as the registry behind it.
 //!
-//! Making it boring is the point: the streaming work that follows depends on
+//! Keeping it boring matters: the streaming work that follows depends on
 //! this transport, and it is much easier to trust once `marina pull` over
 //! `minot://` behaves exactly like `marina pull` over SSH.
 
@@ -40,7 +39,7 @@ use protocol::{
 use remote_file::{NetworkFetcher, RangeFetcher, RemoteFile};
 
 /// How long to wait for a control reply. Bulk transfer has its own, longer,
-/// budget — this only covers a question the server should answer immediately.
+/// budget. This only covers a question the server should answer immediately.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Port a loopback-bound `marina serve` is reached on through a tunnel. Matches
@@ -49,7 +48,7 @@ const DEFAULT_COORDINATOR_PORT: u16 = 7447;
 
 /// How the Minot network on the far side is reached.
 enum Reach {
-    /// Already reachable on this machine — a loopback coordinator, or a tunnel
+    /// Already reachable on this machine: a loopback coordinator, or a tunnel
     /// the user set up themselves.
     Local,
     /// A coordinator addressed directly. No authentication: only for a trusted
@@ -71,7 +70,7 @@ pub struct MinotRegistry {
     reach: Reach,
     flow: FlowConfig,
     /// Built on first use. Joining a Minot network is far too expensive to do
-    /// while merely listing configured registries, and `marina` constructs every
+    /// while listing configured registries, and `marina` constructs every
     /// driver up front.
     session: OnceCell<Arc<Session>>,
 }
@@ -134,11 +133,11 @@ impl MinotRegistry {
     ///
     /// Three forms, in increasing order of how much they set up for you:
     ///
-    /// - `minot://<registry>` — the server is already reachable on this machine
+    /// - `minot://<registry>`: the server is already reachable on this machine
     ///   (both ends local, or a tunnel you opened yourself).
-    /// - `minot://<host>:<port>/<registry>` — address a coordinator directly.
+    /// - `minot://<host>:<port>/<registry>`: address a coordinator directly.
     ///   Use this on a trusted network. This transport has no authentication.
-    /// - `minot+ssh://[user@]<host>[:port]/<registry>` — open an SSH tunnel and
+    /// - `minot+ssh://[user@]<host>[:port]/<registry>`: open an SSH tunnel and
     ///   reach a loopback-bound `marina serve` through it. This is the
     ///   supported way to reach another machine.
     pub fn from_uri(name: &str, uri: &str) -> Result<Self> {
@@ -404,7 +403,7 @@ impl MinotRegistry {
     ///
     /// Keyed by the dataset's bundle hash when the server knows one, so a cache
     /// written for one version of a dataset is never served for another. With
-    /// no hash available the size still guards it, and a mismatch simply
+    /// no hash available the size still guards it, and a mismatch
     /// discards and refetches.
     async fn default_cache(&self, bag: &BagRef) -> CacheMode {
         let validity = self
@@ -683,9 +682,9 @@ impl RemoteDataset {
     /// Choose what happens to the blocks this dataset's files fetch.
     ///
     /// The default is [`CacheMode::Disk`]: reading warms a local copy, so a
-    /// second read is free and a complete read has effectively pulled the
-    /// dataset. Switch to [`CacheMode::Ephemeral`] for a read that leaves
-    /// nothing behind — the file is never touched on disk and memory stays
+    /// second read is free and a complete read leaves the whole
+    /// dataset local. Switch to [`CacheMode::Ephemeral`] for a read that leaves
+    /// nothing behind. The file is never touched on disk and memory stays
     /// bounded regardless of the dataset's size.
     pub fn with_cache(mut self, cache: CacheMode) -> Self {
         self.cache = cache;
@@ -732,7 +731,7 @@ impl RemoteDataset {
 
     /// How much of this dataset is already held locally, 0.0 to 1.0.
     ///
-    /// Always 0.0 in ephemeral mode, where nothing is held by design.
+    /// Always 0.0 in ephemeral mode, where nothing is held.
     pub fn cached_fraction(&self) -> f32 {
         let CacheMode::Disk { root, validity } = &self.cache else {
             return 0.0;
@@ -761,7 +760,7 @@ impl RemoteDataset {
 
     /// Read every byte of the dataset, then install it as an ordinary local one.
     ///
-    /// This is the point the whole design turns on: **streaming and pulling are
+    /// The whole design turns on this: **streaming and pulling are
     /// the same operation in different orders.** A streamed read fills the
     /// block cache. Once every block of every file is present, the sparse files
     /// *are* the dataset, so they are moved into `ready/` and registered in the
@@ -771,7 +770,7 @@ impl RemoteDataset {
     /// Unlike a pull, this resumes: blocks fetched by an earlier interrupted
     /// read or by ordinary use are not fetched again.
     ///
-    /// Refuses in ephemeral mode, where there is deliberately nothing to
+    /// Refuses in ephemeral mode, where there is nothing to
     /// promote.
     pub fn materialize(&self, progress: &mut ProgressReporter<'_>) -> Result<PathBuf> {
         let CacheMode::Disk { root, validity } = &self.cache else {
@@ -911,7 +910,7 @@ impl RemoteDataset {
 pub enum StatResult {
     /// Readable by range. Open it as a [`RemoteDataset`].
     Streamable(Box<RemoteDataset>),
-    /// Not readable by range — a sqlite3 bag. Pull it instead.
+    /// Not readable by range, such as a sqlite3 bag. Pull it instead.
     NotStreamable { reason: String },
 }
 

@@ -13,7 +13,7 @@ fn a_record_prints_the_level_first_and_the_source_second() {
     );
 }
 
-/// The source tag is what a parent asked for, not something a process
+/// The source tag is what a parent asked for. A process does not choose it
 /// announces about itself when nobody is listening.
 #[test]
 fn the_source_tag_appears_only_in_the_tagged_formats() {
@@ -304,10 +304,10 @@ mod quieted_spec {
         }
     }
 
-    /// Held back, not switched off. Nothing in the list is quiet enough to
+    /// Held back, still enabled. Nothing in the list is quiet enough to
     /// swallow a real error: a module that has genuinely failed still has
     /// something to say, and silencing it wholesale is how a real fault turns
-    /// into a process that merely stops working with no explanation.
+    /// into a process that stops working with no explanation.
     #[test]
     fn real_transport_errors_still_come_through() {
         let spec = quieted("info");

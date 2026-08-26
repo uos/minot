@@ -10,7 +10,7 @@
 //! [`DiskBlockStore`] keeps a sparse file plus a map of which blocks it holds.
 //! A partial read survives the process, so re-reading the same dataset costs
 //! nothing, and once every block is present the sparse file *is* the complete
-//! file — at which point streaming and pulling have converged, which is the
+//! file, at which point streaming and pulling have converged, which is the
 //! property the whole design is built around.
 //!
 //! # Ephemeral
@@ -18,7 +18,7 @@
 //! [`NullBlockStore`] keeps nothing. Blocks live only in the small in-memory
 //! window in front of the store and are dropped as the read moves past them, so
 //! memory stays bounded and the disk is never touched. For reading a dataset
-//! you deliberately do not want a copy of — a quick look at someone else's
+//! you do not want a copy of: a quick look at someone else's
 //! recording, a machine with no room, or anywhere leaving data behind would be
 //! wrong.
 
@@ -31,7 +31,7 @@ use anyhow::{Context, Result};
 pub trait BlockStore: Send + Sync {
     /// A previously stored block, if this store has it.
     fn get(&self, index: u64) -> Option<Vec<u8>>;
-    /// Offer a freshly fetched block. Failures are not fatal to a read — a
+    /// Offer a freshly fetched block. Failures are not fatal to a read, since a
     /// store that cannot keep a block just means it will be fetched again.
     fn put(&self, index: u64, data: &[u8]);
     /// Whether every block of the file is present.
@@ -57,8 +57,8 @@ impl BlockStore for NullBlockStore {
 
 /// The layout on disk for one cached file.
 ///
-/// `<root>/<escaped rel path>.part`   — sparse data
-/// `<root>/<escaped rel path>.blocks` — one byte per block, 1 = present
+/// `<root>/<escaped rel path>.part`:   sparse data
+/// `<root>/<escaped rel path>.blocks`: one byte per block, 1 = present
 ///
 /// The map uses one byte per block. A 640 MB file
 /// at 1 MiB blocks needs 640 bytes either way once the filesystem has rounded
@@ -102,7 +102,7 @@ impl std::fmt::Debug for DiskBlockStore {
 impl DiskBlockStore {
     /// Open (or start) a cache for one file.
     ///
-    /// `validity` identifies *which version* of the file this is — a bundle
+    /// `validity` identifies *which version* of the file this is. A bundle
     /// hash, or anything that changes when the contents do. A cache whose
     /// validity or size must match. Mismatched cached data is discarded before new
     /// data, because serving half of one version and half of another would be
@@ -197,7 +197,7 @@ impl DiskBlockStore {
     }
 
     /// The path of the sparse file. Once [`BlockStore::is_complete`] is true it
-    /// is a byte-exact copy of the remote file and can simply be moved.
+    /// is a byte-exact copy of the remote file and can be moved.
     pub fn data_path(&self) -> PathBuf {
         self.map_path.with_extension("part")
     }
@@ -262,7 +262,7 @@ impl BlockStore for DiskBlockStore {
         })();
         if let Err(error) = written {
             // Not fatal: the read that prompted this still has its bytes, and a
-            // block that failed to cache is simply fetched again next time.
+            // block that failed to cache is fetched again next time.
             log::debug!("could not cache block {index}: {error}");
         }
     }
@@ -279,8 +279,8 @@ impl BlockStore for DiskBlockStore {
 /// Whether a cached file is complete, without opening it for reading.
 ///
 /// Used by promotion to decide whether a streamed dataset has become an
-/// ordinary local one. Returns the sparse file's path when it is complete —
-/// at that point it is byte-for-byte the remote file and can simply be moved.
+/// ordinary local one. Returns the sparse file's path when it is complete,
+/// at which point it is byte-for-byte the remote file and can be moved.
 pub fn completed_file(
     root: &Path,
     relative: &str,
@@ -301,7 +301,7 @@ pub enum CacheMode {
     ///
     /// Re-reading costs nothing, a partial read survives a restart, and a
     /// complete read leaves a byte-exact local copy. `validity` must change
-    /// whenever the remote file's contents do — a bundle hash is ideal.
+    /// whenever the remote file's contents do. A bundle hash is ideal.
     Disk { root: PathBuf, validity: String },
     /// Keep nothing. Blocks are dropped as the read moves past them. Memory
     /// stays bounded and the disk is never written.
@@ -420,7 +420,7 @@ mod tests {
         store.put(1, &block(0xCD, 5));
         assert!(store.is_complete());
 
-        // The sparse file can simply be moved into place once complete.
+        // The sparse file can be moved into place once complete.
         let written = std::fs::read(store.data_path()).unwrap();
         assert_eq!(written.len(), size as usize);
         assert_eq!(&written[..4096], &block(0xAB, 4096)[..]);

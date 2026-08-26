@@ -9,22 +9,22 @@
 //!
 //! Reads are served in fixed-size blocks, never as the exact range asked for.
 //! Phase 0 measured why: opening an MCAP reads its summary in **2130 separate
-//! reads averaging 59 bytes**, and those reads are inherently serial — each one
+//! reads averaging 59 bytes**, and those reads are inherently serial. Each one
 //! depends on the parse state the last produced, so no amount of readahead
 //! helps. At 200 ms round trip that is over four hundred seconds to open one
 //! bag.
 //!
 //! Fetching whole blocks collapses that: 2130 tiny reads fall inside a handful
 //! of blocks, and every read after the first in a block is a memory copy. The
-//! block size is therefore a correctness property, not a tuning knob, and
+//! block size is therefore a correctness property, and
 //! `an_open_costs_only_a_handful_of_requests` guards it.
 //!
 //! # Why a thread
 //!
 //! The reader above is synchronous and may itself be running inside a Tokio
 //! runtime. Blocking a runtime worker on a future that needs that same runtime
-//! deadlocks, so fetches are handed to a dedicated OS thread — which is not a
-//! runtime worker, and may therefore block on a runtime handle safely — and
+//! deadlocks, so fetches are handed to a dedicated OS thread, which is not a
+//! runtime worker and may therefore block on a runtime handle safely, and
 //! answered over a plain channel. Ugly, but it is the honest way to put an
 //! async transport under a synchronous `Read`.
 
@@ -50,6 +50,19 @@ pub const DEFAULT_BLOCK_BYTES: usize = 1024 * 1024;
 /// the same 16 MiB byte window as four four-MiB blocks, but make each possible
 /// underrun four times shorter.
 pub const DEFAULT_READAHEAD_BLOCKS: usize = 16;
+
+/// How many block fetches may be outstanding at once.
+///
+/// Readahead depth alone does not fill a high-latency link. With one request in
+/// flight, throughput is one block per round trip however deep the queue is:
+/// 1 MiB per 100 ms is 10 MB/s whatever the link can carry. Four concurrent
+/// fetches put ~4 MiB on the wire, past the ~2 MB channel window an SSH tunnel
+/// allows, so the transport bounds throughput instead of this client.
+///
+/// Raising the block size would do the same arithmetic, but block size is a
+/// correctness property here (see the module docs) and a bigger block makes
+/// every cold seek wait longer. Extra requests in flight cost a seek nothing.
+pub const DEFAULT_INFLIGHT_BLOCKS: usize = 4;
 
 /// Fetches byte ranges for a [`RemoteFile`].
 ///
@@ -120,9 +133,9 @@ impl RangeFetcher for LocalFetcher {
 /// How many blocks stay in memory in front of the store.
 ///
 /// This is what makes the tiny-read case cheap: an MCAP summary read touches
-/// the same block thousands of times, and going to the store — even a local
-/// file — for each of those would be thousands of syscalls. Small, because its
-/// job is to catch repeats, not to be the cache.
+/// the same block thousands of times, and going to the store, even a local
+/// file, for each of those would be thousands of syscalls. Small, because its
+/// job is to catch repeats. The store behind it is the cache.
 pub const DEFAULT_HOT_BLOCKS: usize = 8;
 
 enum PrefetchedBlock {
@@ -149,6 +162,7 @@ impl Prefetch {
         path: String,
         block_bytes: usize,
         capacity: usize,
+        workers: usize,
     ) -> Self {
         let (requests, incoming) = std::sync::mpsc::sync_channel(capacity);
         let state = Arc::new((
@@ -157,22 +171,46 @@ impl Prefetch {
             }),
             Condvar::new(),
         ));
-        let worker_state = Arc::clone(&state);
-        std::thread::Builder::new()
-            .name("marina-readahead".to_string())
-            .spawn(move || {
-                while let Ok(index) = incoming.recv() {
-                    let offset = index * block_bytes as u64;
-                    let result = fetcher
-                        .fetch(&path, offset, block_bytes as u32)
-                        .map_err(|error| error.to_string());
-                    let (lock, ready) = &*worker_state;
-                    let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
-                    state.blocks.insert(index, PrefetchedBlock::Ready(result));
-                    ready.notify_all();
-                }
-            })
-            .expect("the readahead thread should start");
+        // One queue, several workers: whichever is idle takes the next block, so
+        // `workers` fetches are outstanding at once. Blocks then complete out of
+        // order, which `take` already tolerates by waiting for the index it
+        // wants.
+        let incoming = Arc::new(Mutex::new(incoming));
+        for worker in 0..workers.max(1) {
+            let worker_state = Arc::clone(&state);
+            let fetcher = Arc::clone(&fetcher);
+            let path = path.clone();
+            let incoming = Arc::clone(&incoming);
+            std::thread::Builder::new()
+                .name(format!("marina-readahead-{worker}"))
+                .spawn(move || {
+                    loop {
+                        // The queue lock is held across `recv` and released
+                        // before fetching. A worker parked here waiting for work
+                        // hands the lock straight to the next one when it wakes,
+                        // so waiting never keeps the others from fetching.
+                        let index = {
+                            let queue =
+                                incoming.lock().unwrap_or_else(|error| error.into_inner());
+                            match queue.recv() {
+                                Ok(index) => index,
+                                // The last `Prefetch` was dropped. Every worker
+                                // sees this in turn and the pool winds down.
+                                Err(_) => break,
+                            }
+                        };
+                        let offset = index * block_bytes as u64;
+                        let result = fetcher
+                            .fetch(&path, offset, block_bytes as u32)
+                            .map_err(|error| error.to_string());
+                        let (lock, ready) = &*worker_state;
+                        let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
+                        state.blocks.insert(index, PrefetchedBlock::Ready(result));
+                        ready.notify_all();
+                    }
+                })
+                .expect("the readahead thread should start");
+        }
         Self {
             requests,
             state,
@@ -221,7 +259,7 @@ impl Prefetch {
 
 /// A bounded most-recently-used window of blocks held in memory.
 ///
-/// Bounded is the point: in ephemeral mode this is the *only* thing holding
+/// The bound matters: in ephemeral mode this is the *only* thing holding
 /// blocks, so its limit is what keeps memory flat while reading a file of any
 /// size.
 struct HotBlocks {
@@ -288,12 +326,13 @@ pub struct RemoteFile {
     position: u64,
     block_bytes: usize,
     readahead: usize,
+    inflight: usize,
     last_readahead: Option<u64>,
     prefetch: Option<Prefetch>,
     hot: HotBlocks,
-    /// Built on first use, not at construction.
+    /// Built on first use, once the block size is settled.
     ///
-    /// A store is tied to a block size — its map records which *blocks* it
+    /// A store is tied to a block size, because its map records which *blocks* it
     /// holds, so the same index means a different byte range at a different
     /// size. Building eagerly meant that setting the block size afterwards
     /// discarded a cache that had just been opened, and a second run would
@@ -313,6 +352,7 @@ impl RemoteFile {
             position: 0,
             block_bytes: DEFAULT_BLOCK_BYTES,
             readahead: DEFAULT_READAHEAD_BLOCKS,
+            inflight: DEFAULT_INFLIGHT_BLOCKS,
             last_readahead: None,
             prefetch: None,
             hot: HotBlocks::new(DEFAULT_HOT_BLOCKS),
@@ -339,6 +379,7 @@ impl RemoteFile {
             position: 0,
             block_bytes: DEFAULT_BLOCK_BYTES,
             readahead: DEFAULT_READAHEAD_BLOCKS,
+            inflight: DEFAULT_INFLIGHT_BLOCKS,
             last_readahead: None,
             prefetch: None,
             hot: HotBlocks::new(DEFAULT_HOT_BLOCKS),
@@ -393,6 +434,16 @@ impl RemoteFile {
 
     pub fn with_readahead(mut self, blocks: usize) -> Self {
         self.readahead = blocks;
+        self
+    }
+
+    /// How many block fetches may be outstanding at once. Must be set before
+    /// the first read, which is when the pool is built.
+    ///
+    /// This is what fills a high-latency link: see [`DEFAULT_INFLIGHT_BLOCKS`].
+    /// One means the previous behaviour, a single fetch per round trip.
+    pub fn with_inflight_blocks(mut self, blocks: usize) -> Self {
+        self.inflight = blocks.max(1);
         self
     }
 
@@ -464,8 +515,8 @@ impl RemoteFile {
 
     /// Start pulling the next few blocks after `index` that are not cached yet.
     ///
-    /// This is deliberately non-blocking. A failed speculative read is retried
-    /// normally if playback actually reaches that block.
+    /// Non-blocking. A failed speculative read is retried normally
+    /// if playback actually reaches that block.
     fn schedule_readahead(&mut self, index: u64) {
         if self.readahead == 0 || self.last_readahead == Some(index) {
             return;
@@ -477,6 +528,7 @@ impl RemoteFile {
                 self.path.clone(),
                 self.block_bytes,
                 self.readahead,
+                self.inflight,
             ));
         }
         let last = self.size.div_ceil(self.block_bytes as u64);
@@ -567,23 +619,62 @@ impl NetworkFetcher {
     /// drive it without a network.
     pub fn spawn<F, Fut>(handle: tokio::runtime::Handle, fetch: F) -> Self
     where
-        F: Fn(String, u64, u32) -> Fut + Send + 'static,
+        F: Fn(String, u64, u32) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Vec<u8>>> + Send,
+    {
+        Self::spawn_with_workers(handle, fetch, DEFAULT_INFLIGHT_BLOCKS)
+    }
+
+    /// As [`NetworkFetcher::spawn`], with an explicit number of fetch threads.
+    ///
+    /// One thread means one request on the wire at a time, whatever the
+    /// readahead pool above asks for. This is the layer that decides how many
+    /// range reads are actually outstanding.
+    pub fn spawn_with_workers<F, Fut>(
+        handle: tokio::runtime::Handle,
+        fetch: F,
+        workers: usize,
+    ) -> Self
+    where
+        F: Fn(String, u64, u32) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<Vec<u8>>> + Send,
     {
         let (requests, incoming) = std::sync::mpsc::channel::<FetchRequest>();
-        std::thread::Builder::new()
-            .name("marina-range-fetch".to_string())
-            .spawn(move || {
-                // Ends when the last `NetworkFetcher` is dropped and the channel
-                // closes, so the thread cannot outlive its users.
-                while let Ok(request) = incoming.recv() {
-                    let result = handle.block_on(fetch(request.path, request.offset, request.len));
-                    // A gone receiver means the reader stopped caring. Nothing
-                    // to do but drop the bytes.
-                    let _ = request.reply.send(result);
-                }
-            })
-            .expect("the range-fetch thread should start");
+        // Threads of our own, for the reason in the module docs: these block on
+        // a future that needs the same runtime, which only a thread outside the
+        // runtime may do. Spawning them as tasks also queues them behind
+        // whatever else the runtime is running, costing more on a busy one than
+        // the concurrency gains.
+        let incoming = Arc::new(Mutex::new(incoming));
+        let fetch = Arc::new(fetch);
+        for worker in 0..workers.max(1) {
+            let incoming = Arc::clone(&incoming);
+            let fetch = Arc::clone(&fetch);
+            let handle = handle.clone();
+            std::thread::Builder::new()
+                .name(format!("marina-range-fetch-{worker}"))
+                .spawn(move || {
+                    loop {
+                        // Ends when the last `NetworkFetcher` is dropped and the
+                        // channel closes, so no thread outlives its users. The
+                        // queue lock is released before blocking on the fetch.
+                        let request = {
+                            let queue =
+                                incoming.lock().unwrap_or_else(|error| error.into_inner());
+                            match queue.recv() {
+                                Ok(request) => request,
+                                Err(_) => break,
+                            }
+                        };
+                        let result =
+                            handle.block_on(fetch(request.path, request.offset, request.len));
+                        // A gone receiver means the reader stopped caring.
+                        // Nothing to do but drop the bytes.
+                        let _ = request.reply.send(result);
+                    }
+                })
+                .expect("the range-fetch thread should start");
+        }
         Self { requests }
     }
 }
@@ -628,6 +719,111 @@ mod tests {
             let end = (start + len as usize).min(self.bytes.len());
             Ok(self.bytes[start..end].to_vec())
         }
+    }
+
+    /// Records how many fetches overlap, and makes overlap the fast path.
+    ///
+    /// Each call parks until `want` peers have arrived. A pool that runs them
+    /// side by side releases them all at once. A serialised one waits out the
+    /// deadline, opens the gate for good, and leaves `peak` at one, so the
+    /// assertion fails instead of the suite hanging.
+    struct ConcurrentFetcher {
+        bytes: Vec<u8>,
+        want: usize,
+        gate: Arc<(Mutex<Overlap>, Condvar)>,
+    }
+
+    #[derive(Default)]
+    struct Overlap {
+        now: usize,
+        peak: usize,
+        open: bool,
+    }
+
+    impl RangeFetcher for ConcurrentFetcher {
+        fn fetch(&self, _path: &str, offset: u64, len: u32) -> Result<Vec<u8>> {
+            // Block 0 is read on demand by the reader itself, before any
+            // readahead is scheduled, so it is always alone. Gating it would
+            // just time out and open the gate before the pool ever starts.
+            if offset > 0 {
+                self.wait_for_peers();
+            }
+            let start = offset as usize;
+            let end = (start + len as usize).min(self.bytes.len());
+            Ok(self.bytes[start..end].to_vec())
+        }
+    }
+
+    impl ConcurrentFetcher {
+        fn wait_for_peers(&self) {
+            let (lock, changed) = &*self.gate;
+            {
+                let mut state = lock.lock().unwrap();
+                state.now += 1;
+                state.peak = state.peak.max(state.now);
+                if state.peak >= self.want {
+                    // Proven. Let the rest of the read run at full speed rather
+                    // than parking the tail blocks, which have no peers left.
+                    state.open = true;
+                }
+                changed.notify_all();
+                let deadline = std::time::Duration::from_secs(5);
+                let start = std::time::Instant::now();
+                while !state.open && state.now < self.want {
+                    let remaining = match deadline.checked_sub(start.elapsed()) {
+                        Some(remaining) if !remaining.is_zero() => remaining,
+                        _ => {
+                            // Serialised: give up and let everything through so
+                            // the test reports a bad `peak` instead of hanging.
+                            state.open = true;
+                            changed.notify_all();
+                            break;
+                        }
+                    };
+                    let (next, _) = changed.wait_timeout(state, remaining).unwrap();
+                    state = next;
+                }
+                state.now -= 1;
+            }
+        }
+    }
+
+    /// The point of the pool: several range requests on the wire at once.
+    ///
+    /// With one in flight, throughput is a block per round trip however deep
+    /// the readahead queue is: 1 MiB per 100 ms is 10 MB/s regardless of the
+    /// link. This is the property that stops that, so it is worth a test that
+    /// fails if the pool is ever serialised again.
+    #[test]
+    fn several_block_fetches_are_outstanding_at_once() {
+        const WANT: usize = 4;
+        let block_bytes = 64;
+        let bytes = payload(block_bytes * 32);
+        let size = bytes.len() as u64;
+        let gate = Arc::new((Mutex::new(Overlap::default()), Condvar::new()));
+
+        let mut remote = RemoteFile::new(
+            Arc::new(ConcurrentFetcher {
+                bytes: bytes.clone(),
+                want: WANT,
+                gate: Arc::clone(&gate),
+            }),
+            "concurrent.mcap",
+            size,
+        )
+        .with_block_bytes(block_bytes)
+        .with_readahead(8)
+        .with_inflight_blocks(WANT);
+
+        let mut read = Vec::new();
+        remote.read_to_end(&mut read).unwrap();
+        assert_eq!(read, bytes, "concurrency must not change what is read");
+
+        let peak = gate.0.lock().unwrap().peak;
+        assert!(
+            peak >= WANT,
+            "expected {WANT} fetches in flight at once, saw at most {peak}"
+        );
     }
 
     fn payload(len: usize) -> Vec<u8> {

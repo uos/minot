@@ -16,46 +16,67 @@ use crate::{
     net::{PacketKind, Qos, sanitize_key},
 };
 
-/// One in-flight asynchronously dispatched send, identified by target *and*
-/// variable. Covers every mode where `Qos::dispatch_is_async` holds, so both
-/// `TryReliable` and `BestEffort`.
+/// Asynchronously dispatched sends, bounded by target *and* variable. Covers
+/// every mode where `Qos::dispatch_is_async` holds, so both `TryReliable` and
+/// `BestEffort`.
 ///
 /// Keying on the target alone would make every variable sent to one ship share
-/// a single slot for the whole network round trip, so two publishes in the same
-/// frame would starve each other: the loser is dropped before serialization.
-/// That is invisible on loopback, where the first send completes in
-/// microseconds, and deterministic over WiFi.
+/// one budget for the whole network round trip, so two publishes in the same
+/// frame would starve each other. That is invisible on loopback, where the
+/// first send completes in microseconds, and deterministic over WiFi.
 type AsyncSendKey = (String, String);
 
-struct AsyncSendGuard {
-    key: AsyncSendKey,
-    in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
+/// How many sends of one variable may be on the wire to one ship at once.
+///
+/// The bound exists for fairness between variables. Concurrency here is safe:
+/// each send is an independent Zenoh query carrying its own reply channel, and
+/// the receiver appends to a per-id buffer, so several may be in flight without
+/// interfering.
+///
+/// It was one, which suits a stream of samples. On a request/response topic
+/// every request shares a single variable name, so one meant a second request
+/// could never be on the wire beside the first, and before this became a wait
+/// it was silently thrown away.
+const MAX_CONCURRENT_SENDS_PER_KEY: usize = 8;
+
+/// How many further sends may wait for a slot before a caller is refused.
+///
+/// Refusing matters here. A caller told "no" can retry in milliseconds, where a
+/// caller whose message was dropped in silence waits out its own timeout, 30 s
+/// for a `mt_service` request, for an answer that can never come.
+const MAX_QUEUED_SENDS_PER_KEY: usize = 32;
+
+/// The send budget for one key: permits for what is on the wire, and a count of
+/// what is waiting for a permit.
+#[derive(Clone, Debug)]
+struct SendSlots {
+    permits: Arc<tokio::sync::Semaphore>,
+    waiting: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl AsyncSendGuard {
-    fn try_acquire(
-        in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
-        target_ship_name: String,
-        variable_name: String,
-    ) -> Option<Self> {
-        let key = (target_ship_name, variable_name);
-        if !in_flight.lock().unwrap().insert(key.clone()) {
-            return None;
+impl SendSlots {
+    fn new() -> Self {
+        Self {
+            permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SENDS_PER_KEY)),
+            waiting: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
-        Some(Self { key, in_flight })
     }
 }
 
-impl Drop for AsyncSendGuard {
+/// Counts a send that is queued for a permit, for as long as it is queued.
+struct QueuedSend(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for QueuedSend {
     fn drop(&mut self) {
-        self.in_flight.lock().unwrap().remove(&self.key);
+        self.0
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
 #[derive(Debug)]
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
-    /// Time of the last heartbeat, deliberately independent of application
+    /// Time of the last heartbeat, kept independent of application
     /// traffic. A busy Wind producer still needs heartbeat echoes to prove its
     /// coordinator connection to the client-side liveness detector.
     pub last_heartbeat: Arc<tokio::sync::Mutex<Instant>>,
@@ -67,7 +88,7 @@ pub struct NetworkShipImpl {
     /// (target, variable) pairs that already have one asynchronous delivery in
     /// progress. A new message for a busy pair is dropped before serialization.
     /// other variables to the same target are unaffected.
-    async_sends_in_flight: Arc<std::sync::Mutex<HashSet<AsyncSendKey>>>,
+    async_sends_in_flight: Arc<std::sync::Mutex<HashMap<AsyncSendKey, SendSlots>>>,
     /// Cached routing decisions pushed by the coordinator.
     route_cache: Arc<std::sync::RwLock<HashMap<String, (crate::Action, bool)>>>,
     /// Active peer-monitor tasks: ship_name → abort handle.
@@ -104,27 +125,6 @@ impl crate::Cannon for NetworkShipImpl {
 
             let target_mode = target.node_mode;
             if target_mode.dispatch_is_async() {
-                // Guard per (target, variable): one delivery of this variable to
-                // this ship at a time. Keying on the target alone would let two
-                // variables published in the same frame starve each other for a
-                // whole network round trip.
-                let Some(send_guard) = AsyncSendGuard::try_acquire(
-                    Arc::clone(&self.async_sends_in_flight),
-                    target_ship_name.clone(),
-                    variable_name.to_string(),
-                ) else {
-                    debug!(
-                        "Dropping {:?} message '{}' for '{}': send already in progress",
-                        target_mode, variable_name, target_ship_name
-                    );
-                    continue;
-                };
-                let (session, domain_id) = {
-                    let c = self.client.lock().await;
-                    (c.session(), c.domain_id())
-                };
-                let variable_name = variable_name.to_string();
-                let data_bytes = Arc::clone(&data_bytes);
                 // Both modes dispatch off the caller's thread so a slow link can
                 // never wedge a publisher's loop. They differ in what happens on
                 // the wire: BestEffort tries once, TryReliable retries until its
@@ -137,7 +137,81 @@ impl crate::Cannon for NetworkShipImpl {
                     ),
                     _ => (Duration::from_secs(5), false),
                 };
+
+                // Bounded per (target, variable), so two variables published in
+                // the same frame cannot starve each other.
+                let slots = {
+                    let mut in_flight = self.async_sends_in_flight.lock().unwrap();
+                    in_flight
+                        .entry((target_ship_name.clone(), variable_name.to_string()))
+                        .or_insert_with(SendSlots::new)
+                        .clone()
+                };
+
+                // A free slot is the ordinary case: send now, wait for nothing.
+                let ready = Arc::clone(&slots.permits).try_acquire_owned().ok();
+                let queued = match &ready {
+                    Some(_) => None,
+                    None if !is_reliable_mode => {
+                        // A sampled stream would rather lose this one than
+                        // deliver it late, since the next sample is worth more.
+                        debug!(
+                            "Dropping {:?} message '{}' for '{}': send already in progress",
+                            target_mode, variable_name, target_ship_name
+                        );
+                        continue;
+                    }
+                    None => {
+                        // TryReliable: nobody else will resend this, so wait
+                        // for a slot. The wait happens in the spawned task
+                        // below, off the caller's loop.
+                        let waiting = slots
+                            .waiting
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if waiting >= MAX_QUEUED_SENDS_PER_KEY {
+                            slots
+                                .waiting
+                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            // Refused so the caller can retry now, instead of
+                            // waiting out a timeout for nothing.
+                            return Err(anyhow!(
+                                "too many sends of '{}' already queued for '{}' ({} on the wire, \
+                                 {} waiting)",
+                                variable_name,
+                                target_ship_name,
+                                MAX_CONCURRENT_SENDS_PER_KEY,
+                                waiting
+                            ));
+                        }
+                        Some(QueuedSend(Arc::clone(&slots.waiting)))
+                    }
+                };
+
+                let (session, domain_id) = {
+                    let c = self.client.lock().await;
+                    (c.session(), c.domain_id())
+                };
+                let variable_name = variable_name.to_string();
+                let data_bytes = Arc::clone(&data_bytes);
+                let permits = Arc::clone(&slots.permits);
                 self.runtime_handle.spawn(async move {
+                    let _permit = match ready {
+                        Some(permit) => permit,
+                        None => {
+                            // Counted as waiting only while actually waiting.
+                            let _queued = queued;
+                            match tokio::time::timeout(send_budget, permits.acquire_owned()).await {
+                                Ok(Ok(permit)) => permit,
+                                _ => {
+                                    warn!(
+                                        "{:?} send '{}' to '{}' gave up waiting for a send slot",
+                                        target_mode, variable_name, target_ship_name
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    };
                     let send = async {
                         if is_reliable_mode {
                             Client::send_raw_network_bounded(
@@ -169,7 +243,7 @@ impl crate::Cannon for NetworkShipImpl {
                         // What failed and to whom is the whole of what a
                         // warning is for here. The chain underneath is Zenoh
                         // describing a query that timed out, which says nothing
-                        // a reader of the warning did not already know — and a
+                        // a reader of the warning did not already know, and a
                         // peer going away turns every publisher into a source
                         // of it at once.
                         Ok(Err(e)) => {
@@ -187,7 +261,6 @@ impl crate::Cannon for NetworkShipImpl {
                             target_mode, variable_name, target_ship_name
                         ),
                     }
-                    drop(send_guard);
                 });
             } else {
                 let client = self.client.lock().await;
@@ -350,7 +423,7 @@ impl crate::Cannon for NetworkShipImpl {
 #[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<(crate::Action, bool)> {
-        // Fast path — use cached route if available (coordinator pushes updates proactively).
+        // Fast path: use cached route if available (coordinator pushes updates proactively).
         // Bypassed for ShipKind::Rat so VariableTaskRequest always reaches the coordinator
         // (required for TUI catch, comparison loop, and RatAction{Shoot} delivery).
         if !self.bypass_cache {
@@ -527,9 +600,8 @@ async fn ping_peer(session: &zenoh::Session, key: &str) -> anyhow::Result<()> {
 /// Continuously ping a peer and send `PeerDead` to the coordinator after
 /// `PEER_DEAD_THRESHOLD` consecutive failures.
 ///
-/// The cancellation token belongs to the *observer*, not the peer being
-/// checked. It is therefore only an input that stops this task when the
-/// observer shuts down. Cancelling it because another peer missed heartbeats
+/// The cancellation token belongs to the *observer*. It is only an input that
+/// stops this task when the observer shuts down. Cancelling it because another peer missed heartbeats
 /// would make a server kill itself whenever a client disappears.
 async fn monitor_peer(
     session: Arc<zenoh::Session>,
@@ -586,7 +658,7 @@ async fn monitor_peer(
 /// publishes a new generation, and everything holding a publisher or subscriber
 /// re-establishes itself against the new registration.
 ///
-/// The coordinator is already built for this — a `JoinRequest` from a name it
+/// The coordinator is already built for this: a `JoinRequest` from a name it
 /// knows aborts the stale handler and rejoins, and rules for a node that does
 /// not remove them on exit are still there when it comes back.
 #[allow(clippy::too_many_arguments)]
@@ -693,8 +765,8 @@ impl NetworkShipImpl {
     /// `DISCONNECT_TIMEOUT_MS` and tears down the task that answers its variable
     /// requests, so a ship that only speaks when it has something to say hangs
     /// forever on its next request after a long pause. Every ship must run this,
-    /// and exactly once: `init` deliberately does not start it, so the owner of
-    /// the `Arc` decides. The task ends when the connection is lost.
+    /// and exactly once. `init` leaves it unstarted so the owner of the `Arc`
+    /// decides. The task ends when the connection is lost.
     ///
     /// Cost is one small control message per `HEARTBEAT_INTERVAL_MS`. The
     /// heartbeat uses its own real-time-priority publisher and bounded channel.
@@ -878,7 +950,7 @@ impl NetworkShipImpl {
             }
             Ok(Err(e)) => return Err(e),
             Err(_elapsed) => {
-                // No coordinator found — call the provided startup function and retry
+                // No coordinator found, so call the provided startup function and retry
                 if let Some(start_coord) = start_coord.take() {
                     start_coord(Some(torpedo_tx)).await?;
                 }
@@ -922,7 +994,7 @@ impl NetworkShipImpl {
             }
         });
 
-        let async_sends_in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let async_sends_in_flight = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
         let route_cache = Arc::new(std::sync::RwLock::new(HashMap::<
             String,
@@ -1073,7 +1145,7 @@ impl NetworkShipImpl {
                                     continue;
                                 }
                                 Err(_) => {
-                                    // Channel closed — abort all peer monitors and exit
+                                    // Channel closed, so abort all peer monitors and exit
                                     let mut monitors = peer_monitor_bg.write().unwrap();
                                     for (_, handle) in monitors.drain() {
                                         handle.abort();
@@ -1185,24 +1257,46 @@ mod tests {
     }
 
     #[test]
-    fn async_send_guard_allows_only_one_message_per_target_and_variable() {
-        let in_flight = Arc::new(std::sync::Mutex::new(HashSet::new()));
-        let acquire = |ship: &str, var: &str| {
-            AsyncSendGuard::try_acquire(Arc::clone(&in_flight), ship.to_string(), var.to_string())
+    fn send_slots_allow_several_of_one_variable_without_starving_another() {
+        let in_flight: Arc<std::sync::Mutex<HashMap<AsyncSendKey, SendSlots>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let slots = |ship: &str, var: &str| {
+            in_flight
+                .lock()
+                .unwrap()
+                .entry((ship.to_string(), var.to_string()))
+                .or_insert_with(SendSlots::new)
+                .clone()
         };
 
-        let first = acquire("scope", "cloud").expect("first send should start");
+        // Several sends of one variable may be on the wire at once. A
+        // request/response topic, where every request shares one variable name,
+        // makes no progress past one round trip at a time without this.
+        let cloud = slots("scope", "cloud");
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_SENDS_PER_KEY {
+            held.push(
+                Arc::clone(&cloud.permits)
+                    .try_acquire_owned()
+                    .expect("a slot under the limit should be free"),
+            );
+        }
+        // But only up to the limit, so one variable cannot take the link.
+        assert!(
+            Arc::clone(&cloud.permits).try_acquire_owned().is_err(),
+            "the per-key limit must still bound what one variable can occupy"
+        );
 
-        // Same target and same variable: still one at a time.
-        assert!(acquire("scope", "cloud").is_none());
         // A different variable to the same target must not be starved by it.
-        let delta = acquire("scope", "delta").expect("other variable should not contend");
-        // A different target is independent as before.
-        assert!(acquire("other", "cloud").is_some());
+        let delta = slots("scope", "delta");
+        assert!(Arc::clone(&delta.permits).try_acquire_owned().is_ok());
+        // A different target is independent, as before.
+        let other = slots("other", "cloud");
+        assert!(Arc::clone(&other.permits).try_acquire_owned().is_ok());
 
-        drop(first);
-        assert!(acquire("scope", "cloud").is_some());
-        drop(delta);
+        // A finished send frees its slot for whoever is waiting.
+        held.pop();
+        assert!(Arc::clone(&cloud.permits).try_acquire_owned().is_ok());
     }
 
     #[test]

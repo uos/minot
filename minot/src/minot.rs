@@ -47,7 +47,7 @@ use bytesize::ByteSize;
 
 #[derive(Parser, Debug)]
 #[command(version, about, author, long_about = None)]
-/// Minot — A versatile toolset for debugging and verifying stateful robot perception software.
+/// Minot: a versatile toolset for debugging and verifying stateful robot perception software.
 pub(crate) struct Args {
     #[command(subcommand)]
     pub command: Commands,
@@ -962,7 +962,7 @@ async fn async_play(
 
     // Keep exactly one signal listener alive for the command's whole lifetime.
     // Previously Ctrl-C was only observed while sleeping between messages, so
-    // a signal during a remote read or publish was simply lost.
+    // a signal during a remote read or publish was lost.
     let stop = tokio_util::sync::CancellationToken::new();
     let stop_on_signal = stop.clone();
     tokio::spawn(async move {

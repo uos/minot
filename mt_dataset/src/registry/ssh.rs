@@ -386,7 +386,7 @@ impl SshRegistry {
     ///
     /// This is what makes `marina serve` reachable across machines. The server
     /// binds loopback only because Minot carries no authentication of its own,
-    /// so the SSH connection *is* the security boundary — and the credentials
+    /// so the SSH connection *is* the security boundary, and the credentials
     /// are the ones already configured for this registry, so nothing new has to
     /// be set up.
     ///
@@ -611,7 +611,7 @@ impl SshRegistry {
         if let Ok(ch) = handle.channel_open_session().await {
             return Ok(ch);
         }
-        // Stale connection — reconnect once
+        // Stale connection, so reconnect once
         let handle = self.get_handle_fresh().await?;
         handle
             .channel_open_session()
@@ -886,7 +886,7 @@ impl SshRegistry {
                 if secret_path.exists() {
                     cmd.arg("-i").arg(secret_path);
                 } else if self.transport == SshTransport::OpenSsh {
-                    // The OpenSSH transport is intentionally non-interactive in Marina.
+                    // The OpenSSH transport is non-interactive in Marina.
                     // Password auth would require sshpass/askpass plumbing, so keep it explicit.
                     cmd.arg("-o").arg("IdentitiesOnly=yes");
                 }
@@ -1549,7 +1549,7 @@ fn parse_authority(authority: &str) -> Result<(String, u16)> {
                 .with_context(|| format!("invalid ssh port '{}'", right))?;
             return Ok((left.to_string(), port));
         }
-        // Trailing colon with no port (e.g. "host:/path") — strip the colon
+        // Trailing colon with no port (e.g. "host:/path"), so strip the colon
         if right.is_empty() {
             return Ok((left.to_string(), 22));
         }

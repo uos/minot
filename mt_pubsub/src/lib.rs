@@ -25,7 +25,7 @@ pub enum CoordMode {
 pub struct NodeConfig {
     name: String,
     /// Delivery mode. `Reliable` is fatal: if this node dies, the run is
-    /// torpedoed. `TryReliable` and `BestEffort` are not — their loss leaves
+    /// torpedoed. `TryReliable` and `BestEffort` are not, so their loss leaves
     /// the rest of the system running. See `Qos` for the full split.
     mode: Qos,
     /// Controls coordinator startup behavior.
@@ -53,7 +53,7 @@ impl NodeConfig {
     /// Use timing suited to a link that is expected to wobble, and reconnect
     /// when it drops. Shorthand for `.options(NodeOptions::wan())`.
     ///
-    /// Note this does not by itself make a `Qos::Reliable` node resilient —
+    /// Note this does not by itself make a `Qos::Reliable` node resilient:
     /// that QoS is fatal by contract. Pair it with `Qos::TryReliable`.
     pub fn wan(mut self) -> Self {
         self.options = NodeOptions::wan();
@@ -419,7 +419,7 @@ impl Node {
 
                     // The link came back on a new registration. Whatever the
                     // coordinator knew about this subscription belonged to the
-                    // old one, so establish it again and carry on — the caller's
+                    // old one, so establish it again and carry on. The caller's
                     // `Subscriber` never noticed.
                     generation = reconnects.recv() => {
                         match generation {
@@ -487,10 +487,10 @@ impl Node {
                             Ok(None) => {}
                             Err(e) => {
                                 // Never fatal. A fetch fails for the whole
-                                // window around a disconnect — including the
+                                // window around a disconnect, including the
                                 // moment *before* the supervisor has noticed,
                                 // so `is_connected()` is not a reliable test
-                                // here — and killing the subscription then
+                                // here. Killing the subscription then
                                 // would defeat the reconnect it is about to
                                 // get. The subscription ends when the node
                                 // shuts down, which for a non-reconnecting node
@@ -578,8 +578,8 @@ impl Node {
 
     /// Returns a token that is cancelled when this node is finished.
     ///
-    /// For a node that reconnects, this fires only on a real shutdown — an
-    /// explicit close or a torpedo — not on a transient link loss. Watch
+    /// For a node that reconnects, this fires only on a real shutdown: an
+    /// explicit close or a torpedo, never on a transient link loss. Watch
     /// [`Node::connection`] to observe the link itself.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()

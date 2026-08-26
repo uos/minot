@@ -1,8 +1,8 @@
 //! The log pane: a scrollable, wrapping view of a [`LogBuffer`]'s entries.
 //!
 //! The pane knows nothing about which entries deserve to be on screen. The
-//! caller filters — by target, by source tag, by whatever its own toggles
-//! say — and hands over what is left, each entry paired with the index it has
+//! caller filters (by target, by source tag, by whatever its own toggles
+//! say) and hands over what is left, each entry paired with the index it has
 //! in the caller's own list. Scroll positions are entry indices, so a
 //! filtered-out entry must not renumber the rest.
 //!

@@ -6,7 +6,7 @@
 //! process mid-stream and assert that the publisher and subscriber the caller
 //! is holding keep working once it comes back.
 //!
-//! The coordinator runs as a subprocess precisely so it can be `SIGKILL`ed —
+//! The coordinator runs as a subprocess precisely so it can be `SIGKILL`ed,
 //! an embedded one shares this process and cannot be killed the way a real
 //! network partition kills it.
 
@@ -101,7 +101,7 @@ impl Drop for Coordinator {
 
 /// Locate the `minot` binary built alongside this test.
 ///
-/// Returns `None` when it was not built — the coordinator lives in the `minot`
+/// Returns `None` when it was not built. The coordinator lives in the `minot`
 /// package, which is not a dependency of this one, so `cargo test -p mt_pubsub`
 /// on its own will not have produced it.
 fn coordinator_binary() -> Option<std::path::PathBuf> {
@@ -168,7 +168,7 @@ async fn node_survives_a_coordinator_restart() {
 
     // Registration only proves the coordinator was reachable at that instant.
     // Wait until it has actually echoed a heartbeat, because that is when the
-    // node's disconnect detector arms — killing the coordinator before then
+    // node's disconnect detector arms, so killing the coordinator before then
     // tests nothing.
     assert!(
         wait_until(Duration::from_secs(30), || connection.is_link_proven()).await,
@@ -274,7 +274,7 @@ async fn coordinator_that_never_answers_is_still_noticed() {
     .await
     .expect("node should register with the running coordinator");
 
-    // Killed immediately — deliberately without waiting for the link to be
+    // Killed immediately, without waiting for the link to be
     // proven, so the detector is still unarmed.
     let connection = node.connection();
     coordinator.kill().await;

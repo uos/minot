@@ -62,7 +62,7 @@ pub enum RmwQosReliabilityPolicy {
     SystemDefault = 0,
     /// Guarantee that samples are delivered, may retry multiple times.
     Reliable = 1,
-    /// Attempt to deliver samples, but some may be lost if the network is not robust
+    /// Attempt to deliver samples, but some may be lost if the network is unreliable
     BestEffort = 2,
     /// Reliability policy has not yet been set
     Unknown = 3,

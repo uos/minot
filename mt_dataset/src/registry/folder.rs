@@ -157,6 +157,13 @@ impl RegistryDriver for FolderRegistry {
         }))
     }
 
+    /// A folder registry's bundle is an ordinary file on this machine, so a
+    /// reader can use it where it lies instead of copying it first.
+    fn local_bundle(&self, bag: &BagRef) -> Option<PathBuf> {
+        let path = self.data_path(bag);
+        path.is_file().then_some(path)
+    }
+
     async fn pull(&self, bag: &BagRef, out_packed_file: &Path) -> Result<RemoteDescriptor> {
         let src = self.data_path(bag);
         if !src.exists() {

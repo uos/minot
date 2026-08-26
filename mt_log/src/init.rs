@@ -55,10 +55,10 @@ pub fn init_filtered(
 /// at info, which buries everything a run is actually about.
 pub const QUIET_ZENOH: &[(&str, log::LevelFilter)] = &[
     ("zenoh", log::LevelFilter::Warn),
-    // Held at error, not off. These narrate their normal operation and are
+    // Held at error, still enabled. These narrate their normal operation and are
     // worth nothing at warn, but a module that has genuinely failed still has
     // something to say, and silencing it wholesale is how a real fault turns
-    // into a process that merely stops working with no explanation.
+    // into a process that stops working with no explanation.
     ("zenoh::api::admin", log::LevelFilter::Error),
     ("zenoh::api::session", log::LevelFilter::Error),
     ("zenoh::net::routing::hat::peer", log::LevelFilter::Error),

@@ -1,7 +1,7 @@
 //! A `log` implementation for a process whose status view owns the terminal.
 //!
 //! Records go to the buffer the pane draws while the view holds the screen,
-//! and to stderr in the house format while it does not — so a run that fails
+//! and to stderr in the house format while it does not, so a run that fails
 //! before the view opens still says why.
 //!
 //! Filtering goes through `env_filter`, the same engine `env_logger` uses, so

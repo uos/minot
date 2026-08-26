@@ -79,6 +79,35 @@ where
         F: Fn(REQ) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<RES, String>> + Send + 'static,
     {
+        Self::start_concurrent(this, callback, 1).await
+    }
+
+    /// As [`ServiceServer::start`], but answering up to `max_concurrent` of a
+    /// single client's requests at a time.
+    ///
+    /// [`ServiceServer::start`] answers one request per client at a time, so a
+    /// slow one blocks everything queued behind it. That costs nothing while
+    /// every request is quick. Once one is slow, a client asking for something
+    /// cheap gets no answer until the long operation it happens to be sharing a
+    /// connection with has finished.
+    ///
+    /// The cost is ordering: responses may be published in a different order
+    /// than the requests arrived, and two of a client's requests may run at
+    /// once. A caller whose requests mutate shared state as a sequence (stage,
+    /// write, commit) must either keep one such request in flight at a time, or
+    /// serialise them itself. Requests that only read are unaffected.
+    ///
+    /// `max_concurrent` bounds the work one client can have running, so a
+    /// client cannot queue unbounded tasks onto the runtime. One is exactly
+    /// [`ServiceServer::start`].
+    pub async fn start_concurrent<F, Fut>(
+        this: Arc<Self>,
+        callback: Arc<F>,
+        max_concurrent: usize,
+    ) where
+        F: Fn(REQ) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<RES, String>> + Send + 'static,
+    {
         // once started these should stay locked for the entire runtime
         let mut subber = this.subber.lock().await;
         let mut clients = this.clients.lock().await;
@@ -97,6 +126,7 @@ where
                     client.to_owned(),
                     rx,
                     callback.clone(),
+                    max_concurrent,
                 ));
             }
 
@@ -125,9 +155,10 @@ where
         client: Uuid,
         mut requests: mpsc::Receiver<RequestMessage<REQ>>,
         callback: Arc<F>,
+        max_concurrent: usize,
     ) where
-        F: Fn(REQ) -> Fut + Send + Sync,
-        Fut: Future<Output = Result<RES, String>>,
+        F: Fn(REQ) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<RES, String>> + Send + 'static,
     {
         let pubber: Publisher<(u64, Result<RES, String>)> = match node
             .create_publisher(
@@ -143,26 +174,43 @@ where
             }
         };
 
+        let pubber = Arc::new(pubber);
+        // The permit is what bounds a client's work here. At one it waits for
+        // each answer before taking the next request, which is the original
+        // strictly-sequential behaviour.
+        let limit = Arc::new(tokio::sync::Semaphore::new(max_concurrent.max(1)));
+
         while let Some(message) = requests.recv().await {
-            // Deserialize on the per-client task to keep the server dispatcher free.
-            let (_, seq_num, request) = match message.deserialize() {
-                Ok(request) => request,
-                Err(e) => {
-                    error!("Discarding malformed request from {}: {}", client, e);
-                    continue;
-                }
+            // Acquired before spawning, so a client that floods us waits here
+            // instead of piling tasks onto the runtime.
+            let permit = match Arc::clone(&limit).acquire_owned().await {
+                Ok(permit) => permit,
+                // Only if the semaphore were closed, which nothing does while
+                // this loop holds it.
+                Err(_) => break,
             };
-            let response = (seq_num, callback(request).await);
-            match pubber.publish(&response).await {
-                Ok(_) => {}
-                Err(e) => {
+            let pubber = Arc::clone(&pubber);
+            let callback = Arc::clone(&callback);
+            let client = client.to_owned();
+            tokio::spawn(async move {
+                let _permit = permit;
+                // Deserialize here to keep the server dispatcher free.
+                let (_, seq_num, request) = match message.deserialize() {
+                    Ok(request) => request,
+                    Err(e) => {
+                        error!("Discarding malformed request from {}: {}", client, e);
+                        return;
+                    }
+                };
+                let response = (seq_num, callback(request).await);
+                if let Err(e) = pubber.publish(&response).await {
                     error!(
                         "Error publishing response to {}: {}",
                         &client.to_string(),
                         e
                     );
                 }
-            }
+            });
         }
     }
 }
@@ -218,7 +266,7 @@ impl<RES: Sendable> PendingResponses<RES> {
 }
 
 /// Turn what the dispatcher delivered into the response the caller asked for.
-/// Runs on the awaiting task, not on the dispatch loop.
+/// Runs on the awaiting task, keeping the dispatch loop free.
 fn decode_response<RES: Sendable>(delivered: DeliveredResponse<RES>) -> Result<RES, String> {
     let (_, payload) = delivered?
         .deserialize()

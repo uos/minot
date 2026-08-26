@@ -1,6 +1,6 @@
 //! Spike: characterise the byte-range access pattern of a full bag read.
 //!
-//! MCAP parsing in `mt_bagread` is sans-io — it asks for byte ranges and is
+//! MCAP parsing in `mt_bagread` is sans-io. It asks for byte ranges and is
 //! handed the bytes. That makes reading a bag on another machine possible, but
 //! only if the access pattern is friendly: a few large sequential requests are
 //! fine over a 200 ms link, a million small random ones are not.
@@ -221,7 +221,7 @@ fn main() -> anyhow::Result<()> {
 
     // Model: every request costs one round trip when issued serially. With a
     // readahead window of W, W requests are in flight at once, so the latency
-    // cost is amortised across the window. Bandwidth is deliberately ignored —
+    // cost is amortised across the window. Bandwidth is ignored here,
     // this isolates the question the spike is asking, which is whether latency
     // alone sinks the approach.
     let total_requests = (summary_requests + message_requests.len()) as f64;

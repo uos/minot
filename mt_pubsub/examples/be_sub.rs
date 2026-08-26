@@ -12,7 +12,7 @@ use ros2_interfaces_jazzy_rkyv::std_msgs::msg;
 async fn main() -> anyhow::Result<()> {
     mt_sea::init_logging();
 
-    // The node itself can be reliable — BE is per-subscription, not per-node.
+    // The node itself can be reliable. BE is per-subscription, never per-node.
     let node = Node::create(NodeConfig::new("reliable_node_with_be_sub")).await?;
 
     let mut subber = node

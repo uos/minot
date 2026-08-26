@@ -233,7 +233,7 @@ impl GDriveRegistry {
             }
         }
 
-        // Cache miss — resolve via existing paths
+        // Cache miss, so resolve via existing paths
         let result = if let Some((token, exp)) = gdrive_auth::get_access_token(&self.name).await? {
             Some((format!("Bearer {}", token), exp))
         } else if let Some(var) = &self.token_env {
@@ -1226,7 +1226,7 @@ impl RegistryDriver for GDriveRegistry {
     async fn list_with_info(&self, filter: &str) -> Result<Vec<(BagRef, Option<BagInfo>)>> {
         let pattern = Pattern::new(filter).or_else(|_| Pattern::new("*"))?;
 
-        // Query metadata files once — each one contains both bag identity and encoding info.
+        // Query metadata files once. Each one contains both bag identity and encoding info.
         let q = format!(
             "'{}' in parents and trashed = false and name contains '.metadata.json'",
             self.folder_id

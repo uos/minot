@@ -7,7 +7,7 @@ pub mod ship;
 pub use net::Qos;
 
 // ---------------------------------------------------------------------------
-// Timing constants — these values are interdependent.
+// Timing constants. These values are interdependent.
 // When changing one, check all others marked with the same group tag.
 // ---------------------------------------------------------------------------
 
@@ -40,7 +40,7 @@ pub struct NodeOptions {
     pub timing: Timing,
     /// What to do when the coordinator link drops. `None` derives it from the
     /// node's QoS via [`ReconnectPolicy::for_qos`], which is almost always what
-    /// you want — override only to force a `Reliable` node to give up sooner,
+    /// you want. Override only to force a `Reliable` node to give up sooner,
     /// or to pin a resilient node to `Never` for a deterministic test.
     pub reconnect: Option<ReconnectPolicy>,
 }
@@ -76,8 +76,8 @@ impl NodeOptions {
 ///
 /// A node's connection can come back. The [`ShipKind`] registration, the
 /// channels to the coordinator, and the coordinator's own handler for this
-/// client are all rebuilt on a reconnect, but the *node* — and every publisher
-/// and subscriber the caller is holding — stays alive across it.
+/// client are all rebuilt on a reconnect, but the *node* (and every publisher
+/// and subscriber the caller is holding) stays alive across it.
 ///
 /// Each successful registration is a **generation**. Long-lived tasks watch the
 /// generation. When it changes, the
@@ -132,7 +132,7 @@ impl ConnectionState {
     ///
     /// Registration only proves the coordinator was reachable at that instant.
     /// This becomes true once it echoes a heartbeat, which is also the point at
-    /// which the node's own disconnect detector arms — before then, a
+    /// which the node's own disconnect detector arms. Before then, a
     /// coordinator that dies cannot be noticed. Wait on this when you need the
     /// link to be established and ready for traffic.
     pub fn is_link_proven(&self) -> bool {
@@ -178,7 +178,7 @@ impl ConnectionState {
             + 1;
         self.connected
             .store(true, std::sync::atomic::Ordering::Release);
-        // No receivers is normal — nothing is currently holding a subscription.
+        // No receivers is normal, since nothing is currently holding a subscription.
         let _ = self.announce.send(generation);
         generation
     }
@@ -234,8 +234,8 @@ impl ReconnectPolicy {
 ///
 /// The constants above are the defaults, chosen for a LAN-attached replay rig
 /// where a node that goes quiet for 800 ms really has died. They are far too
-/// tight for a link that is expected to wobble — an SSH tunnel to a robot on
-/// cellular, a laptop roaming between access points — where a one-second hiccup
+/// tight for a link that is expected to wobble: an SSH tunnel to a robot on
+/// cellular, or a laptop roaming between access points, where a one-second hiccup
 /// is normal and must not be read as a death.
 ///
 /// A node carries its own `Timing` and tells the coordinator about it when it

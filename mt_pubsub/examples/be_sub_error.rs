@@ -4,20 +4,20 @@ use ros2_interfaces_jazzy_rkyv::std_msgs::msg;
 /// Demonstrates the runtime error when subscribing reliably to a best-effort publisher.
 ///
 /// A reliable subscriber expects guaranteed delivery, but a best-effort publisher
-/// cannot guarantee that — so the coordinator rejects the combination at registration time.
+/// cannot guarantee that, so the coordinator rejects the combination at registration time.
 ///
 /// Fix: pass Qos::BestEffort to create_subscriber (see second subscriber below).
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     mt_sea::init_logging();
 
-    // BE publisher node — registers /sensor as a best-effort-published topic.
+    // BE publisher node: registers /sensor as a best-effort-published topic.
     let be_node = Node::create(NodeConfig::new("be_publisher").mode(Qos::BestEffort)).await?;
     let _pubber = be_node
         .create_publisher::<msg::String>("/sensor".to_owned(), Qos::BestEffort)
         .await?;
 
-    // Reliable subscriber node — tries to subscribe reliably to a BE-published topic.
+    // Reliable subscriber node: tries to subscribe reliably to a BE-published topic.
     let reliable_node = Node::create(NodeConfig::new("reliable_subscriber")).await?;
 
     let result = reliable_node

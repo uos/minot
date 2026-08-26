@@ -775,7 +775,7 @@ impl Client {
             .expect("Failed to create coordinator subscriber");
 
         // Heartbeats have their own high-priority publisher/subscriber pair.
-        // They deliberately bypass coordinator_send and the ordinary packet
+        // They bypass coordinator_send and the ordinary packet
         // publisher so a full wind/data queue cannot delay liveness.
         let heartbeat_publisher = self
             .session
@@ -844,7 +844,7 @@ impl Client {
         let (reg_done_tx, mut reg_done_rx) = tokio::sync::oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            // Phase 1: no timeout during registration / wait_for_ack — duration is unbounded
+            // Phase 1: no timeout during registration / wait_for_ack, duration is unbounded
             loop {
                 tokio::select! {
                     result = coord_subscriber.recv_async() => {
@@ -883,9 +883,9 @@ impl Client {
             // Phase 2: the coordinator must echo this node's heartbeats within its
             // configured disconnect timeout.
             //
-            // The full timeout cannot be applied straight away — the first echo
+            // The full timeout cannot be applied straight away, because the first echo
             // cannot arrive until the client has sent its first heartbeat, up to
-            // one heartbeat interval later — so the detector arms on that first
+            // one heartbeat interval later, so the detector arms on that first
             // echo. But "wait for an echo that may never come" cannot be the
             // whole story either: a coordinator that dies seconds after
             // welcoming this node, before ever answering it, would otherwise
@@ -1023,7 +1023,7 @@ impl Client {
                 .map_err(|e| anyhow!("Failed to send join request: {}", e))?;
 
             // Wait for welcome - use a timeout to retry join requests
-            // This is acceptable as it's just for retrying discovery, not for correctness
+            // This is acceptable as it's just for retrying discovery and not for correctness
             let timeout =
                 tokio::time::timeout(std::time::Duration::from_millis(500), welcome_sub.recv())
                     .await;
@@ -1047,7 +1047,7 @@ impl Client {
                             Self::wait_for_ack(welcome_sub).await?;
                         }
 
-                        // Registration fully complete — switch receive task to timeout mode
+                        // Registration fully complete, so switch receive task to timeout mode
                         let _ = reg_done_tx.send(());
                         return Ok(disconnect_rx);
                     }
@@ -1195,7 +1195,7 @@ impl Client {
     /// which retries without any deadline and so can spin forever against a
     /// target that never answers. Here a delivery that cannot land within
     /// `TRY_RELIABLE_SEND_BUDGET_MS` fails on its own and the caller carries
-    /// on — the same trade a ROS 2 DDS reliable writer makes when it exhausts
+    /// on. This is the same trade a ROS 2 DDS reliable writer makes when it exhausts
     /// `max_blocking_time`.
     pub async fn send_raw_network_bounded(
         session: std::sync::Arc<zenoh::Session>,

@@ -16,7 +16,7 @@ pub struct CacheEntry {
     pub bag: BagRef,
     pub local_dir: PathBuf,
     pub packed_bytes: u64,
-    // original_bytes is intentionally absent — always derived from the local
+    // original_bytes is absent here, always derived from the local
     // directory via discover_bag so it stays accurate after a recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_hash: Option<String>,

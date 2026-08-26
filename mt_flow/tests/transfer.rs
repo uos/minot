@@ -1,6 +1,6 @@
 //! A flow must deliver every byte, in order, across a link that breaks.
 //!
-//! The coordinator runs as a subprocess so it can be `SIGKILL`ed mid-transfer —
+//! The coordinator runs as a subprocess so it can be `SIGKILL`ed mid-transfer,
 //! an embedded one shares the test process and cannot be killed the way a real
 //! partition kills it.
 
@@ -167,7 +167,7 @@ async fn a_multi_chunk_payload_arrives_intact() {
 }
 
 /// The headline: kill the coordinator mid-transfer and the flow finishes anyway,
-/// with the payload byte-identical. Nothing is restarted by the caller — the
+/// with the payload byte-identical. Nothing is restarted by the caller, since the
 /// nodes reconnect themselves and the flow resumes from the receiver's
 /// watermark.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -200,7 +200,7 @@ async fn a_transfer_survives_a_coordinator_restart() {
         chunk_bytes: 16 * 1024,
         window_chunks: 4,
         window_interval: Duration::from_millis(50),
-        // Generous: the whole point is to ride out a coordinator that is gone
+        // Generous, because this rides out a coordinator that is gone
         // for seconds.
         stall_timeout: Duration::from_secs(90),
         retransmit_after: Duration::from_millis(300),

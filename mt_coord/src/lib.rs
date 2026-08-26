@@ -333,7 +333,7 @@ fn run_coordinator_with_ready(
                                     .insert(name.clone(), client.node_mode);
                                 let mut client_news = client.recv.subscribe();
                                 // Each client tells us at join time how patient to be
-                                // with it — a node on a wobbly link asks for more than
+                                // with it, since a node on a wobbly link asks for more than
                                 // one on the LAN. See `mt_sea::Timing`.
                                 let client_idle_timeout = tokio::time::Duration::from_millis(
                                     client.disconnect_timeout_ms,
@@ -1303,7 +1303,7 @@ fn run_coordinator_with_ready(
 ///
 /// Acquires an exclusive lock file at `/tmp/minot-coord.lock`.
 /// Returns `true` if the coordinator was started, `false` if one was already running.
-/// Idempotent: safe to call concurrently — only one will win the lock.
+/// Idempotent: safe to call concurrently, as only one will win the lock.
 pub fn try_start_with_rules(
     locked_start: bool,
     clients: HashSet<String>,
@@ -1368,7 +1368,7 @@ fn current_user_id() -> u64 {
 /// Start a coordinator with empty rules.
 ///
 /// Idempotent: does nothing if a coordinator is already running.
-/// Safe to call from any async context — spawns background tasks and returns immediately.
+/// Safe to call from any async context. Spawns background tasks and returns immediately.
 pub fn start_default() {
     try_start_with_rules(false, HashSet::new(), Rules::new(), None);
 }

@@ -285,7 +285,7 @@ fn metadata_from_summary(summary: &Summary) -> Metadata {
 ///
 /// MCAP parsing here is sans-io: the reader asks for byte ranges
 /// (`ReadChunkRequest`, `SeekRequest`) and is handed the bytes. Anything that
-/// can seek and read can therefore back a bag — a local file, an in-memory
+/// can seek and read can therefore back a bag: a local file, an in-memory
 /// buffer, or a range-fetching client for a dataset on another machine.
 ///
 /// `Send + Sync` because a `Bagfile` is routinely shared across threads behind
@@ -1126,7 +1126,7 @@ impl Bagfile {
                             let mcap_path = path.join(&mcap_file.path);
                             (mcap_path, Some(bag_info))
                         } else {
-                            // No metadata — find the first .mcap in the directory.
+                            // No metadata, so find the first .mcap in the directory.
                             let mcap_path = fs::read_dir(&path)
                                 .with_context(|| format!("Cannot read directory {:?}", path))?
                                 .filter_map(|e| e.ok())
@@ -1161,7 +1161,7 @@ impl Bagfile {
 
     /// Returns the next message from the bag in chronological order, or `None` at end of bag.
     /// The first `u64` is nanoseconds since the start of the bag, the second is the bag timestamp.
-    /// O(1) memory — exactly one message is deserialized per call.
+    /// O(1) memory: exactly one message is deserialized per call.
     pub fn next_message_with_timestamp(&mut self) -> anyhow::Result<Option<(u64, u64, BagMsg)>> {
         if let Some(reader) = self.reader.as_mut() {
             let file = self

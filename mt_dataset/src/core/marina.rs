@@ -757,8 +757,8 @@ impl Marina {
 
     /// Make a dataset available locally, streaming it when the registry can.
     ///
-    /// The result is the same as [`Marina::pull_exact_with_progress`] — a local
-    /// directory, registered in the catalog — but the route differs. A registry
+    /// The result is the same as [`Marina::pull_exact_with_progress`], a local
+    /// directory registered in the catalog, but the route differs. A registry
     /// that supports byte-range reads is streamed block by block, which means:
     ///
     /// - interrupted transfers resume from their saved position, and
@@ -1019,7 +1019,7 @@ impl Marina {
         #[cfg(feature = "minot-registry")]
         let mut stream_attempted = false;
 
-        // An explicit registry is an instruction, not merely a search filter:
+        // An explicit registry is an instruction to use that registry:
         // `PreferStream` must consult it before the local catalog. This is what
         // lets callers compare or test a remote copy even when the same bag is
         // already cached. Concrete filesystem paths keep their local fast path.

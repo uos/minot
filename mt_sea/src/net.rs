@@ -83,9 +83,9 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
 ///
 /// Two independent axes are encoded here, and they are easy to confuse:
 ///
-/// * **Wire QoS** — how Zenoh carries the bytes ([`Qos::reliability`],
+/// * **Wire QoS**: how Zenoh carries the bytes ([`Qos::reliability`],
 ///   [`Qos::congestion_control`]).
-/// * **Failure policy** — what the rest of the system does when this node stops
+/// * **Failure policy**: what the rest of the system does when this node stops
 ///   answering ([`Qos::is_monitored`], [`Qos::fires_torpedo`],
 ///   [`Qos::removes_rules_on_exit`]).
 ///
@@ -104,7 +104,7 @@ pub enum Qos {
     /// while peers remain connected.
     /// Sends are dispatched off the caller's thread, so a slow or roaming link
     /// cannot wedge the publisher's loop. Intended for links where latency is
-    /// unpredictable — WiFi viewers, tablets, anything off the LAN.
+    /// unpredictable: WiFi viewers, tablets, anything off the LAN.
     TryReliable,
     /// Unreliable single-attempt delivery, dropped under congestion, non-fatal.
     /// For high-rate streams where the next sample is worth more than this one.

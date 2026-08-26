@@ -3,12 +3,12 @@ use ros2_interfaces_jazzy_rkyv::std_msgs::msg;
 
 /// Demonstrates best-effort subscriber behaviour: packet drops and publisher resilience.
 ///
-/// Runs entirely in one process — no second terminal needed.
+/// Runs entirely in one process, so no second terminal is needed.
 ///
 /// Phases:
 ///   1. Publisher + BE subscriber both live. Subscriber prints received seq numbers.
 ///   2. Subscriber is dropped (simulates a crashed/disconnected node).
-///      Publisher keeps publishing — packets are silently dropped at the coordinator.
+///      Publisher keeps publishing, and packets are silently dropped at the coordinator.
 ///   3. A new BE subscriber reconnects. It starts receiving again from wherever
 ///      the publisher is now, proving the messages sent during the gap were lost.
 ///

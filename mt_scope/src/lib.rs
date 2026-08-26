@@ -294,7 +294,7 @@ impl Scope {
         } else {
             let all_lost: Vec<_> = clients.difference(&clients_current).cloned().collect();
 
-            // Filter out nonfatal nodes — losing BestEffort or TryReliable
+            // Filter out nonfatal nodes, since losing BestEffort or TryReliable
             // clients is routine and must not trigger a Torpedo.
             let best_effort = BEST_EFFORT_CLIENTS
                 .get()

@@ -13,7 +13,7 @@
 //!
 //! # The window is also the resume protocol
 //!
-//! There is deliberately no separate `Resume` message. The receiver periodically
+//! There is no separate `Resume` message. The receiver periodically
 //! publishes a [`Window`] carrying two numbers: everything it has received
 //! contiguously (`ack_through`), and how far the sender may run ahead
 //! (`grant_through`). The sender always sends from `ack_through + 1`.
@@ -26,8 +26,8 @@
 //! # QoS
 //!
 //! Flows run at [`Qos::TryReliable`], never `Qos::Reliable`. A `Reliable` node
-//! is fatal by contract — peers monitor it and its death torpedoes the run — so
-//! a laptop pulling a dataset over bad WiFi must never be one.
+//! is fatal by contract, because peers monitor it and its death torpedoes the
+//! run. A laptop pulling a dataset over bad WiFi must never be one.
 
 use anyhow::{Context, Result, anyhow};
 use log::{debug, warn};
@@ -47,7 +47,7 @@ pub struct Chunk {
 
 /// The receiver's view of the stream: what it has, and what it will take.
 ///
-/// Idempotent and self-superseding — losing one costs nothing.
+/// Idempotent and self-superseding, so losing one costs nothing.
 #[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Window {
     /// Highest sequence received with no gaps before it. The sender may forget
@@ -65,7 +65,7 @@ pub struct FlowConfig {
     /// so 1 MiB means one bag chunk is usually one flow chunk.
     pub chunk_bytes: usize,
     /// How many chunks the receiver lets the sender run ahead. This is the
-    /// latency/memory trade: at 200 ms RTT a window of 32 hides essentially all
+    /// latency/memory trade: at 200 ms RTT a window of 32 hides almost all
     /// of the round-trip cost, at the price of holding that many chunks on each
     /// side.
     pub window_chunks: u64,
@@ -123,7 +123,7 @@ fn window_topic(flow: &str) -> String {
 /// Publish, treating a failure while the link is down as "not yet".
 ///
 /// A flow exists to survive disconnects, so the errors a disconnect produces
-/// are the normal case, not the exceptional one. A dropped chunk stays in the
+/// are the normal case here. A dropped chunk stays in the
 /// retain buffer and the repair timer sends it again once the link is back.
 async fn publish_tolerantly<T: mt_sea::Sendable>(
     publisher: &Publisher<T>,
@@ -148,7 +148,7 @@ async fn publish_tolerantly<T: mt_sea::Sendable>(
 /// sender may run, and which chunks are still replayable.
 ///
 /// Split out from [`FlowSender`] with no transport in it, because this is where
-/// the subtle rules live — a stale window must never move a watermark backwards,
+/// the subtle rules live: a stale window must never move a watermark backwards,
 /// and a resume must never be promised for a chunk that has already been
 /// dropped. Direct tests cover these transitions precisely.
 #[derive(Debug)]
@@ -283,13 +283,13 @@ impl FlowSender {
     /// receiver's watermark whenever the link drops and returns.
     ///
     /// `source` is asked for bytes by absolute offset because a resume can move
-    /// the read position backwards — the receiver's watermark, not the sender's
+    /// the read position backwards. The watermark is the receiver's, never the sender's
     /// progress, decides where the stream is.
     ///
     /// The loop has one rule that is easy to get wrong: **a window whose
     /// watermark has not moved is a loss report.** It is the only one the
     /// protocol has. A sender that only ever waits for credit to send *new*
-    /// chunks will deadlock the moment a single chunk is dropped — the receiver
+    /// chunks will deadlock the moment a single chunk is dropped, because the receiver
     /// cannot advance past the gap, so the grant freezes, so the sender waits
     /// forever for credit while the one chunk that would unblock everything sits
     /// in its retain buffer. Retransmission has to be driven by the timer below,
@@ -387,7 +387,7 @@ impl FlowSender {
                 Ok(Some(window)) => self.window.apply(window),
                 Ok(None) => {
                     // The subscription ended. With reconnect enabled this means
-                    // the node is really gone, not merely disconnected.
+                    // the node is really gone and not just disconnected.
                     return Err(anyhow!("flow: the receiver's window channel closed"));
                 }
                 // Not an error: falling through re-runs the repair step, which
@@ -494,7 +494,7 @@ impl FlowReceiver {
     ///
     /// The window is republished on a timer as well as on progress, which is
     /// what lets a transfer recover from a disconnect without either side
-    /// having to detect one: the sender simply hears an older watermark than it
+    /// having to detect one: the sender hears an older watermark than it
     /// expected and replays from there.
     pub async fn receive_all<K>(&mut self, sink: &mut K) -> Result<u64>
     where

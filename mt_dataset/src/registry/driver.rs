@@ -65,6 +65,22 @@ pub trait RegistryDriver: Send + Sync {
 
     async fn remove(&self, bag: &BagRef) -> Result<()>;
 
+    /// The bundle as a file this process can already read, when the registry
+    /// keeps it on a filesystem this machine has.
+    ///
+    /// `None`, the default, means reaching the bundle is a transfer and
+    /// [`RegistryDriver::pull`] is the only way to get it. A caller that only
+    /// wants to *read* the bundle can use this to skip copying a file that is
+    /// already here. For a folder registry `pull` is a whole-file copy, so on
+    /// the serving path that copy is a full extra read and write of every byte
+    /// before any of the real work starts.
+    ///
+    /// The path belongs to the registry. Read it, and never write, move or
+    /// delete it.
+    fn local_bundle(&self, _bag: &BagRef) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Fetch lightweight metadata for a specific bag. Returns `None` if unsupported.
     async fn bag_info(&self, _bag: &BagRef) -> Result<Option<BagInfo>> {
         Ok(None)

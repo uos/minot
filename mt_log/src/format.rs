@@ -305,8 +305,8 @@ mod wire {
 /// JSON is tried first when the child speaks it, and text otherwise: a
 /// leading `[LEVEL]` gives the level, a following `[Source]` gives the
 /// process, and a `target:` token gives the module. A line with no tag at all
-/// is guessed at by looking for a level word, which is worth doing — an error
-/// from a child is exactly what a reader scanning for red is looking for —
+/// is guessed at by looking for a level word, which is worth doing (an error
+/// from a child is exactly what a reader scanning for red is looking for),
 /// but only ever as the last resort.
 pub fn parse(line: &str) -> Record {
     let line = sanitize(line.to_owned());
@@ -336,8 +336,8 @@ pub fn parse(line: &str) -> Record {
 /// Pull the source and target out of a record's message, wherever the record
 /// came from.
 ///
-/// A relayed line arrives with its origin written into the text — Pelorus
-/// re-emits Minot's records as `[Minot] app: read bag`, tagged as its own —
+/// A relayed line arrives with its origin written into the text. Pelorus
+/// re-emits Minot's records as `[Minot] app: read bag`, tagged as its own,
 /// and the innermost process is the one the reader needs, so the last tag on
 /// the front wins. A target whose first segment repeats that source says
 /// nothing the tag did not: `[Minot] minot::app:` is `[Minot] app:`.

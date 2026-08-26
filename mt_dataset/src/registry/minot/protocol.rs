@@ -1,7 +1,7 @@
 //! Wire types shared by `marina serve` and the `minot://` registry driver.
 //!
-//! Both ends are the same binary — one running as a server on the machine that
-//! holds the data, one running as a client — so there is no separate protocol
+//! Both ends are the same binary, one running as a server on the machine that
+//! holds the data and one running as a client, so there is no separate protocol
 //! crate. What matters is that these types are the *only* thing crossing the
 //! link. [`Hello`] reports version mismatches with a useful message.
 //!
@@ -163,7 +163,7 @@ pub enum Request {
     /// Ranges travel in the reply. Flows move large resumable objects. A
     /// random-access reader issues *thousands* of small requests, and flow
     /// setup for each would cost far more
-    /// than it saves. These are idempotent, so a failed range is simply asked
+    /// than it saves. These are idempotent, so a failed range is asked
     /// for again.
     ReadRange {
         bag: WireBagRef,
@@ -226,7 +226,7 @@ pub enum Response {
     },
     Stat {
         files: Vec<WireFile>,
-        /// False when the dataset cannot be read by range — a sqlite3 bag,
+        /// False when the dataset cannot be read by range, such as a sqlite3 bag,
         /// which needs a real file on disk. The client falls back to a pull.
         streamable: bool,
         /// Why not, when `streamable` is false. Shown to the user.

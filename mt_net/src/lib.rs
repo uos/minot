@@ -242,7 +242,7 @@ impl Rules {
                     // Case 1: Client is the main ship performing an action. Remove the rule.
                     match &rule.strategy {
                         Some(ActionPlan::Shoot { target, id: _ }) if !target.is_empty() => {
-                            // The client was the shooter, the targets were effectively subscribers
+                            // The client was the shooter, and the targets acted as subscribers
                             cache_registrations_from_store
                                 .entry(variable.clone())
                                 .or_default()
