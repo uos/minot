@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use glob::Pattern;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use russh::ChannelMsg;
 use russh::client::{self, Config, Handle};
 use russh::keys::PrivateKeyWithHashAlg;
@@ -26,6 +25,7 @@ const REMOTE_FORWARD_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
 use crate::model::bag_ref::BagRef;
 use crate::registry::driver::{BagInfo, PushMeta, RegistryDriver, RemoteDescriptor};
+use crate::registry::transfer_progress::transfer_bar;
 use crate::storage::cache::MirrorFile;
 
 pub struct SshRegistry {
@@ -1571,24 +1571,4 @@ fn split_user_host(user_host: &str) -> Result<(String, String)> {
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-fn transfer_bar(total: u64, message: &str) -> ProgressBar {
-    let pb = if total > 0 {
-        ProgressBar::new(total)
-    } else {
-        ProgressBar::new_spinner()
-    };
-    if !std::io::stdout().is_terminal() {
-        pb.set_draw_target(ProgressDrawTarget::hidden());
-    }
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec} eta {eta}",
-        )
-        .unwrap_or_else(|_| ProgressStyle::default_bar()),
-    );
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
-    pb.set_message(message.to_string());
-    pb
 }

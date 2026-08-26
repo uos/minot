@@ -1,5 +1,4 @@
 use std::fs::{self, OpenOptions};
-use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -7,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use glob::Pattern;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::ProgressBar;
 use regex::Regex;
 use reqwest::Client;
 use reqwest::StatusCode;
@@ -21,6 +20,7 @@ use futures::future::join_all;
 use crate::model::bag_ref::BagRef;
 use crate::registry::driver::{BagInfo, PushMeta, RegistryDriver, RemoteDescriptor};
 use crate::registry::gdrive_auth;
+use crate::registry::transfer_progress::transfer_bar;
 use crate::storage::config::RegistryDownloadMode;
 
 const DRIVE_FILES_API: &str = "https://www.googleapis.com/drive/v3/files";
@@ -983,33 +983,16 @@ impl GDriveRegistry {
             .with_context(|| format!("download failed: {}", title))?
             .content_length()
             .unwrap_or(0);
-        let pb = if total > 0 {
-            let pb = ProgressBar::new(total);
-            if !std::io::stdout().is_terminal() {
-                pb.set_draw_target(ProgressDrawTarget::hidden());
-            }
-            pb.set_style(
-                ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
-                    .unwrap_or_else(|_| ProgressStyle::default_bar()),
-            );
-            pb.set_message(title.to_string());
-            Some(pb)
-        } else {
-            Some(spinner(title))
-        };
+        let pb = transfer_bar(total, title);
 
         let mut file = fs::File::create(out)
             .with_context(|| format!("failed creating output file {}", out.display()))?;
         use std::io::Write;
         while let Some(chunk) = resp.chunk().await? {
             file.write_all(&chunk)?;
-            if let Some(pb) = &pb {
-                pb.inc(chunk.len() as u64);
-            }
+            pb.inc(chunk.len() as u64);
         }
-        if let Some(pb) = pb {
-            pb.finish_and_clear();
-        }
+        pb.finish_and_clear();
         Ok(())
     }
 
@@ -1387,38 +1370,6 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn spinner(message: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    if !std::io::stdout().is_terminal() {
-        pb.set_draw_target(ProgressDrawTarget::hidden());
-    }
-    pb.set_style(
-        ProgressStyle::with_template("{spinner} {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner())
-            .tick_chars("|/-\\ "),
-    );
-    pb.set_message(message.to_string());
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
-    pb
-}
-
-fn transfer_bar(total: u64, message: &str) -> ProgressBar {
-    let pb = if total > 0 {
-        ProgressBar::new(total)
-    } else {
-        ProgressBar::new_spinner()
-    };
-    if !std::io::stdout().is_terminal() {
-        pb.set_draw_target(ProgressDrawTarget::hidden());
-    }
-    pb.set_style(
-        ProgressStyle::with_template("{msg} [{bar:40.green/blue}] {bytes}/{total_bytes} ({eta})")
-            .unwrap_or_else(|_| ProgressStyle::default_bar()),
-    );
-    pb.set_message(message.to_string());
-    pb
 }
 
 fn public_file_regex() -> &'static Regex {

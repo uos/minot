@@ -9,6 +9,7 @@ pub mod http;
 pub mod minot;
 pub mod ssh;
 pub mod stub;
+mod transfer_progress;
 
 #[cfg(feature = "minot-registry")]
 pub use driver::StreamingDriver;

@@ -1,18 +1,18 @@
 use std::fs::{self, OpenOptions};
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use glob::Pattern;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
 
 use crate::model::bag_ref::BagRef;
 use crate::registry::driver::{PushMeta, RegistryDriver, RemoteDescriptor};
+use crate::registry::transfer_progress::transfer_bar;
 
 #[derive(Debug, Clone)]
 pub struct HttpRegistry {
@@ -156,37 +156,10 @@ impl HttpRegistry {
             .map(|n| n + existing)
             .or(size_hint)
             .unwrap_or(0);
-        let hidden = !std::io::stdout().is_terminal();
-        let pb = if total > 0 {
-            let pb = ProgressBar::new(total);
-            if hidden {
-                pb.set_draw_target(ProgressDrawTarget::hidden());
-            }
-            pb.set_style(
-                ProgressStyle::with_template(
-                    "{msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
-                )
-                .unwrap_or_else(|_| ProgressStyle::default_bar()),
-            );
-            pb.set_message(title.to_string());
-            if existing > 0 {
-                pb.set_position(existing.min(total));
-            }
-            Some(pb)
-        } else {
-            let pb = ProgressBar::new_spinner();
-            if hidden {
-                pb.set_draw_target(ProgressDrawTarget::hidden());
-            }
-            pb.set_style(
-                ProgressStyle::with_template("{spinner} {msg} {bytes} {bytes_per_sec}")
-                    .unwrap_or_else(|_| ProgressStyle::default_spinner())
-                    .tick_chars("|/-\\ "),
-            );
-            pb.set_message(title.to_string());
-            pb.enable_steady_tick(std::time::Duration::from_millis(100));
-            Some(pb)
-        };
+        let pb = transfer_bar(total, title);
+        if existing > 0 {
+            pb.set_position(existing.min(total));
+        }
 
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent)?;
@@ -206,13 +179,9 @@ impl HttpRegistry {
         while let Some(chunk) = resp.chunk().await? {
             file.write_all(&chunk)?;
             downloaded += chunk.len() as u64;
-            if let Some(pb) = &pb {
-                pb.inc(chunk.len() as u64);
-            }
+            pb.inc(chunk.len() as u64);
         }
-        if let Some(pb) = pb {
-            pb.finish_and_clear();
-        }
+        pb.finish_and_clear();
         Ok(downloaded)
     }
 
