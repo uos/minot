@@ -52,7 +52,10 @@ impl Rat {
             ShipKind::Rat(name.to_string()),
             false,
             mt_sea::Qos::Reliable,
-            mt_sea::NodeOptions::default(),
+            // Rat traffic is what the comparison node reads, and it is told
+            // about a variable only when a ship asks the coordinator for that
+            // variable's route. So this path must never answer from the cache.
+            mt_sea::NodeOptions::default().with_route_cache_bypassed(),
         );
 
         let ship = match timeout {

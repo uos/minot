@@ -43,6 +43,15 @@ pub struct NodeOptions {
     /// you want. Override only to force a `Reliable` node to give up sooner,
     /// or to pin a resilient node to `Never` for a deterministic test.
     pub reconnect: Option<ReconnectPolicy>,
+    /// Always ask the coordinator for a route, never answer from the cache.
+    ///
+    /// Asking has a side effect: the coordinator also hands the comparison node
+    /// its Catch route for that variable, and nothing else delivers it. So a
+    /// node carrying variables minot compares must keep asking, and only those
+    /// nodes need to. Everything else pays a coordinator round trip per publish
+    /// for nothing, which on a streaming path is the dominant cost and floods
+    /// the shared broadcast the answers come back on.
+    pub bypass_route_cache: bool,
 }
 
 impl NodeOptions {
@@ -52,7 +61,16 @@ impl NodeOptions {
         Self {
             timing: Timing::wan(),
             reconnect: Some(ReconnectPolicy::always()),
+            bypass_route_cache: false,
         }
+    }
+
+    /// Keep asking the coordinator for every route. See
+    /// [`NodeOptions::bypass_route_cache`]; set by nodes whose variables the
+    /// comparison node reads.
+    pub fn with_route_cache_bypassed(mut self) -> Self {
+        self.bypass_route_cache = true;
+        self
     }
 
     pub fn with_timing(mut self, timing: Timing) -> Self {

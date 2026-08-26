@@ -492,48 +492,72 @@ impl crate::Ship for NetworkShipImpl {
             // Send the request
             sender.send(action_request).await?;
 
-            // Wait for the response matching our variable
-            loop {
-                match sub.recv().await {
-                    Ok((packet, _)) => {
-                        match packet.data {
-                            PacketKind::RatAction {
-                                variable,
-                                action,
-                                lock_until_ack,
-                            } => {
-                                // Cache every RatAction we see (background task also does this,
-                                // but caching here covers the first-call slow path).
-                                self.route_cache
-                                    .write()
-                                    .unwrap()
-                                    .insert(variable.clone(), (action.clone(), lock_until_ack));
-                                if variable == variable_name {
-                                    return Ok((action, lock_until_ack));
+            // Wait for the response matching our variable.
+            //
+            // Bounded, and with a fallback on lag, because the reply exists in
+            // exactly one place: this broadcast stream. The channel holds 256
+            // packets, and a receiver that falls behind has the oldest dropped
+            // and gets `Lagged`. Those packets are gone for this receiver, so a
+            // reply among them never arrives, and an unbounded wait here then
+            // hangs the caller for good: `publish` never returns, the range
+            // request is never sent, the fetch thread blocks on its reply
+            // channel, and the block a reader is waiting on stays pending
+            // forever. The stream stops dead with no error and no timeout.
+            //
+            // Lag needs a burst, so this is rare with one request in flight and
+            // reachable with several.
+            let answer = async {
+                loop {
+                    match sub.recv().await {
+                        Ok((packet, _)) => {
+                            match packet.data {
+                                PacketKind::RatAction {
+                                    variable,
+                                    action,
+                                    lock_until_ack,
+                                } => {
+                                    // Cache every RatAction we see (background task also does this,
+                                    // but caching here covers the first-call slow path).
+                                    self.route_cache
+                                        .write()
+                                        .unwrap()
+                                        .insert(variable.clone(), (action.clone(), lock_until_ack));
+                                    if variable == variable_name {
+                                        return Ok((action, lock_until_ack));
+                                    }
+                                    // Wrong variable, keep waiting
                                 }
-                                // Wrong variable, keep waiting
-                            }
-                            PacketKind::RegistrationError(msg) => {
-                                return Err(anyhow!("{}", msg));
-                            }
-                            _ => {
-                                // Not a RatAction or RegistrationError, keep waiting
+                                PacketKind::RegistrationError(msg) => {
+                                    return Err(anyhow!("{}", msg));
+                                }
+                                _ => {
+                                    // Not a RatAction or RegistrationError, keep waiting
+                                }
                             }
                         }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        log::warn!(
-                            "ask_for_action receiver lagged by {} messages, continuing",
-                            n
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(anyhow!(
-                            "Could not receive answer for variable question from coordinator: {e}"
-                        ));
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // The dropped packets are gone for this receiver,
+                            // and the answer may have been one of them. Nothing
+                            // here can get it back, so this only keeps waiting
+                            // and lets the deadline below end it.
+                            log::warn!("ask_for_action receiver lagged by {n} messages");
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(anyhow!(
+                                "Could not receive answer for variable question from coordinator: {e}"
+                            ));
+                        }
                     }
                 }
+            };
+
+            let deadline = self.timing.registration_timeout();
+            match timeout(deadline, answer).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow!(
+                    "no routing answer for '{variable_name}' from the coordinator within {deadline:?}"
+                )),
             }
         } else {
             drop(client);
@@ -1032,7 +1056,11 @@ impl NetworkShipImpl {
             tokio::task::AbortHandle,
         >::new()));
 
-        let bypass_cache = matches!(kind, ShipKind::Rat(_));
+        // Set by the node, not inferred from its kind. Every `mt_pubsub`,
+        // `mt_scope` and `mt_rat` ship is a `ShipKind::Rat`, so inferring it
+        // here made the whole system ask the coordinator for a route on every
+        // publish when only the comparison path needs that.
+        let bypass_cache = options.bypass_route_cache;
 
         let ship = Self {
             client,
