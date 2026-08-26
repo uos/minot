@@ -53,22 +53,31 @@ pub const DEFAULT_READAHEAD_BLOCKS: usize = 16;
 
 /// How many block fetches may be outstanding at once.
 ///
-/// **One until concurrent range reads are proven on a real link.** Four was
-/// tried and broke streaming against a live server within a second, twice, in a
-/// way no loopback test reproduces: a 192 MiB sustained stream over a served
-/// folder registry passes here at any setting.
-///
-/// The reason to want more than one: readahead depth alone does not fill a
-/// high-latency link. With one request in flight, throughput is one block per
-/// round trip however deep the queue is, so 1 MiB per 100 ms is 10 MB/s
-/// whatever the link can carry. Four concurrent fetches put ~4 MiB on the wire,
-/// past the ~2 MB channel window an SSH tunnel allows, which would make the
-/// transport the limit instead of this client.
+/// Readahead depth alone does not fill a high-latency link. With one request in
+/// flight, throughput is one block per round trip however deep the queue is, so
+/// 1 MiB per 100 ms is 10 MB/s whatever the link can carry. Four concurrent
+/// fetches put ~4 MiB on the wire, past the ~2 MB channel window an SSH tunnel
+/// allows, so the transport bounds throughput instead of this client.
 ///
 /// Raising the block size would do the same arithmetic, but block size is a
 /// correctness property here (see the module docs) and a bigger block makes
 /// every cold seek wait longer. Extra requests in flight cost a seek nothing.
-pub const DEFAULT_INFLIGHT_BLOCKS: usize = 1;
+///
+/// # Known failure against a live server
+///
+/// Four in flight has twice stopped a real stream within about a second, and no
+/// loopback test reproduces it: a 192 MiB sustained stream over a served folder
+/// registry passes at any setting. The leading explanation is a retry storm.
+/// Each range response is a 1 MiB payload sent with
+/// `TRY_RELIABLE_ATTEMPT_TIMEOUT_MS` of 500 ms per attempt inside a 3 s budget.
+/// On loopback a megabyte lands in about a millisecond and nothing retries. On a
+/// tunnelled link four concurrent megabytes share one ~2 MB SSH window, each
+/// attempt takes roughly four times as long as one alone, and crossing 500 ms
+/// resends the whole megabyte into the congestion that caused the timeout.
+///
+/// That is a theory, not a capture. Fixing it means scaling the attempt timeout
+/// to the payload size, not lowering this number.
+pub const DEFAULT_INFLIGHT_BLOCKS: usize = 4;
 
 /// Fetches byte ranges for a [`RemoteFile`].
 ///
