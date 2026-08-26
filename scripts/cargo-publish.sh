@@ -10,7 +10,6 @@ cd "${ROOT_DIR}"
 DRY_RUN=0
 ALLOW_DIRTY="--allow-dirty"
 EXTRA_ARGS=()
-
 for arg in "$@"; do
     if [ "$arg" = "--dry-run" ]; then
         DRY_RUN=1
@@ -67,6 +66,8 @@ PACKAGES=(
     "mt_coord"
     "mt_pubsub"
     "mt_service"
+    "mt_flow"
+    "mt_dataset"
     "mt_action"
     "mt_wind"
     "mt_rat"

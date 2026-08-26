@@ -717,7 +717,7 @@ pub enum WindMode {
     ActiveSelect,
 }
 
-struct StreamedDataset(marina::registry::minot::RemoteDataset);
+struct StreamedDataset(mt_dataset::registry::minot::RemoteDataset);
 
 impl std::fmt::Debug for StreamedDataset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -844,7 +844,7 @@ async fn promote_streamed_dataset(wind_cursor: &Arc<RwLock<WindCursor>>) {
     let bag = dataset.0.bag().to_string();
     info!("Completing and promoting streamed Marina dataset {bag}");
     let result = tokio::task::spawn_blocking(move || {
-        let mut progress = marina::ProgressReporter::silent();
+        let mut progress = mt_dataset::ProgressReporter::silent();
         dataset.0.materialize(&mut progress)
     })
     .await;

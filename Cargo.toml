@@ -11,6 +11,7 @@ members = [
   "mt_wind",
   "mt_net",
   "mt_flow",
+  "mt_dataset",
   "mt_service",
   "mt_action",
   "mt_scope",
@@ -52,10 +53,10 @@ mt_scope = { path = "mt_scope", version = "0.10.0", default-features = false }
 mt_bagread = { path = "mt_bagread", version = "0.10.0", default-features = false }
 mt_net = { path = "mt_net", version = "0.10.0", default-features = false }
 mt_flow = { path = "mt_flow", version = "0.10.0", default-features = false }
+mt_dataset = { path = "mt_dataset", version = "0.10.0", default-features = false }
 mt_wind = { path = "mt_wind", version = "0.10.0", default-features = false }
 mt_mtc = { path = "mt_mtc", version = "0.10.0", default-features = false }
 mt_log = { path = "mt_log", version = "0.10.0", default-features = false }
-marina = { path = "../marina", default-features = false, features = ["minot-registry"] }
 
 # Tools
 anyhow = "1.0"

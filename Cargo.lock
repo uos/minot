@@ -402,6 +402,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3703,48 +3709,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marina"
-version = "0.3.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "cdr",
- "clap",
- "clap_complete",
- "cloudini",
- "ctrlc",
- "dirs",
- "env_logger",
- "flate2",
- "futures",
- "glob",
- "humantime",
- "indicatif",
- "libc",
- "log",
- "mcap",
- "mt_flow",
- "mt_pubsub",
- "mt_sea",
- "mt_service",
- "ratslang",
- "reqwest 0.13.4",
- "rkyv 0.8.18",
- "ros2-interfaces-jazzy-serde",
- "ros_pointcloud2",
- "rpassword",
- "russh",
- "russh-sftp",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tar",
- "tempfile",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3861,9 +3825,9 @@ dependencies = [
  "futures",
  "heck",
  "log",
- "marina",
  "mt_bagread",
  "mt_coord",
+ "mt_dataset",
  "mt_log",
  "mt_mtc",
  "mt_net",
@@ -4023,6 +3987,54 @@ dependencies = [
  "mt_scope",
  "mt_sea",
  "tokio",
+]
+
+[[package]]
+name = "mt_dataset"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.23.1",
+ "cdr",
+ "clap",
+ "clap_complete",
+ "cloudini",
+ "ctrlc",
+ "dirs",
+ "env_logger",
+ "flate2",
+ "futures",
+ "glob",
+ "humantime",
+ "indicatif",
+ "libc",
+ "log",
+ "mcap",
+ "mt_flow",
+ "mt_pubsub",
+ "mt_sea",
+ "mt_service",
+ "nalgebra",
+ "rand 0.10.2",
+ "ratslang",
+ "regex",
+ "reqwest 0.13.4",
+ "ring",
+ "rkyv 0.8.18",
+ "ros2-interfaces-jazzy-serde",
+ "ros_pointcloud2",
+ "rpassword",
+ "rusqlite",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tar",
+ "tempfile",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]

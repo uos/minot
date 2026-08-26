@@ -865,7 +865,7 @@ impl Drop for NetworkSettingsGuard {
 
 pub(crate) struct OpenedPlaybackBag {
     pub(crate) bagfile: mt_bagread::Bagfile,
-    pub(crate) streamed: Option<marina::registry::minot::RemoteDataset>,
+    pub(crate) streamed: Option<mt_dataset::registry::minot::RemoteDataset>,
 }
 
 impl OpenedPlaybackBag {
@@ -876,7 +876,7 @@ impl OpenedPlaybackBag {
         if let Some(dataset) = self.streamed {
             let bag = dataset.bag().to_string();
             info!("Completing and promoting streamed Marina dataset {bag}");
-            let mut progress = marina::ProgressReporter::silent();
+            let mut progress = mt_dataset::ProgressReporter::silent();
             let path = dataset
                 .materialize(&mut progress)
                 .with_context(|| format!("could not promote streamed Marina dataset '{bag}'"))?;
@@ -904,12 +904,12 @@ pub(crate) async fn open_playback_bag(
     }
 
     let _network_settings = NetworkSettingsGuard::for_remote_dataset();
-    let mut marina = marina::Marina::load()
+    let mut marina = mt_dataset::Marina::load()
         .context("could not load Marina configuration while resolving the remote dataset")?;
     let mode = if no_stream {
-        marina::AccessMode::RequireLocal
+        mt_dataset::AccessMode::RequireLocal
     } else {
-        marina::AccessMode::PreferCachedThenStream
+        mt_dataset::AccessMode::PreferCachedThenStream
     };
     let access = marina
         .resolve_access(target, registry, mode)
@@ -918,7 +918,7 @@ pub(crate) async fn open_playback_bag(
 
     let mut bagfile = mt_bagread::Bagfile::default();
     match access {
-        marina::DatasetAccess::Local(path) => {
+        mt_dataset::DatasetAccess::Local(path) => {
             bagfile.reset(Some(&path))?;
             info!("Playing materialised Marina dataset: {}", path.display());
             Ok(OpenedPlaybackBag {
@@ -926,7 +926,7 @@ pub(crate) async fn open_playback_bag(
                 streamed: None,
             })
         }
-        marina::DatasetAccess::Streamed(dataset) => {
+        mt_dataset::DatasetAccess::Streamed(dataset) => {
             let dataset = if no_cache_stream {
                 dataset.online_only()
             } else {
