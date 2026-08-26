@@ -13,7 +13,6 @@
 pub mod block_store;
 pub mod protocol;
 pub mod remote_file;
-pub mod server;
 
 use std::any::Any;
 use std::path::{Path, PathBuf};

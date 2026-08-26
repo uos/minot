@@ -1891,7 +1891,7 @@ fn validate_registry_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn make_registry_driver(registry: &RegistryConfig) -> Result<Arc<dyn RegistryDriver>> {
+pub fn make_registry_driver(registry: &RegistryConfig) -> Result<Arc<dyn RegistryDriver>> {
     let driver: Arc<dyn RegistryDriver> = match registry.kind.as_str() {
         "folder" | "directory" => {
             Arc::new(FolderRegistry::from_uri(&registry.name, &registry.uri)?)

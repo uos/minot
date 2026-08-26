@@ -1,7 +1,13 @@
 //! Shared dataset management for Minot and Marina.
 //!
-//! This crate contains the dataset, registry, cache, and transport implementation.
-//! The `marina` crate re-exports this API as its stable application-facing facade.
+//! This crate is the dataset *kernel*: configuration, the local cache, registry
+//! drivers, and the client half of the `minot://` transport — everything needed
+//! to resolve, pull, and stream a dataset. Both applications depend on it, and
+//! it depends on neither.
+//!
+//! Marina's application layer lives in the `marina` crate, which re-exports this
+//! API as its stable facade and adds the command-line interface, the C ABI, and
+//! the `marina serve` side of the `minot://` protocol.
 //!
 //! ## Add the dependency
 //!
@@ -115,9 +121,7 @@
 //! ```
 
 pub mod cleanup;
-pub mod cli;
 pub mod core;
-pub mod ffi;
 pub mod io;
 pub mod model;
 pub mod progress;

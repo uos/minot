@@ -967,9 +967,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3be2ad0423bdbbb0e25bc89add796f3559706d4a95e1bc98e4d9662a957b6a19"
 dependencies = [
  "clap",
- "clap_lex",
- "is_executable",
- "shlex 2.0.1",
 ]
 
 [[package]]
@@ -3197,15 +3194,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is_executable"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82cb6a9f675da968c63b6208c641b9dca58fc0133ae53375736b1767b0cab8bd"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3997,16 +3985,12 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "cdr",
- "clap",
- "clap_complete",
  "cloudini",
  "ctrlc",
  "dirs",
- "env_logger",
  "flate2",
  "futures",
  "glob",
- "humantime",
  "indicatif",
  "libc",
  "log",
@@ -4015,7 +3999,6 @@ dependencies = [
  "mt_pubsub",
  "mt_sea",
  "mt_service",
- "nalgebra",
  "rand 0.10.2",
  "ratslang",
  "regex",
