@@ -228,8 +228,15 @@ impl std::fmt::Debug for Client {
 }
 
 impl Client {
-    pub(crate) fn coordinator_heartbeat_send(&self) -> Option<tokio::sync::mpsc::Sender<()>> {
-        self.coordinator_heartbeat_send.read().unwrap().clone()
+    /// The heartbeat channel itself, so a caller can reach it without taking
+    /// the lock around this `Client`.
+    ///
+    /// The channel is filled in by `register`, and the slot is shared, so a
+    /// holder taken before registration sees the sender once it exists.
+    pub(crate) fn heartbeat_channel(
+        &self,
+    ) -> std::sync::Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<()>>>> {
+        std::sync::Arc::clone(&self.coordinator_heartbeat_send)
     }
 }
 

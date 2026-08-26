@@ -46,6 +46,19 @@ const MAX_CONCURRENT_SENDS_PER_KEY: usize = 8;
 /// for a `mt_service` request, for an answer that can never come.
 const MAX_QUEUED_SENDS_PER_KEY: usize = 32;
 
+/// Marks a refusal that means "no room right now" on a healthy link.
+///
+/// Callers treat a publish failure as evidence the link is gone. Backpressure
+/// is not that, and a caller that confuses the two tears down a working
+/// connection under load. See [`is_backpressure`].
+pub const BACKPRESSURE: &str = "send queue full";
+
+/// True when an error means "no room right now" on a link that is otherwise
+/// fine, so the caller should retry rather than conclude the peer is gone.
+pub fn is_backpressure(error: &anyhow::Error) -> bool {
+    error.to_string().contains(BACKPRESSURE)
+}
+
 /// The send budget for one key: permits for what is on the wire, and a count of
 /// what is waiting for a permit.
 #[derive(Clone, Debug)]
@@ -76,6 +89,14 @@ impl Drop for QueuedSend {
 #[derive(Debug)]
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
+    /// The coordinator heartbeat channel, held directly.
+    ///
+    /// Reached without locking `client`, because that lock is what every send,
+    /// every route lookup and every registration contends on. A heartbeat that
+    /// has to queue behind data traffic for its turn is a heartbeat that can
+    /// miss `DISCONNECT_TIMEOUT_MS`, and the coordinator then drops a client
+    /// that was healthy and busy.
+    heartbeat_send: Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<()>>>>,
     /// Time of the last heartbeat, kept independent of application
     /// traffic. A busy Wind producer still needs heartbeat echoes to prove its
     /// coordinator connection to the client-side liveness detector.
@@ -148,6 +169,15 @@ impl crate::Cannon for NetworkShipImpl {
                         .clone()
                 };
 
+                // Taken before any permit. Holding a permit while waiting on
+                // this lock would park the whole per-key budget behind whatever
+                // else holds it, and `register` holds it across a network round
+                // trip.
+                let (session, domain_id) = {
+                    let c = self.client.lock().await;
+                    (c.session(), c.domain_id())
+                };
+
                 // A free slot is the ordinary case: send now, wait for nothing.
                 let ready = Arc::clone(&slots.permits).try_acquire_owned().ok();
                 let queued = match &ready {
@@ -173,10 +203,13 @@ impl crate::Cannon for NetworkShipImpl {
                                 .waiting
                                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                             // Refused so the caller can retry now, instead of
-                            // waiting out a timeout for nothing.
+                            // waiting out a timeout for nothing. Prefixed so a
+                            // caller can tell this apart from a dead link:
+                            // everything here is working, there is just no room
+                            // this instant.
                             return Err(anyhow!(
-                                "too many sends of '{}' already queued for '{}' ({} on the wire, \
-                                 {} waiting)",
+                                "{BACKPRESSURE}: too many sends of '{}' already queued for \
+                                 '{}' ({} on the wire, {} waiting)",
                                 variable_name,
                                 target_ship_name,
                                 MAX_CONCURRENT_SENDS_PER_KEY,
@@ -187,10 +220,6 @@ impl crate::Cannon for NetworkShipImpl {
                     }
                 };
 
-                let (session, domain_id) = {
-                    let c = self.client.lock().await;
-                    (c.session(), c.domain_id())
-                };
                 let variable_name = variable_name.to_string();
                 let data_bytes = Arc::clone(&data_bytes);
                 let permits = Arc::clone(&slots.permits);
@@ -801,10 +830,7 @@ impl NetworkShipImpl {
             return Ok(None);
         }
 
-        let heartbeat_send = {
-            let client = self.client.lock().await;
-            client.coordinator_heartbeat_send()
-        };
+        let heartbeat_send = self.heartbeat_send.read().unwrap().clone();
 
         if let Some(sender) = heartbeat_send {
             // Capacity one is intentional: heartbeats represent current
@@ -932,6 +958,7 @@ impl NetworkShipImpl {
             Arc::clone(&connection),
         )
         .await?;
+        let heartbeat_send = client.heartbeat_channel();
         let client = Arc::new(tokio::sync::Mutex::new(client));
 
         info!("{:?} Registering for network...", &kind);
@@ -1009,6 +1036,7 @@ impl NetworkShipImpl {
 
         let ship = Self {
             client,
+            heartbeat_send,
             runtime_handle: tokio::runtime::Handle::current(),
             // Initialize far enough in the past so the first heartbeat fires immediately
             last_heartbeat: Arc::new(tokio::sync::Mutex::new(

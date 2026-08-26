@@ -133,6 +133,14 @@ async fn publish_tolerantly<T: mt_sea::Sendable>(
 ) -> Result<()> {
     match publisher.publish(value).await {
         Ok(()) => Ok(()),
+        Err(error) if mt_sea::ship::is_backpressure(&error) => {
+            // The link is fine and the transport is busy. Treated like a
+            // dropped chunk: the retain buffer still holds it and the repair
+            // timer sends it again. Escalating here would tear down a working
+            // transfer because it was going too fast.
+            debug!("flow: {what} deferred, the send queue is full");
+            Ok(())
+        }
         Err(error) => {
             if connection.is_link_proven() && connection.is_connected() {
                 Err(error).with_context(|| format!("flow: could not publish {what}"))
