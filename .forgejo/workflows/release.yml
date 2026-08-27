@@ -637,6 +637,8 @@ jobs:
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
+          CARGO_PROFILE_FULL_RELEASE_LTO: thin
+          CARGO_PROFILE_FULL_RELEASE_CODEGEN_UNITS: 16
         run: |
           export AMENT_TRACE_SETUP_FILES="${AMENT_TRACE_SETUP_FILES:-}"
           source /opt/ros/jazzy/setup.bash
@@ -749,6 +751,8 @@ jobs:
       - name: Build Variants
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
+          CARGO_PROFILE_FULL_RELEASE_LTO: thin
+          CARGO_PROFILE_FULL_RELEASE_CODEGEN_UNITS: 16
         run: |
           export AMENT_TRACE_SETUP_FILES="${AMENT_TRACE_SETUP_FILES:-}"
           source /opt/ros/humble/setup.bash
