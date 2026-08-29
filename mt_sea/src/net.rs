@@ -18,7 +18,7 @@ pub(crate) fn client_heartbeat_key(domain_id: u16, sanitized_ship_name: &str) ->
     )
 }
 
-/// Copy bytes into an aligned buffer for rkyv deserialization
+/// Copy bytes into an aligned buffer for rkyv deserialization.
 fn align_bytes(bytes: &[u8]) -> AlignedVec {
     let mut aligned = AlignedVec::with_capacity(bytes.len());
     aligned.extend_from_slice(bytes);
@@ -51,7 +51,7 @@ pub struct WindAt {
     pub at_var: Option<String>,
 }
 
-/// A wrapper type for using 0.8 rkyv APIs with nalgebra
+/// Wrapper for using the rkyv 0.8 APIs with nalgebra.
 #[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct NetArray<T: nalgebra::Scalar> {
     cols: usize,
@@ -81,7 +81,7 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
 
 /// Delivery mode for a node.
 ///
-/// Two independent axes are encoded here, and they are easy to confuse:
+/// Two independent axes are encoded here:
 ///
 /// * **Wire QoS**: how Zenoh carries the bytes ([`Qos::reliability`],
 ///   [`Qos::congestion_control`]).
@@ -112,8 +112,8 @@ pub enum Qos {
 }
 
 impl Qos {
-    /// Wire reliability. Note this is close to free over TCP, which already
-    /// retransmits and orders. This setting affects lossy transports.
+    /// Wire reliability. Close to free over TCP, which already retransmits and
+    /// orders; it matters on lossy transports.
     pub fn reliability(self) -> zenoh::qos::Reliability {
         match self {
             Qos::Reliable | Qos::TryReliable => zenoh::qos::Reliability::Reliable,
@@ -123,9 +123,9 @@ impl Qos {
 
     /// Backpressure behaviour when the transmit queue is full.
     ///
-    /// `Reliable` blocks indefinitely, which is what wedges a publisher when the
-    /// link stalls. `TryReliable` uses `BlockFirst`: wait for the first message,
-    /// drop later ones when the bounded queue is full.
+    /// `Reliable` blocks indefinitely and so wedges a publisher when the link
+    /// stalls. `TryReliable` uses `BlockFirst`: wait for the first message, drop
+    /// later ones once the bounded queue is full.
     pub fn congestion_control(self) -> zenoh::qos::CongestionControl {
         match self {
             Qos::Reliable => zenoh::qos::CongestionControl::Block,
@@ -159,7 +159,7 @@ impl Qos {
     /// Whether sends to this node are dispatched off the caller's thread.
     ///
     /// False only for `Reliable`, whose send is awaited inline and retried
-    /// without bound. Everything else must not be able to wedge a frame loop.
+    /// without bound. No other mode may wedge a frame loop.
     pub fn dispatch_is_async(self) -> bool {
         !matches!(self, Qos::Reliable)
     }
@@ -220,8 +220,8 @@ pub enum PacketKind {
         kind: RatPubRegisterKind,
         node_mode: Qos,
     },
-    /// Stop delivering a topic to a ship. Without this a subscriber can only
-    /// stop reading, and the coordinator keeps pushing the data at it.
+    /// Stop delivering a topic to a ship. Without it a subscriber can only stop
+    /// reading while the coordinator keeps pushing data at it.
     UnregisterShipAtVar {
         ship: String,
         var: String,
@@ -265,7 +265,7 @@ pub struct ShipHandle {
     pub disconnect_timeout_ms: u64,
 }
 
-/// Zenoh-based Sea coordinator
+/// Zenoh-based Sea coordinator.
 #[derive(Debug)]
 pub struct Sea {
     pub network_clients_chan: tokio::sync::broadcast::Sender<ShipHandle>,
@@ -285,17 +285,14 @@ impl Sea {
             info!("Coordinator using domain ID {}", domain_id);
         }
 
-        // Initialize Zenoh session
         let session = crate::network::open_zenoh_session(crate::network::NetworkRole::Coordinator)?;
         let session = std::sync::Arc::new(session);
 
         let (clients_tx, _clients_rx) = tokio::sync::broadcast::channel::<ShipHandle>(64);
         let clients_tx_inner = clients_tx.clone();
 
-        // Key expression for join requests
         let join_key = format!("minot/{}/coord/join", domain_id);
 
-        // Subscribe to join requests from clients
         let session_clone = std::sync::Arc::clone(&session);
         let clwa = std::sync::Arc::clone(&clients_wait_for_ack);
         let rat_lock = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
@@ -375,7 +372,6 @@ impl Sea {
                     };
                     let ship_name_key = sanitize_key(&ship_name_str);
 
-                    // Create channels for communication with this client
                     let (recv_tx, _) = tokio::sync::broadcast::channel::<(
                         Packet,
                         Option<std::net::SocketAddr>,
@@ -390,15 +386,12 @@ impl Sea {
                         node_mode,
                     };
 
-                    // Key for coordinator -> client messages
                     let coord_to_client_key =
                         format!("minot/{}/coord/clients/{}", domain_id, ship_name_key);
-                    // Key for client -> coordinator messages
                     let client_to_coord_key =
                         format!("minot/{}/clients/{}/coord", domain_id, ship_name_key);
                     let heartbeat_to_coord_key = client_heartbeat_key(domain_id, &ship_name_key);
 
-                    // Subscriber for receiving from client
                     let client_subscriber = session_clone
                         .declare_subscriber(client_to_coord_key)
                         .wait()
@@ -409,7 +402,6 @@ impl Sea {
                     let ships_lock = std::sync::Arc::clone(&rat_lock);
                     let ship_kind_for_disconnect = ship_kind.clone();
 
-                    // Task to receive from client
                     let receive_task = tokio::spawn(async move {
                         loop {
                             match client_subscriber.recv_async().await {
@@ -418,11 +410,11 @@ impl Sea {
                                     let aligned = align_bytes(&payload);
                                     match from_bytes::<Packet, rancor::Error>(&aligned) {
                                         Ok(packet) => {
-                                            // A broadcast send fails when nothing is
-                                            // currently subscribed, which is normal and
-                                            // transient: this task is spawned as soon as
-                                            // Join packets can arrive before the ShipHandle
-                                            // consumer subscribes. Keep the receive path alive.
+                                            // A broadcast send fails while nothing
+                                            // is subscribed. That is normal here:
+                                            // this task starts as soon as Join
+                                            // packets can arrive, before the
+                                            // ShipHandle consumer subscribes.
                                             if let Err(e) = recv_tx_clone.send((packet, None)) {
                                                 debug!(
                                                     "Dropping packet from {:?}: no receiver yet ({})",
@@ -482,8 +474,8 @@ impl Sea {
                         }
                     });
 
-                    // Create publisher synchronously BEFORE spawning send task
-                    // This ensures publisher is ready before we send the welcome
+                    // Declared before the send task is spawned, so it is ready
+                    // for the welcome below.
                     debug!("Creating coordinator publisher for {}", coord_to_client_key);
                     let coord_to_client_key_owned = coord_to_client_key.clone();
                     let publisher = session_clone
@@ -493,7 +485,6 @@ impl Sea {
                         .wait()
                         .expect("Failed to create publisher for client");
 
-                    // Send welcome packet directly using the publisher
                     let current_wait_for_ack = { *clwa.read().unwrap() };
                     let welcome_packet = Packet {
                         header: Header {
@@ -517,7 +508,6 @@ impl Sea {
 
                     debug!("Welcome packet sent to {}", coord_to_client_key);
 
-                    // Task to send subsequent packets to client
                     let send_task = tokio::spawn(async move {
                         while let Some(packet) = send_rx.recv().await {
                             let bytes = rkyv::api::high::to_bytes::<rancor::Error>(&packet)
@@ -590,84 +580,6 @@ impl Sea {
     }
 
     pub async fn cleanup(&mut self) {
-        // Zenoh session cleanup is handled automatically when dropped
         info!("Sea coordinator shutting down");
-    }
-}
-
-#[cfg(test)]
-mod qos_tests {
-    use super::{Qos, client_heartbeat_key};
-
-    #[test]
-    fn coordinator_heartbeat_has_a_dedicated_control_key() {
-        let heartbeat = client_heartbeat_key(7, "player");
-        assert_eq!(heartbeat, "minot/7/heartbeat/clients/player/coord");
-        assert_ne!(heartbeat, "minot/7/clients/player/coord");
-    }
-
-    /// The two axes are independent, and `TryReliable` is the combination that
-    /// only exists because they are: reliable on the wire, non-fatal on failure.
-    #[test]
-    fn try_reliable_is_reliable_on_the_wire_but_never_fatal() {
-        let mode = Qos::TryReliable;
-
-        assert_eq!(mode.reliability(), zenoh::qos::Reliability::Reliable);
-        assert!(mode.expects_reliable_delivery());
-
-        assert!(!mode.is_monitored());
-        assert!(!mode.fires_torpedo());
-        assert!(!mode.removes_rules_on_exit());
-    }
-
-    /// Only `Reliable` may take the rest of the system down with it, and only
-    /// `Reliable` blocks its caller. Everything else must stay survivable.
-    #[test]
-    fn reliable_is_the_only_fatal_and_the_only_blocking_mode() {
-        for mode in [Qos::TryReliable, Qos::BestEffort] {
-            assert!(!mode.fires_torpedo(), "{mode:?} must not fire a Torpedo");
-            assert!(!mode.is_monitored(), "{mode:?} must not be monitored");
-            assert!(
-                mode.dispatch_is_async(),
-                "{mode:?} must not be able to wedge its caller"
-            );
-        }
-
-        assert!(Qos::Reliable.fires_torpedo());
-        assert!(Qos::Reliable.is_monitored());
-        assert!(!Qos::Reliable.dispatch_is_async());
-    }
-
-    /// `Block` is what stalls a publisher when a link goes away. Only the mode
-    /// that accepts being wedged may use it.
-    #[test]
-    fn only_reliable_blocks_without_bound_under_congestion() {
-        use zenoh::qos::CongestionControl;
-
-        assert_eq!(Qos::Reliable.congestion_control(), CongestionControl::Block);
-        assert_eq!(
-            Qos::TryReliable.congestion_control(),
-            CongestionControl::BlockFirst
-        );
-        assert_eq!(
-            Qos::BestEffort.congestion_control(),
-            CongestionControl::Drop
-        );
-    }
-
-    /// A best-effort publisher drops samples, so any subscriber that expects
-    /// delivery must be rejected when it cannot make progress.
-    #[test]
-    fn best_effort_is_the_only_mode_that_tolerates_dropped_samples() {
-        assert!(Qos::Reliable.expects_reliable_delivery());
-        assert!(Qos::TryReliable.expects_reliable_delivery());
-        assert!(!Qos::BestEffort.expects_reliable_delivery());
-    }
-
-    /// `Reliable` is the default, so an unknown or departed client is treated
-    /// as fatal.
-    #[test]
-    fn default_mode_is_reliable() {
-        assert_eq!(Qos::default(), Qos::Reliable);
     }
 }

@@ -24,17 +24,7 @@ use ratatui::{
 use regex::Regex;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 
-// --- Add this static regex ---
-// This regex matches lines like:
-// #--- SOME_NAME
-// #---SOME_NAME_123
-// #---    SOME_NAME_WITH_SPACES (Note: my regex below does *not* allow spaces, only one optional space after #---)
-// The regex: r"^#--- ?[a-zA-Z0-9_]+$"
-// ^      - start of the line
-// #---   - literal characters
-//  ?     - an optional space
-// [a-zA-Z0-9_]+ - one or more letters, numbers, or underscores for the name
-// $      - end of the line
+// Matches a section marker line: `#--- NAME` or `#---NAME`.
 static START_MARKER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^#--- ?([a-zA-Z0-9_]+)$").unwrap());
 
 /// Application result type.
@@ -901,11 +891,10 @@ impl PartialOrd for TotalF64 {
 
 impl Ord for TotalF64 {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Define NaN comparison behavior here to handle it the way you prefer
         if self.0.is_nan() && other.0.is_nan() {
             Ordering::Equal
         } else if self.0.is_nan() {
-            Ordering::Less // or Greater, depending on application needs
+            Ordering::Less
         } else if other.0.is_nan() {
             Ordering::Greater
         } else {
@@ -1931,18 +1920,14 @@ impl App {
                                     wind_data.push((diff, msg));
                                 }
 
-                                // Check for empty data conditions
                                 if wind_data.is_empty() {
                                     if reached_end {
-                                        // Truly no more data in bagfile - abort remaining actions
                                         warn!(
                                             "reached end of bagfile with no more matching messages"
                                         );
                                         promote_streamed_dataset(&wind_cursor_worker).await;
                                         return;
                                     } else {
-                                        // No matching messages at current position, but bagfile has more data
-                                        // Skip this pf! and continue with next action
                                         warn!(
                                             "pf! query returned empty data (no matching messages at current position), skipping to next action"
                                         );
@@ -1950,7 +1935,6 @@ impl App {
                                     }
                                 }
 
-                                // Log if we got data but also reached the end
                                 if reached_end {
                                     info!(
                                         "processing final {} message(s) from bagfile",

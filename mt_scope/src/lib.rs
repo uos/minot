@@ -35,6 +35,35 @@ static PACKET_ID: OnceCell<Arc<Mutex<i32>>> = OnceCell::new();
 static CLIENTS: OnceCell<Arc<Mutex<HashSet<String>>>> = OnceCell::new();
 static BEST_EFFORT_CLIENTS: OnceCell<Arc<Mutex<HashSet<String>>>> = OnceCell::new();
 
+/// How long to wait for the coordinator's answer to a Sonar before giving up on
+/// the round.
+///
+/// Generous on purpose. A timeout here skips one comparison, which costs
+/// nothing, while concluding too early that the coordinator said nothing fires
+/// a Torpedo at a healthy run.
+const SONAR_TIMEOUT: time::Duration = time::Duration::from_secs(5);
+
+/// How long to wait for the coordinator to acknowledge the scope's own
+/// registration.
+///
+/// A scope that never registered monitors nothing for the rest of the run and
+/// has no next round to fall back on, so this fails loudly.
+const REGISTRATION_TIMEOUT: time::Duration = time::Duration::from_secs(30);
+
+/// Which of the lost clients warrant a Torpedo.
+///
+/// Kept apart from the monitor so the rule can be tested on its own: a node
+/// known to be non-fatal never contributes, whatever else is going on. The
+/// caller must already hold the non-fatal set, since a set it could not read
+/// would look like an empty one.
+fn fatal_losses(all_lost: &[String], non_fatal: &HashSet<String>) -> Vec<String> {
+    all_lost
+        .iter()
+        .filter(|name| !non_fatal.contains(*name))
+        .cloned()
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct Scope {
     name: String,
@@ -68,8 +97,8 @@ impl Scope {
         debug!("Ship created");
 
         let ship = Arc::new(ship);
-        // A Scope can stay quiet for a long time between samples. This
-        // the coordinator drops it and stops answering its requests.
+        // A Scope can stay quiet for a long time between samples, and the
+        // coordinator drops a client that says nothing.
         ship.spawn_heartbeat();
 
         let scope = Scope {
@@ -141,47 +170,51 @@ impl Scope {
         let channels = Scope::get_coord_communication().await?;
         let channels = channels.lock().await;
 
+        // Resubscribed before the request goes out, so the answer cannot land
+        // in the gap between sending and listening. That is all the ordering
+        // this needs, so the answer is awaited inline and nothing outlives the
+        // call when it gives up.
         let (coord_tx, mut coord_rx) = (channels.coord.0.clone(), channels.coord.1.resubscribe());
-
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-
-        tokio::spawn(async move {
-            let _ = ready_tx.send(());
-
-            loop {
-                match coord_rx.recv().await {
-                    Ok((packet, _)) => {
-                        if matches!(packet.data, net::PacketKind::Acknowledge) {
-                            let _ = result_tx.send(());
-                            return;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => return,
-                }
-            }
-        });
-
-        ready_rx
-            .await
-            .map_err(|_| anyhow!("Receiver task failed to start"))?;
 
         coord_tx
             .send(Packet {
                 header: mt_sea::net::Header::default(),
                 data: net::PacketKind::RegisterShipAtVar {
-                    ship: Scope::get_scope_name().await.unwrap(),
-                    var: Scope::get_scope_name().await.unwrap(),
+                    ship: Scope::get_scope_name().await?,
+                    var: Scope::get_scope_name().await?,
                     kind: net::RatPubRegisterKind::Scope,
                     node_mode: net::Qos::Reliable,
                 },
             })
             .await?;
+        drop(channels);
 
-        result_rx.await?;
+        let acknowledged = tokio::time::timeout(REGISTRATION_TIMEOUT, async {
+            loop {
+                match coord_rx.recv().await {
+                    Ok((packet, _)) => {
+                        if matches!(packet.data, net::PacketKind::Acknowledge) {
+                            return true;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return false,
+                }
+            }
+        })
+        .await;
 
-        Ok(())
+        // Fatal, where an unanswered Sonar is not: a scope that never
+        // registered monitors nothing, and silence about that helps no one.
+        match acknowledged {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(anyhow!(
+                "Coordinator channel closed before the scope was registered"
+            )),
+            Err(_) => Err(anyhow!(
+                "Coordinator did not acknowledge the scope's registration within {REGISTRATION_TIMEOUT:?}"
+            )),
+        }
     }
 
     async fn start_scoping() -> anyhow::Result<()> {
@@ -204,58 +237,9 @@ impl Scope {
         let channels = Scope::get_coord_communication().await?;
         let channels = channels.lock().await;
 
+        // Resubscribed before the Sonar goes out, so the answer cannot land in
+        // the gap between sending and listening.
         let (coord_tx, mut coord_rx) = (channels.coord.0.clone(), channels.coord.1.resubscribe());
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-
-        let clients_current = Arc::new(Mutex::new(HashSet::new()));
-        let clients_clone = clients_current.clone();
-
-        tokio::spawn(async move {
-            let _ = ready_tx.send(());
-
-            loop {
-                match coord_rx.recv().await {
-                    Ok((packet, _)) => match packet.data {
-                        net::PacketKind::Acknowledge => {
-                            let _ = result_tx.send(());
-                            return;
-                        }
-                        net::PacketKind::ClientsHash {
-                            mut reliable,
-                            best_effort,
-                        } => {
-                            // Exclude the scope itself from the set it monitors
-                            if let Ok(name) = Scope::get_scope_name().await {
-                                reliable.remove(&name);
-                            }
-                            debug!(
-                                "[SCOPE] Sonar response — reliable: {:?}, best_effort: {:?}",
-                                reliable, best_effort
-                            );
-                            // Legacy field name: this contains every nonfatal
-                            // node (BestEffort and TryReliable). Never remove
-                            // names, so a node remains recognisable after the
-                            // coordinator has removed it from its live set.
-                            if let Some(be_set) = BEST_EFFORT_CLIENTS.get() {
-                                let mut be = be_set.lock().await;
-                                be.extend(best_effort);
-                            }
-                            *clients_clone.lock().await = reliable;
-                            let _ = result_tx.send(());
-                            return;
-                        }
-                        _ => (),
-                    },
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => return,
-                }
-            }
-        });
-
-        ready_rx
-            .await
-            .map_err(|_| anyhow!("Receiver task failed to start"))?;
 
         coord_tx
             .send(Packet {
@@ -264,14 +248,67 @@ impl Scope {
             })
             .await
             .map_err(|_e| anyhow!("Failed to send Sonar packet"))?;
-
-        result_rx
-            .await
-            .map_err(|_e| anyhow!("Failed to receive Sonar response"))?;
-
+        // Nothing below needs the channels, and the answer may take seconds.
         drop(channels);
 
-        Scope::handle_packet(clients_current.lock().await.clone()).await
+        // Awaited inline: a spawned task outlives the round that gave up on
+        // it, holding its subscription and its half of the oneshot until some
+        // *later* round's answer wakes it, so every timeout leaves one behind.
+        let answer = tokio::time::timeout(SONAR_TIMEOUT, async {
+            loop {
+                match coord_rx.recv().await {
+                    // Only the packet that answers a Sonar ends this wait.
+                    // Registration traffic puts an `Acknowledge` on this
+                    // channel at any moment, and one carries no client list, so
+                    // ending here on it leaves the set empty and
+                    // `handle_packet` reads that as every node having died.
+                    Ok((packet, _)) => {
+                        if let net::PacketKind::ClientsHash {
+                            mut reliable,
+                            best_effort,
+                        } = packet.data
+                        {
+                            // Exclude the scope itself from the set it monitors
+                            if let Ok(name) = Scope::get_scope_name().await {
+                                reliable.remove(&name);
+                            }
+                            debug!(
+                                "[SCOPE] Sonar response — reliable: {:?}, best_effort: {:?}",
+                                reliable, best_effort
+                            );
+                            // Legacy field name: it carries every nonfatal
+                            // node, BestEffort and TryReliable alike. Names are
+                            // only ever added, so a node stays recognisable
+                            // after the coordinator drops it from its live set.
+                            if let Some(be_set) = BEST_EFFORT_CLIENTS.get() {
+                                be_set.lock().await.extend(best_effort);
+                            }
+                            return Some(reliable);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return None,
+                }
+            }
+        })
+        .await;
+
+        let clients_current = match answer {
+            Ok(Some(reliable)) => reliable,
+            Ok(None) => {
+                debug!("[SCOPE] Coordinator channel closed, skipping this round");
+                return Ok(());
+            }
+            // No answer means this scope does not know who is connected.
+            // Skipping the round costs one second, where acting on an
+            // unanswered Sonar costs the whole run.
+            Err(_) => {
+                debug!("[SCOPE] No Sonar answer within {SONAR_TIMEOUT:?}, skipping this round");
+                return Ok(());
+            }
+        };
+
+        Scope::handle_packet(clients_current).await
     }
 
     async fn handle_packet(clients_current: HashSet<String>) -> anyhow::Result<()> {
@@ -294,18 +331,22 @@ impl Scope {
         } else {
             let all_lost: Vec<_> = clients.difference(&clients_current).cloned().collect();
 
-            // Filter out nonfatal nodes, since losing BestEffort or TryReliable
-            // clients is routine and must not trigger a Torpedo.
-            let best_effort = BEST_EFFORT_CLIENTS
-                .get()
-                .and_then(|arc| arc.try_lock().ok());
-            let lost_reliable: Vec<_> = match &best_effort {
-                Some(be) => all_lost
-                    .iter()
-                    .filter(|name| !be.contains(*name))
-                    .cloned()
-                    .collect(),
-                None => all_lost.clone(),
+            // Filter out nonfatal nodes, since losing BestEffort or
+            // TryReliable clients is routine and must not fire a Torpedo.
+            //
+            // The set is awaited, not sampled: a `try_lock` losing a race would
+            // leave every lost node looking fatal, so a moment of contention
+            // could Torpedo a run over a departed best-effort viewer.
+            let Some(be_set) = BEST_EFFORT_CLIENTS.get() else {
+                debug!(
+                    "[SCOPE] Non-fatal client set unavailable, skipping Torpedo for: {:?}",
+                    all_lost
+                );
+                return Ok(());
+            };
+            let lost_reliable = {
+                let be = be_set.lock().await;
+                fatal_losses(&all_lost, &be)
             };
 
             for client in &all_lost {
@@ -411,5 +452,69 @@ impl Scope {
         let current = *value;
         *value += 1;
         Ok(current)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    fn lost(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// The regression: a best-effort viewer dropping off is routine and must
+    /// never take the run down with it.
+    #[test]
+    fn losing_a_non_fatal_client_fires_nothing() {
+        let non_fatal = set(&["scope"]);
+        assert!(fatal_losses(&lost(&["scope"]), &non_fatal).is_empty());
+    }
+
+    /// The publishers named in the Torpedo that started this: losing the viewer
+    /// must not implicate them.
+    #[test]
+    fn a_non_fatal_loss_does_not_implicate_the_publishers() {
+        let non_fatal = set(&["scope"]);
+        assert!(
+            fatal_losses(&lost(&["scope"]), &non_fatal).is_empty(),
+            "only the client that actually went away may ever be considered"
+        );
+    }
+
+    #[test]
+    fn losing_a_fatal_client_is_reported() {
+        let non_fatal = set(&["scope"]);
+        assert_eq!(
+            fatal_losses(&lost(&["pelorus_node"]), &non_fatal),
+            vec!["pelorus_node".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_mixed_loss_reports_only_the_fatal_ones() {
+        let non_fatal = set(&["scope", "viewer"]);
+        assert_eq!(
+            fatal_losses(&lost(&["scope", "pelorus_node", "viewer"]), &non_fatal),
+            vec!["pelorus_node".to_string()]
+        );
+    }
+
+    /// An unanswered Sonar leaves an empty non-fatal set behind, which means
+    /// nothing is known to be non-fatal. The guard above returns before the
+    /// caller can reach here; this pins down why that guard exists, since the
+    /// bare rule would implicate everything.
+    #[test]
+    fn an_empty_non_fatal_set_would_implicate_everything() {
+        let nothing_known = HashSet::new();
+        assert_eq!(
+            fatal_losses(&lost(&["scope", "pelorus_node"]), &nothing_known).len(),
+            2,
+            "which is why an unreadable set must skip the round instead of asking"
+        );
     }
 }

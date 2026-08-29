@@ -86,19 +86,17 @@ where
     /// single client's requests at a time.
     ///
     /// [`ServiceServer::start`] answers one request per client at a time, so a
-    /// slow one blocks everything queued behind it. That costs nothing while
-    /// every request is quick. Once one is slow, a client asking for something
-    /// cheap gets no answer until the long operation it happens to be sharing a
-    /// connection with has finished.
+    /// slow request blocks everything queued behind it and a cheap request gets
+    /// no answer until the long operation sharing its connection has finished.
     ///
     /// The cost is ordering: responses may be published in a different order
     /// than the requests arrived, and two of a client's requests may run at
     /// once. A caller whose requests mutate shared state as a sequence (stage,
-    /// write, commit) must either keep one such request in flight at a time, or
-    /// serialise them itself. Requests that only read are unaffected.
+    /// write, commit) must keep one such request in flight at a time or
+    /// serialise them itself. Read-only requests are unaffected.
     ///
-    /// `max_concurrent` bounds the work one client can have running, so a
-    /// client cannot queue unbounded tasks onto the runtime. One is exactly
+    /// `max_concurrent` bounds the work one client can have running, so it
+    /// cannot queue unbounded tasks onto the runtime. One is exactly
     /// [`ServiceServer::start`].
     pub async fn start_concurrent<F, Fut>(
         this: Arc<Self>,
@@ -112,9 +110,9 @@ where
         let mut subber = this.subber.lock().await;
         let mut clients = this.clients.lock().await;
 
-        // Read the client id here. The request body stays in its rkyv
-        // buffer and is deserialized by the per-client handler. Doing it here
-        // would put the cost of every request body on this single loop.
+        // Only the client id is read here. The body stays in its rkyv buffer
+        // for the per-client handler, so this single loop does not pay for
+        // every request body.
         while let Some(request) = subber.next_archived().await {
             let client = Uuid::from_u128(request.archived().0.to_native());
             if !clients.contains_key(&client) {
@@ -175,18 +173,17 @@ where
         };
 
         let pubber = Arc::new(pubber);
-        // The permit is what bounds a client's work here. At one it waits for
-        // each answer before taking the next request, which is the original
-        // strictly-sequential behaviour.
+        // The permit bounds a client's work. At one, it waits for each answer
+        // before taking the next request, which is strictly sequential.
         let limit = Arc::new(tokio::sync::Semaphore::new(max_concurrent.max(1)));
 
         while let Some(message) = requests.recv().await {
-            // Acquired before spawning, so a client that floods us waits here
-            // instead of piling tasks onto the runtime.
+            // Acquired before spawning, so a flooding client waits here and
+            // piles no tasks onto the runtime.
             let permit = match Arc::clone(&limit).acquire_owned().await {
                 Ok(permit) => permit,
-                // Only if the semaphore were closed, which nothing does while
-                // this loop holds it.
+                // Only reachable if the semaphore were closed, and nothing
+                // closes it while this loop holds it.
                 Err(_) => break,
             };
             let pubber = Arc::clone(&pubber);
@@ -249,8 +246,8 @@ impl<RES: Sendable> PendingResponses<RES> {
         let waiting = self.waiting.lock().await.remove(&seq_num);
         match waiting {
             Some(sender) => {
-                // A gone receiver means the request timed out and stopped waiting.
-                // The late response is dropped.
+                // A gone receiver means the request timed out, so the late
+                // response is dropped.
                 let _ = sender.send(Ok(message));
             }
             None => debug!("discarding response for unknown or expired sequence {seq_num}"),
@@ -346,8 +343,8 @@ where
                     pending.deliver(seq_num, message).await
                 }
                 None => {
-                    // The subscription ended, so no response will ever arrive.
-                    // Fail everything waiting.
+                    // The subscription ended, so nothing waiting can still be
+                    // answered.
                     pending
                         .fail_all("None response from ServiceServer".to_owned())
                         .await;

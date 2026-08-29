@@ -32,8 +32,7 @@ pub const PEER_DEAD_THRESHOLD: u32 = 3;
 /// Policy shared by every node.
 ///
 /// Carried as one value so adding a knob later does not churn every call site.
-/// `Default` reproduces the behaviour Minot had before these existed: LAN
-/// timing, and reconnect decided by the node's QoS.
+/// `Default` is LAN timing with reconnect decided by the node's QoS.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NodeOptions {
     /// How patient this node and its coordinator are with each other.
@@ -46,11 +45,10 @@ pub struct NodeOptions {
     /// Always ask the coordinator for a route, never answer from the cache.
     ///
     /// Asking has a side effect: the coordinator also hands the comparison node
-    /// its Catch route for that variable, and nothing else delivers it. So a
-    /// node carrying variables minot compares must keep asking, and only those
-    /// nodes need to. Everything else pays a coordinator round trip per publish
-    /// for nothing, which on a streaming path is the dominant cost and floods
-    /// the shared broadcast the answers come back on.
+    /// its Catch route for that variable, and nothing else delivers it. Only
+    /// nodes carrying variables minot compares need this. For everyone else it
+    /// costs a coordinator round trip per publish, which dominates a streaming
+    /// path and floods the shared broadcast the answers come back on.
     pub bypass_route_cache: bool,
 }
 
@@ -92,14 +90,13 @@ impl NodeOptions {
 
 /// Live state of a node's link to the coordinator.
 ///
-/// A node's connection can come back. The [`ShipKind`] registration, the
-/// channels to the coordinator, and the coordinator's own handler for this
-/// client are all rebuilt on a reconnect, but the *node* (and every publisher
-/// and subscriber the caller is holding) stays alive across it.
+/// A node's connection can come back. A reconnect rebuilds the [`ShipKind`]
+/// registration, the channels to the coordinator and the coordinator's handler
+/// for this client, while the *node* and every publisher and subscriber the
+/// caller holds stay alive across it.
 ///
-/// Each successful registration is a **generation**. Long-lived tasks watch the
-/// generation. When it changes, the
-/// channels they captured are stale and whatever registration they did with the
+/// Each successful registration is a **generation**. When it changes, the
+/// channels a long-lived task captured are stale and its registration with the
 /// coordinator has to be redone.
 #[derive(Debug)]
 pub struct ConnectionState {
@@ -149,20 +146,18 @@ impl ConnectionState {
     /// Whether the coordinator has been observed answering this node.
     ///
     /// Registration only proves the coordinator was reachable at that instant.
-    /// This becomes true once it echoes a heartbeat, which is also the point at
-    /// which the node's own disconnect detector arms. Before then, a
-    /// coordinator that dies cannot be noticed. Wait on this when you need the
-    /// link to be established and ready for traffic.
+    /// This becomes true once it echoes a heartbeat, which is also when the
+    /// node's disconnect detector arms; before that, a coordinator that dies
+    /// cannot be noticed. Wait on this when the link must be ready for traffic.
     pub fn is_link_proven(&self) -> bool {
         self.link_proven.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Whether this node sends heartbeats.
     ///
-    /// Only a heartbeating node can expect the coordinator to answer, so only a
+    /// Only a heartbeating node expects the coordinator to answer, so only a
     /// heartbeating node may treat silence as a disconnect. A ship that speaks
-    /// solely when it has something to say would otherwise be torn down for
-    /// being quiet.
+    /// solely when it has something to say would be torn down for being quiet.
     pub fn is_heartbeating(&self) -> bool {
         self.heartbeating.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -196,7 +191,7 @@ impl ConnectionState {
             + 1;
         self.connected
             .store(true, std::sync::atomic::Ordering::Release);
-        // No receivers is normal, since nothing is currently holding a subscription.
+        // Having no receivers is normal.
         let _ = self.announce.send(generation);
         generation
     }
@@ -207,8 +202,8 @@ impl ConnectionState {
 pub enum ReconnectPolicy {
     /// Give up. The node's shutdown token is cancelled and it is finished.
     ///
-    /// This is the only correct policy for [`Qos::Reliable`], whose whole
-    /// contract is that its death is fatal to the run.
+    /// The only correct policy for [`Qos::Reliable`], whose contract is that its
+    /// death is fatal to the run.
     #[default]
     Never,
     /// Keep re-registering, with backoff, until the link comes back or the node
@@ -237,8 +232,8 @@ impl ReconnectPolicy {
     /// The default policy for a node with this QoS.
     ///
     /// `Reliable` never reconnects: peers monitor it and its loss torpedoes the
-    /// run, so a silent recovery would contradict the guarantee callers rely on.
-    /// Everything else reconnects, because nothing depends on its liveness.
+    /// run, so a silent recovery would contradict that guarantee. Nothing
+    /// depends on the liveness of the other modes, so they reconnect.
     pub fn for_qos(qos: Qos) -> Self {
         if qos.fires_torpedo() {
             Self::Never
@@ -251,10 +246,9 @@ impl ReconnectPolicy {
 /// Per-node timing policy.
 ///
 /// The constants above are the defaults, chosen for a LAN-attached replay rig
-/// where a node that goes quiet for 800 ms really has died. They are far too
-/// tight for a link that is expected to wobble: an SSH tunnel to a robot on
-/// cellular, or a laptop roaming between access points, where a one-second hiccup
-/// is normal and must not be read as a death.
+/// where a node quiet for 800 ms really has died. A wobbling link — an SSH
+/// tunnel to a robot on cellular, a laptop roaming between access points — has
+/// one-second hiccups that must not be read as a death.
 ///
 /// A node carries its own `Timing` and tells the coordinator about it when it
 /// joins, so the two sides agree on how patient to be with each other.
@@ -364,10 +358,6 @@ pub const TRY_RELIABLE_ATTEMPT_TIMEOUT_MS: u64 = 500;
 /// [try-reliable] Pause between failed attempts, so a dead target is not
 /// hammered for the whole budget.
 pub const TRY_RELIABLE_RETRY_BACKOFF_MS: u64 = 50;
-
-/// [best-effort] Single-attempt query timeout. Best-effort never retries: the
-/// next sample is worth more than this one.
-pub const BEST_EFFORT_ATTEMPT_TIMEOUT_MS: u64 = 250;
 
 /// [coordinator] Last-resort timeout for coordinator-side per-client handler.
 /// This fires for
@@ -595,8 +585,7 @@ impl From<VariableType> for u8 {
 
 use rkyv::rancor::Error as RkyvError;
 
-// Trait for types that can be Sent (Serialized).
-// Requires Sized, Send, Sync, 'static, and the specific rkyv Serialize bound.
+/// Types that can be serialized and sent.
 pub trait Sendable: Sized + Send + Sync + 'static
 where
     Self: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvError>>,
@@ -606,7 +595,6 @@ where
     >,
 {
 }
-// Blanket implementation for Sendable. Any type meeting the bounds is Sendable.
 impl<T> Sendable for T
 where
     T: Sized + Send + Sync + 'static,
@@ -640,6 +628,31 @@ pub trait Cannon: Send + Sync + 'static {
     /// Catch validated archived messages without deserializing owned values.
     async fn catch_archived<T: Sendable>(&self, id: u32)
     -> anyhow::Result<Vec<ArchivedMessage<T>>>;
+
+    /// Catch this variable's messages, tolerating a route id that has gone
+    /// stale.
+    ///
+    /// `id` is a *route* id: [`Rules::new_id`] mints one per publisher /
+    /// subscriber pairing and every publish on that route carries it. A
+    /// coordinator restart re-derives the route under a fresh id from a counter
+    /// that starts at zero again, so until the publisher takes the new route it
+    /// shoots under the old one while the subscriber waits on the new. The
+    /// id-keyed [`Self::catch_archived`] waits out that skew forever, leaving a
+    /// viewer that reconnects and never updates again.
+    ///
+    /// The id is therefore a preference: this variable's entries under `id`
+    /// when there are any, otherwise its entries under whatever id is buffered.
+    ///
+    /// `drop_stale` also keeps only the newest arrival. It is for modes
+    /// permitted to drop samples, where nothing else bounds the buffer. A mode
+    /// that promises delivery ([`Qos::expects_reliable_delivery`]) must pass
+    /// `false` and receive the backlog in arrival order.
+    async fn catch_for_variable<T: Sendable>(
+        &self,
+        id: u32,
+        variable_name: &str,
+        drop_stale: bool,
+    ) -> anyhow::Result<Vec<ArchivedMessage<T>>>;
 
     async fn catch_dyn(&self, id: u32) -> anyhow::Result<Vec<(String, VariableType, String)>>;
 }

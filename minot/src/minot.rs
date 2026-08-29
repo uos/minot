@@ -826,9 +826,9 @@ fn missing_qos_profile(qos: AsyncMissingQos) -> mt_net::Qos {
 
 /// Restore the process-wide Minot discovery knobs after Marina has created its
 /// own network session. The async player may publish on a local coordinator
-/// while its bag bytes arrive through a different coordinator (usually an SSH
-/// forward), so letting the registry's settings leak into playback would join
-/// the player to the wrong network.
+/// while its bag bytes arrive through a different one, usually an SSH forward,
+/// so a registry setting leaking into playback joins the player to the wrong
+/// network.
 struct NetworkSettingsGuard {
     local_only: bool,
     coordinator_addr: Option<std::ffi::OsString>,
@@ -840,9 +840,9 @@ impl NetworkSettingsGuard {
             local_only: mt_sea::network::is_local_only(),
             coordinator_addr: std::env::var_os("MINOT_COORD_ADDR"),
         };
-        // Direct and SSH-backed Marina registries need their configured
-        // endpoint to win over a `minot --local-only` playback setting. A bare
-        // minot:// registry switches this back on itself.
+        // The configured endpoint of a direct or SSH-backed Marina registry
+        // wins over a `minot --local-only` playback setting. A bare minot://
+        // registry switches this back on itself.
         mt_sea::network::set_local_only(false);
         guard
     }
@@ -960,9 +960,9 @@ async fn async_play(
 ) -> anyhow::Result<()> {
     mt_log::init_filtered("Minot", "RUST_LOG", "info", mt_log::QUIET_ZENOH);
 
-    // Keep exactly one signal listener alive for the command's whole lifetime.
-    // Previously Ctrl-C was only observed while sleeping between messages, so
-    // a signal during a remote read or publish was lost.
+    // One listener for the command's whole lifetime. Observing Ctrl-C only
+    // while sleeping between messages loses a signal that arrives during a
+    // remote read or publish.
     let stop = tokio_util::sync::CancellationToken::new();
     let stop_on_signal = stop.clone();
     tokio::spawn(async move {

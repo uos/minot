@@ -9,10 +9,10 @@ use mt_sea::{Coordinator, Qos, ShipKind, WindData};
 
 const EMBEDDED_COORDINATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Receive client traffic until the idle deadline, preferring an already
-/// queued packet when the receiver and timer become ready in the same poll.
-/// `tokio::time::timeout` checks its deadline first, which made a stalled
-/// executor report clients dead even though their heartbeats were queued.
+/// Receive client traffic until the idle deadline. A queued packet wins when
+/// the receiver and the timer become ready in the same poll, where
+/// `tokio::time::timeout` checks its deadline first and made a stalled executor
+/// report clients dead with their heartbeats still queued.
 async fn recv_before_idle_timeout<T: Clone>(
     receiver: &mut tokio::sync::broadcast::Receiver<T>,
     timeout: tokio::time::Duration,
@@ -37,17 +37,16 @@ fn take_subscription_override_vars(
     vars
 }
 
-/// A delayed peer-dead report can arrive after the ordinary disconnect path
-/// has already removed this entry. Absence means "already handled", never
-/// "Reliable": defaulting it would turn a harmless stale report into a global
-/// Torpedo.
+/// A delayed peer-dead report can arrive after the ordinary disconnect path has
+/// removed this entry. Absence means "already handled": defaulting it to
+/// "Reliable" would turn a harmless stale report into a global Torpedo.
 fn peer_dead_fires_torpedo(mode: Option<Qos>) -> bool {
     mode.is_some_and(Qos::fires_torpedo)
 }
 
 /// Names Scope must never turn into a global Torpedo when they disappear.
-/// `ClientsHash::best_effort` predates `TryReliable`. On the wire that field is
-/// now the compatibility bucket for every nonfatal QoS.
+/// `ClientsHash::best_effort` predates `TryReliable`, so on the wire that field
+/// is the compatibility bucket for every nonfatal QoS.
 fn nonfatal_client_names(client_qos: &HashMap<String, Qos>) -> HashSet<String> {
     client_qos
         .iter()
@@ -332,9 +331,9 @@ fn run_coordinator_with_ready(
                                     .unwrap()
                                     .insert(name.clone(), client.node_mode);
                                 let mut client_news = client.recv.subscribe();
-                                // Each client tells us at join time how patient to be
-                                // with it, since a node on a wobbly link asks for more than
-                                // one on the LAN. See `mt_sea::Timing`.
+                                // Each client says at join time how patient to
+                                // be with it: a node on a wobbly link asks for
+                                // more than one on the LAN. See `mt_sea::Timing`.
                                 let client_idle_timeout = tokio::time::Duration::from_millis(
                                     client.disconnect_timeout_ms,
                                 );
@@ -758,12 +757,11 @@ fn run_coordinator_with_ready(
                                                     ))
                                                     | Err(_)) => {
                                                         if result.is_err() {
-                                                            // The client stopped speaking for
-                                                            // its declared timeout. Its handler is
-                                                            // the only thing answering variable
-                                                            // requests, so tearing it down silently
-                                                            // makes the client hang on its next
-                                                            // bacon() with no diagnostic.
+                                                            // The client stopped speaking for its
+                                                            // declared timeout. This handler is the
+                                                            // only thing answering its variable
+                                                            // requests, so a silent teardown hangs
+                                                            // its next bacon() with no diagnostic.
                                                             warn!(
                                                                 "Client {} timed out (no packet or heartbeat within {}ms), treating as disconnected",
                                                                 inner_name,
@@ -1015,10 +1013,11 @@ fn run_coordinator_with_ready(
 
                     let lock_next = lock_next && ship_name != COMPARE_NODE_NAME;
 
-                    // Resilient targets get a spawned, failure-tolerant dispatch.
-                    // The inline branch below aborts the whole coordinator when a
-                    // send fails, which is only correct for a node whose loss is
-                    // fatal anyway. A per-topic override wins over the node mode.
+                    // Resilient targets get a spawned, failure-tolerant
+                    // dispatch. The inline branch below aborts the whole
+                    // coordinator on a failed send, which is correct only for a
+                    // node whose loss is fatal anyway. A per-topic override wins
+                    // over the node mode.
                     let effective_mode = coordinator
                         .sub_qos_overrides
                         .read()
@@ -1183,7 +1182,13 @@ fn run_coordinator_with_ready(
                             "Ship {} already registered for var {} as {:?}, skipping",
                             ship, var, mt_net_kind
                         );
-                        // Still send Acknowledge for duplicate registrations
+                        // Reached only for a variable with no
+                        // publisher/subscriber pair yet, so there is nothing to
+                        // push. `already_registered` reads the *cache*, and
+                        // `resolve_cache` consumes a variable's cache entry the
+                        // moment it pairs one up, so anything arriving here has
+                        // no `Shoot` rule to send. A reconnecting node takes the
+                        // normal path below.
                         let _ = coordinator
                             .rat_send(ship, net::PacketKind::Acknowledge)
                             .await;
@@ -1197,8 +1202,8 @@ fn run_coordinator_with_ready(
                         let mut current_rules = rules_changer.write().unwrap();
                         current_rules.register(var.clone(), ship.clone(), mt_net_kind);
                     }
-                    // Wait for the registering ship to be present in rat_qs before
-                    // pushing routes, so convert_action can resolve its address.
+                    // The ship must be in rat_qs before routes are pushed, so
+                    // convert_action can resolve its address.
                     coordinator.wait_for_client(&ship).await;
                     // Push updated routes to all affected ships after registration.
                     let rules_snapshot = rules_changer.read().unwrap().clone();

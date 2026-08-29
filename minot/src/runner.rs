@@ -134,7 +134,6 @@ pub async fn run(
         file_content: file_content.clone(),
         file_path: file_path.clone(),
     };
-    // debug output removed
     send_message(&mut writer, &init_msg).await?;
 
     // Wait for Init response

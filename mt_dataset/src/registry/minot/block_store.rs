@@ -1,26 +1,23 @@
 //! Where fetched blocks live between reads.
 //!
-//! Two policies share one mechanism. A read asks the store for a block. On a miss it
-//! fetches and offers the block back. What the store does with it is the whole
-//! difference between "streaming warms a local copy" and "streaming leaves no
-//! trace".
+//! Two policies share one mechanism: a read asks the store for a block and, on
+//! a miss, fetches it and offers it back. What the store does with it separates
+//! "streaming warms a local copy" from "streaming leaves no trace".
 //!
 //! # Disk
 //!
 //! [`DiskBlockStore`] keeps a sparse file plus a map of which blocks it holds.
 //! A partial read survives the process, so re-reading the same dataset costs
 //! nothing, and once every block is present the sparse file *is* the complete
-//! file, at which point streaming and pulling have converged, which is the
-//! property the whole design is built around.
+//! file. That is where streaming and pulling converge.
 //!
 //! # Ephemeral
 //!
 //! [`NullBlockStore`] keeps nothing. Blocks live only in the small in-memory
 //! window in front of the store and are dropped as the read moves past them, so
-//! memory stays bounded and the disk is never touched. For reading a dataset
-//! you do not want a copy of: a quick look at someone else's
-//! recording, a machine with no room, or anywhere leaving data behind would be
-//! wrong.
+//! memory stays bounded and the disk is never touched. For a dataset no copy is
+//! wanted of: a quick look at someone else's recording, a machine with no room,
+//! or anywhere leaving data behind would be wrong.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -60,18 +57,17 @@ impl BlockStore for NullBlockStore {
 /// `<root>/<escaped rel path>.part`:   sparse data
 /// `<root>/<escaped rel path>.blocks`: one byte per block, 1 = present
 ///
-/// The map uses one byte per block. A 640 MB file
-/// at 1 MiB blocks needs 640 bytes either way once the filesystem has rounded
-/// up, and a file you can read with `xxd` is worth more during a bad afternoon
-/// than the bytes saved.
+/// The map uses one byte per block. A 640 MB file at 1 MiB blocks needs 640
+/// bytes either way once the filesystem has rounded up, and a map readable with
+/// `xxd` is worth more than the bytes a bitfield would save.
 struct Layout {
     data: PathBuf,
     map: PathBuf,
 }
 
 fn layout(root: &Path, relative: &str) -> Layout {
-    // Flattened, because a relative path may contain directories that do not
-    // exist here and escaping is one fewer thing to get wrong.
+    // Flattened, since a relative path may name directories that do not exist
+    // here.
     let escaped = relative.replace(['/', '\\'], "__");
     Layout {
         data: root.join(format!("{escaped}.part")),
@@ -102,11 +98,11 @@ impl std::fmt::Debug for DiskBlockStore {
 impl DiskBlockStore {
     /// Open (or start) a cache for one file.
     ///
-    /// `validity` identifies *which version* of the file this is. A bundle
-    /// hash, or anything that changes when the contents do. A cache whose
-    /// validity or size must match. Mismatched cached data is discarded before new
-    /// data, because serving half of one version and half of another would be
-    /// silent corruption of exactly the kind nobody would think to look for.
+    /// `validity` identifies *which version* of the file this is: a bundle
+    /// hash, or anything else that changes when the contents do. A cache whose
+    /// validity or size does not match is discarded before anything new is
+    /// written, since serving half of one version and half of another is silent
+    /// corruption.
     pub fn open(
         root: &Path,
         relative: &str,
@@ -261,8 +257,8 @@ impl BlockStore for DiskBlockStore {
             self.mark(index)
         })();
         if let Err(error) = written {
-            // Not fatal: the read that prompted this still has its bytes, and a
-            // block that failed to cache is fetched again next time.
+            // The read that prompted this still has its bytes, and a block
+            // that failed to cache is fetched again next time.
             log::debug!("could not cache block {index}: {error}");
         }
     }
@@ -289,8 +285,8 @@ pub fn completed_file(
     validity: &str,
 ) -> Option<PathBuf> {
     let store = DiskBlockStore::open(root, relative, size, block_bytes, validity).ok()?;
-    // `open` discards a cache whose stamp does not match, so reaching here with
-    // every block present means these bytes really are this version's.
+    // `open` discards a cache whose stamp does not match, so every block being
+    // present here means these bytes are this version's.
     store.is_complete().then(|| store.data_path())
 }
 
@@ -396,7 +392,7 @@ mod tests {
     #[test]
     fn completeness_is_reached_only_when_every_block_is_present() {
         let dir = tempfile::tempdir().unwrap();
-        // Deliberately not a multiple of the block size: the last block is short.
+        // Not a multiple of the block size, so the last block is short.
         let size = 4096 * 2 + 10;
         let store = DiskBlockStore::open(dir.path(), "run.mcap", size, 4096, "hash").unwrap();
         assert_eq!(store.total_blocks(), 3);

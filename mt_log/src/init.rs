@@ -55,18 +55,17 @@ pub fn init_filtered(
 /// at info, which buries everything a run is actually about.
 pub const QUIET_ZENOH: &[(&str, log::LevelFilter)] = &[
     ("zenoh", log::LevelFilter::Warn),
-    // Held at error, still enabled. These narrate their normal operation and are
-    // worth nothing at warn, but a module that has genuinely failed still has
-    // something to say, and silencing it wholesale is how a real fault turns
-    // into a process that stops working with no explanation.
+    // Held at error, still enabled: these narrate their normal operation, so
+    // nothing below error is worth reading, while a module that has genuinely
+    // failed still has something to say.
     ("zenoh::api::admin", log::LevelFilter::Error),
     ("zenoh::api::session", log::LevelFilter::Error),
     ("zenoh::net::routing::hat::peer", log::LevelFilter::Error),
     // A bounded query is bounded by being allowed to expire, and Zenoh reports
     // every expiry from both ends at warn: the router noting the deadline, the
-    // session then receiving a reply for a query it has already dropped. One
-    // best-effort peer walking away makes every publisher in the process
-    // narrate the same non-event. Real errors still come through.
+    // session receiving a reply for a query it already dropped. One departed
+    // best-effort peer makes every publisher in the process narrate that. Real
+    // errors still come through.
     (
         "zenoh::net::routing::dispatcher::queries",
         log::LevelFilter::Error,

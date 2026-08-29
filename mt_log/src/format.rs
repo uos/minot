@@ -4,11 +4,11 @@
 //! [LEVEL] [Source] message
 //! ```
 //!
-//! The level is always there. The source is the process the record came from,
-//! and appears only when that is not the process doing the printing: a run
-//! nobody is capturing prints `[INFO] started`, and the same run under a
-//! parent prints `[INFO] [Minot] started`. So a tag always means "not mine",
-//! and a parent relaying the line has nothing to invent.
+//! The level is always there. The source is the process the record came from
+//! and appears only when that is not the process doing the printing, so a run
+//! nobody is capturing prints `[INFO] started` while the same run under a
+//! parent prints `[INFO] [Minot] started`. A tag therefore always means "not
+//! mine", and a parent relaying the line has nothing to invent.
 
 use std::io::IsTerminal;
 use std::sync::OnceLock;
@@ -36,8 +36,7 @@ pub enum Format {
 impl Format {
     /// Read the format a parent asked for, defaulting to plain text.
     ///
-    /// Unrecognised values use text formatting. A log
-    /// format is never worth aborting a run over.
+    /// Unrecognised values fall back to text formatting.
     pub fn from_env() -> Self {
         match std::env::var(FORMAT_VAR).ok().as_deref() {
             Some("tagged") => Format::Tagged,
@@ -305,9 +304,8 @@ mod wire {
 /// JSON is tried first when the child speaks it, and text otherwise: a
 /// leading `[LEVEL]` gives the level, a following `[Source]` gives the
 /// process, and a `target:` token gives the module. A line with no tag at all
-/// is guessed at by looking for a level word, which is worth doing (an error
-/// from a child is exactly what a reader scanning for red is looking for),
-/// but only ever as the last resort.
+/// is guessed at by looking for a level word, as a last resort: an error from a
+/// child is what a reader scanning for red wants to see.
 pub fn parse(line: &str) -> Record {
     let line = sanitize(line.to_owned());
 
@@ -336,11 +334,11 @@ pub fn parse(line: &str) -> Record {
 /// Pull the source and target out of a record's message, wherever the record
 /// came from.
 ///
-/// A relayed line arrives with its origin written into the text. Pelorus
-/// re-emits Minot's records as `[Minot] app: read bag`, tagged as its own,
-/// and the innermost process is the one the reader needs, so the last tag on
-/// the front wins. A target whose first segment repeats that source says
-/// nothing the tag did not: `[Minot] minot::app:` is `[Minot] app:`.
+/// A relayed line arrives with its origin written into the text: Pelorus
+/// re-emits Minot's records as `[Minot] app: read bag` under its own tag. The
+/// innermost process is the one the reader needs, so the last tag on the front
+/// wins, and a target whose first segment repeats that source is trimmed:
+/// `[Minot] minot::app:` becomes `[Minot] app:`.
 fn normalize(record: &mut Record) {
     while let Some((tag, tail)) = split_tag(&record.message) {
         let (tag, tail) = (tag.to_owned(), tail.trim_start().to_owned());
@@ -427,8 +425,8 @@ fn guess_level(line: &str) -> LogLevel {
 /// Lines relayed from a child arrive already formatted for a terminal, colour
 /// codes and all. Writing those bytes into cells hands them to the real
 /// terminal, which moves the cursor and scrambles the pane around them, so the
-/// escapes are dropped once, on the way in. Newlines and tabs become spaces
-/// as a space so adjacent words stay apart.
+/// escapes are dropped once, on the way in. Newlines and tabs become spaces so
+/// adjacent words stay apart.
 pub fn sanitize(message: String) -> String {
     if !message
         .chars()
@@ -471,9 +469,9 @@ pub fn sanitize(message: String) -> String {
     clean
 }
 
-/// Whether stderr should be coloured: only when a terminal is there to read
-/// it. Piped output stays plain, so a parent capturing it gets text rather
-/// than escapes it has to strip back off.
+/// Whether stderr should be coloured, which it is only when a terminal is there
+/// to read it. Piped output stays plain, so a parent capturing it gets text with
+/// no escapes to strip.
 pub fn colour_stderr() -> bool {
     static COLOUR: OnceLock<bool> = OnceLock::new();
     *COLOUR.get_or_init(|| std::io::stderr().is_terminal())

@@ -142,7 +142,7 @@ fn is_shm_enabled() -> bool {
     crate::network::is_shm_runtime_available() && !crate::network::is_shm_disabled()
 }
 
-/// Get SHM buffer size from environment variable, falling back to default
+/// SHM buffer size from the environment, or the default.
 #[cfg(feature = "shm")]
 fn get_shm_buffer_size() -> usize {
     std::env::var("MINOT_SHM_SIZE")
@@ -176,14 +176,62 @@ fn get_shm_allocation_timeout() -> std::time::Duration {
     std::time::Duration::from_millis(milliseconds.max(1))
 }
 
-/// Copy bytes into an aligned buffer for rkyv deserialization
+/// Copy bytes into an aligned buffer for rkyv deserialization.
 fn align_bytes(bytes: &[u8]) -> AlignedVec {
     let mut aligned = AlignedVec::with_capacity(bytes.len());
     aligned.extend_from_slice(bytes);
     aligned
 }
 
-/// SHM state with dynamic resizing capability
+/// Decode one data payload into the receive buffer and wake any consumer.
+///
+/// Shared by the queryable, which answers the reliable modes' queries, and the
+/// subscriber, which takes best-effort pushes, so both land in the same buffer
+/// and `catch` cannot tell them apart.
+///
+/// Returns the error text to reply with when the payload is unusable. A pushed
+/// message has nobody to reply to, so the caller decides what to do with it.
+fn accept_data_payload(
+    payload_bytes: &[u8],
+    raw_recv_buff: &std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
+    updated_raw_recv: &tokio::sync::broadcast::Sender<u32>,
+) -> Result<u32, &'static str> {
+    // id (4 bytes) + variable_type (1 byte) + name (64 bytes) + data
+    if payload_bytes.len() < 69 {
+        return Err("payload too short");
+    }
+
+    let msg_id = u32::from_be_bytes([
+        payload_bytes[0],
+        payload_bytes[1],
+        payload_bytes[2],
+        payload_bytes[3],
+    ]);
+    let variable_type = VariableType::from(payload_bytes[4]);
+
+    let name_bytes = &payload_bytes[5..69];
+    let var_name =
+        String::from_utf8_lossy(name_bytes.split(|&b| b == 0).next().unwrap_or_default())
+            .to_string();
+
+    // Copy only the archived data into its final, rkyv-aligned receive buffer.
+    let data = align_bytes(&payload_bytes[69..]);
+
+    {
+        let mut lock = raw_recv_buff.write().unwrap();
+        lock.entry(msg_id)
+            .or_default()
+            .push((data, variable_type, var_name));
+    }
+
+    if updated_raw_recv.send(msg_id).is_err() {
+        debug!("Data for id {} ready, but no consumers listening", msg_id);
+    }
+
+    Ok(msg_id)
+}
+
+/// SHM state, resizable at runtime.
 #[cfg(feature = "shm")]
 struct ShmState {
     provider: std::sync::Arc<ShmProvider<PosixShmProviderBackend>>,
@@ -319,14 +367,13 @@ fn format_shm_error(err_str: &str, requested_size: usize) -> String {
 }
 
 impl Client {
-    /// Get or create SHM provider, initializing on first call
+    /// Get the SHM provider, creating it on the first call.
     #[cfg(feature = "shm")]
     fn get_or_init_shm(&self) -> Option<std::sync::Arc<ShmProvider<PosixShmProviderBackend>>> {
         if !is_shm_enabled() {
             return None;
         }
 
-        // Fast path: already initialized
         if self
             .shm_initialized
             .load(std::sync::atomic::Ordering::Acquire)
@@ -339,7 +386,6 @@ impl Client {
                 .map(|s| s.provider.clone());
         }
 
-        // Slow path: initialize
         let mut state = self.shm_state.write().ok()?;
         if state.is_none() {
             let initial_size = get_shm_buffer_size();
@@ -366,7 +412,7 @@ impl Client {
         state.as_ref().map(|s| s.provider.clone())
     }
 
-    /// Try to grow the SHM pool to accommodate a larger message
+    /// Try to grow the SHM pool to fit a larger message.
     #[cfg(feature = "shm")]
     fn try_grow_shm(
         &self,
@@ -402,7 +448,7 @@ impl Client {
         }
     }
 
-    /// Get current SHM capacity
+    /// Current SHM capacity.
     #[cfg(feature = "shm")]
     fn shm_capacity(&self) -> usize {
         self.shm_state
@@ -428,7 +474,6 @@ impl Client {
         data_key: &str,
         id: u32,
     ) -> Option<anyhow::Result<()>> {
-        // Get or initialize SHM provider
         let mut shm_provider = self.get_or_init_shm()?;
 
         let max_message_size = get_shm_max_message_size();
@@ -458,7 +503,7 @@ impl Client {
             };
         }
 
-        // Try allocation, growing pool if needed (up to 2 attempts)
+        // Two attempts: the second runs after the pool has grown.
         for attempt in 0..2 {
             let shm_result = match tokio::time::timeout(
                 get_shm_allocation_timeout(),
@@ -480,7 +525,6 @@ impl Client {
 
             match shm_result {
                 Ok(mut shm_buf) => {
-                    // Copy data into SHM buffer
                     shm_buf[0..4].copy_from_slice(id_bytes);
                     shm_buf[4] = variable_type.into();
                     shm_buf[5..69].copy_from_slice(padded_name);
@@ -489,7 +533,6 @@ impl Client {
                     let shm_immut: zenoh::shm::ZShm = shm_buf.into();
                     debug!("Sending {} bytes via SHM to {}", total_len, data_key);
 
-                    // Send with retry loop
                     loop {
                         let replies =
                             match self.session.get(data_key).payload(shm_immut.clone()).wait() {
@@ -530,7 +573,6 @@ impl Client {
                     }
                 }
                 Err(_) if attempt == 0 => {
-                    // First attempt failed - try to grow the pool
                     let current_capacity = self.shm_capacity();
                     if total_len > current_capacity {
                         debug!(
@@ -539,10 +581,9 @@ impl Client {
                         );
                         if let Some(new_provider) = self.try_grow_shm(total_len) {
                             shm_provider = new_provider;
-                            continue; // Retry with larger pool
+                            continue;
                         }
                     }
-                    // Couldn't grow, fall back to network
                     warn!(
                         "SHM allocation failed for {} bytes, falling back to network transport",
                         total_len
@@ -550,7 +591,6 @@ impl Client {
                     return None;
                 }
                 Err(_) => {
-                    // Second attempt also failed
                     warn!(
                         "SHM allocation failed after pool growth, falling back to network transport"
                     );
@@ -581,7 +621,7 @@ impl Client {
         let raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>> =
             std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
 
-        // Wind channel - use MPSC to buffer wind packets and avoid race conditions
+        // MPSC so wind packets are buffered rather than raced over.
         let (wind_sender, wind_receiver) = tokio::sync::mpsc::channel::<Packet>(100);
         let wind_receiver = std::sync::Arc::new(tokio::sync::Mutex::new(wind_receiver));
 
@@ -618,12 +658,10 @@ impl Client {
             loop {
                 match queryable.recv_async().await {
                     Ok(query) => {
-                        // Get payload bytes, with SHM support when feature is enabled
                         let payload_bytes: std::borrow::Cow<'_, [u8]> = match query.payload() {
                             Some(p) => {
                                 #[cfg(feature = "shm")]
                                 {
-                                    // Check if payload is SHM
                                     if let Some(shm_buf) = p.as_shm() {
                                         SHM_RECEIVES
                                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -657,47 +695,18 @@ impl Client {
                             }
                         };
 
-                        // Parse header: id (4 bytes) + variable_type (1 byte) + name (64 bytes) + data
-                        if payload_bytes.len() < 69 {
-                            error!("Data payload too short");
-                            if let Err(e) = query.reply_err("payload too short").wait() {
+                        if let Err(reason) = accept_data_payload(
+                            &payload_bytes,
+                            &raw_recv_buff_clone,
+                            &updated_raw_recv_clone,
+                        ) {
+                            error!("Data payload rejected: {reason}");
+                            if let Err(e) = query.reply_err(reason).wait() {
                                 error!("Failed to send error reply: {}", e);
                             }
                             continue;
                         }
 
-                        let id_bytes = [
-                            payload_bytes[0],
-                            payload_bytes[1],
-                            payload_bytes[2],
-                            payload_bytes[3],
-                        ];
-                        let msg_id = u32::from_be_bytes(id_bytes);
-                        let variable_type = VariableType::from(payload_bytes[4]);
-
-                        let name_bytes = &payload_bytes[5..69];
-                        let var_name = String::from_utf8_lossy(
-                            name_bytes.split(|&b| b == 0).next().unwrap_or_default(),
-                        )
-                        .to_string();
-
-                        // Copy only the archived data into its final, rkyv-aligned receive
-                        // buffer. The previous implementation copied the complete payload,
-                        // sliced it into another Vec, then copied it once more for alignment.
-                        let data = align_bytes(&payload_bytes[69..]);
-
-                        {
-                            let mut lock = raw_recv_buff_clone.write().unwrap();
-                            lock.entry(msg_id)
-                                .or_default()
-                                .push((data, variable_type, var_name));
-                        }
-
-                        if updated_raw_recv_clone.send(msg_id).is_err() {
-                            debug!("Data for id {} ready, but no consumers listening", msg_id);
-                        }
-
-                        // Reply with ACK to confirm receipt
                         let key_expr = query.key_expr().clone();
                         if let Err(e) = query.reply(key_expr, &[0u8; 1]).wait() {
                             error!("Failed to send ACK reply: {}", e);
@@ -711,12 +720,54 @@ impl Client {
             }
         });
 
-        // Wait for the queryable handler to be running
         let _ = ready_rx.await;
         debug!("Client {} queryable handler ready", ship_name_str);
 
-        // Declare a heartbeat queryable so peers can ping us directly.
-        // Responds with an empty payload to any query ("I'm alive").
+        // Best-effort arrives as a `put`, so it needs a subscriber beside the
+        // queryable. Both sit on the same key and Zenoh routes a `put` to
+        // subscribers and a `get` to queryables, so they never see each other's
+        // traffic. Both feed the same buffer, so `catch` cannot tell which way
+        // a sample arrived.
+        //
+        // The push costs the sender nothing: no reply channel to wait on,
+        // abandon, or be told is closed when a peer reappears and answers a
+        // query that was given up on long ago.
+        let push_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
+        let push_updated = updated_raw_recv.clone();
+        let push_subscriber = session
+            .declare_subscriber(&data_key)
+            .wait()
+            .expect("Failed to create data subscriber");
+        debug!(
+            "Client {} best-effort subscriber declared on {}",
+            ship_name_str, data_key
+        );
+        tokio::spawn(async move {
+            while let Ok(sample) = push_subscriber.recv_async().await {
+                let payload_bytes = sample.payload().to_bytes();
+                // Counted here as well as on the queryable, or best-effort
+                // traffic would be invisible in the receive metrics. Always
+                // network counters, since only `put` reaches this path.
+                #[cfg(feature = "shm")]
+                {
+                    NETWORK_RECEIVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    NETWORK_RECEIVE_BYTES.fetch_add(
+                        payload_bytes.len() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+                if let Err(reason) =
+                    accept_data_payload(&payload_bytes, &push_recv_buff, &push_updated)
+                {
+                    // Nobody is waiting on an answer, and one dropped
+                    // best-effort sample is not an error.
+                    debug!("Best-effort payload discarded: {reason}");
+                }
+            }
+        });
+
+        // Lets peers ping this node directly. Any query gets an empty payload
+        // back.
         let heartbeat_key = format!("minot/{}/heartbeat/{}", domain_id, ship_name_key);
         let heartbeat_queryable = session
             .declare_queryable(&heartbeat_key)
@@ -755,7 +806,7 @@ impl Client {
         })
     }
 
-    /// Register the client to the network
+    /// Register the client to the network.
     pub async fn register(&mut self) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
         let ship_name = match &self.kind {
             ShipKind::Rat(name) => name.clone(),
@@ -765,10 +816,8 @@ impl Client {
         // A fresh registration has not yet been answered by anyone.
         self.connection.mark_link_unproven();
 
-        // Key for coordinator -> client messages
         let coord_to_client_key =
             format!("minot/{}/coord/clients/{}", self.domain_id, ship_name_key);
-        // Key for client -> coordinator messages
         let client_to_coord_key =
             format!("minot/{}/clients/{}/coord", self.domain_id, ship_name_key);
         let join_key = format!("minot/{}/coord/join", self.domain_id);
@@ -819,7 +868,6 @@ impl Client {
                 .replace(recv_tx.clone());
         }
 
-        // Task to send to coordinator
         let session_for_send = std::sync::Arc::clone(&self.session);
         let client_to_coord_key_owned = client_to_coord_key.clone();
         let node_mode = self.node_mode;
@@ -851,7 +899,7 @@ impl Client {
         let (reg_done_tx, mut reg_done_rx) = tokio::sync::oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            // Phase 1: no timeout during registration / wait_for_ack, duration is unbounded
+            // Phase 1: registration and wait_for_ack take as long as they take.
             loop {
                 tokio::select! {
                     result = coord_subscriber.recv_async() => {
@@ -882,34 +930,28 @@ impl Client {
                             }
                         }
                     }
-                    // reg_done fires once register() has fully completed (incl. wait_for_ack)
+                    // Fires once register() has completed, wait_for_ack included.
                     _ = &mut reg_done_rx => break,
                 }
             }
 
-            // Phase 2: the coordinator must echo this node's heartbeats within its
-            // configured disconnect timeout.
+            // Phase 2: the coordinator must echo this node's heartbeats within
+            // its configured disconnect timeout.
             //
-            // The full timeout cannot be applied straight away, because the first echo
-            // cannot arrive until the client has sent its first heartbeat, up to
-            // one heartbeat interval later, so the detector arms on that first
-            // echo. But "wait for an echo that may never come" cannot be the
-            // whole story either: a coordinator that dies seconds after
-            // welcoming this node, before ever answering it, would otherwise
-            // never be noticed and the node would wait forever. So until the
-            // detector arms, a heartbeating node also gives up after a grace
-            // period. A node that does not heartbeat is not expecting a reply
-            // and is never timed out.
+            // The detector arms on the first echo, which cannot arrive before
+            // this node has sent its first heartbeat, up to one interval later.
+            // Until then a heartbeating node still gives up after a grace
+            // period, so a coordinator that dies right after welcoming it is
+            // noticed. A node that does not heartbeat expects no reply and is
+            // never timed out.
             let mut received_first = false;
-            // How long this node has gone without any word from the coordinator
-            // while its detector is still unarmed.
+            // Time without any word from the coordinator while unarmed.
             let mut silent_for = tokio::time::Duration::ZERO;
-            // Before the first echo the wait is short, so that a node which
-            // starts heartbeating just after registering still gets noticed.
+            // Short before the first echo, so a node that starts heartbeating
+            // just after registering is still noticed quickly.
             let unarmed_poll = tokio::time::Duration::from_millis(200).min(disconnect_timeout);
-            // A heartbeating node that is never answered at all is just as
-            // disconnected as one that stops being answered. Generous, because
-            // this window also covers the coordinator still setting itself up.
+            // Also covers the coordinator still setting itself up, hence the
+            // generous window.
             let startup_grace = disconnect_timeout + registration_timeout;
             loop {
                 let wait = if received_first {
@@ -917,10 +959,10 @@ impl Client {
                 } else {
                     unarmed_poll
                 };
-                // If the runtime was stalled until the deadline, prefer a
-                // heartbeat already waiting in the subscriber over declaring
-                // the coordinator dead. `timeout()` checks the timer first and
-                // caused false disconnects when both became ready together.
+                // A heartbeat already waiting in the subscriber wins over the
+                // deadline, which matters when a stalled runtime makes both
+                // ready at once. `timeout()` checks the timer first and caused
+                // false disconnects there.
                 let result = tokio::select! {
                     biased;
                     sample = coord_subscriber.recv_async() => Ok(sample),
@@ -929,8 +971,8 @@ impl Client {
                 if result.is_ok() {
                     silent_for = tokio::time::Duration::ZERO;
                 } else if !received_first {
-                    // Not yet armed: only give up once this node is actually
-                    // asking for replies and has waited out the grace period.
+                    // Unarmed: give up only once this node is asking for
+                    // replies and has waited out the grace period.
                     silent_for += wait;
                     if !connection_for_watch.is_heartbeating() || silent_for < startup_grace {
                         continue;
@@ -991,7 +1033,6 @@ impl Client {
             }
         });
 
-        // Now send the join request
         let network_register_packet = Packet {
             header: crate::net::Header {
                 source: ShipName::MAX,
@@ -1009,7 +1050,6 @@ impl Client {
         let bytes = to_bytes::<rkyv::rancor::Error>(&network_register_packet)
             .expect("Failed to serialize join request");
 
-        // Publisher for join requests
         let publisher = self
             .session
             .declare_publisher(&join_key)
@@ -1022,15 +1062,14 @@ impl Client {
 
         let mut welcome_sub = recv_tx.subscribe();
 
-        // Keep sending join requests until we get a welcome
+        // Join requests repeat until a welcome arrives.
         loop {
             publisher
                 .put(&*bytes)
                 .wait()
                 .map_err(|e| anyhow!("Failed to send join request: {}", e))?;
 
-            // Wait for welcome - use a timeout to retry join requests
-            // This is acceptable as it's just for retrying discovery and not for correctness
+            // The timeout only paces discovery retries.
             let timeout =
                 tokio::time::timeout(std::time::Duration::from_millis(500), welcome_sub.recv())
                     .await;
@@ -1044,7 +1083,6 @@ impl Client {
                     {
                         debug!("Received welcome from coordinator");
 
-                        // For non-compare nodes, wait for coordinator ready signal
                         let is_non_compare = match &self.kind {
                             ShipKind::Rat(name) => name != COMPARE_NODE_NAME,
                             _ => true,
@@ -1054,11 +1092,11 @@ impl Client {
                             Self::wait_for_ack(welcome_sub).await?;
                         }
 
-                        // Registration fully complete, so switch receive task to timeout mode
+                        // Registration is complete, so the receive task
+                        // switches to timeout mode.
                         let _ = reg_done_tx.send(());
                         return Ok(disconnect_rx);
                     }
-                    // Not a welcome packet, keep waiting
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                     warn!("Register receiver lagged by {} messages", n);
@@ -1136,17 +1174,27 @@ impl Client {
     /// promptly releases its pending state and the payload when the target
     /// queryable has disappeared. Callers holding a lock or a guard across this
     /// call hold it for the whole round trip.
+    ///
+    /// `congestion_control` must be set explicitly from the target's `Qos`.
+    /// Zenoh defaults a *query* to `Block` (`CongestionControl::DEFAULT_REQUEST`)
+    /// where a put defaults to `Drop`, and every mode's data path is a query, so
+    /// the default makes even `Qos::BestEffort` non-droppable on the wire. A
+    /// vanished target then fills its queue with undroppable messages and Zenoh
+    /// tears down the whole transport ("Unable to push non droppable network
+    /// message. Closing transport!"), coordinator link included.
     async fn try_send_network_once(
         session: &zenoh::Session,
         data_key: &str,
         payload: zenoh::bytes::ZBytes,
         priority: zenoh::qos::Priority,
+        congestion_control: zenoh::qos::CongestionControl,
         timeout: std::time::Duration,
     ) -> anyhow::Result<()> {
         let replies = session
             .get(data_key)
             .payload(payload)
             .priority(priority)
+            .congestion_control(congestion_control)
             .timeout(timeout)
             .wait()
             .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
@@ -1156,9 +1204,8 @@ impl Client {
             .await
             .map_err(|e| anyhow::anyhow!("data query completed without a reply: {e}"))?;
         reply.result().map(|_| ()).map_err(|e| {
-            // The reason is the reply's text payload. The struct
-            // around it is a wrapper whose debug form buries that one word in
-            // a byte dump of it.
+            // The reason is the reply's text payload; the wrapper's debug form
+            // buries it in a byte dump.
             let payload = e.payload().to_bytes();
             anyhow::anyhow!(
                 "receiver rejected data: {}",
@@ -1167,8 +1214,16 @@ impl Client {
         })
     }
 
-    /// Network-only send (no SHM) for `Qos::BestEffort`: a single attempt, no
-    /// retry. If it does not land, the next sample is worth more than this one.
+    /// Network-only send (no SHM) for `Qos::BestEffort`: one push, no reply.
+    ///
+    /// A query would leave a reply channel the sender waits on and abandons once
+    /// the target is unreachable; when that target comes back and answers, Zenoh
+    /// finds the channel gone and raises `sending on a closed channel` on the
+    /// *publisher*. A best-effort peer's comings and goings must never surface
+    /// there, so this hands the sample to Zenoh and returns.
+    ///
+    /// Delivery is therefore unconfirmed. The receiver takes the sample through
+    /// the subscriber declared beside its queryable.
     pub async fn send_raw_network(
         session: std::sync::Arc<zenoh::Session>,
         domain_id: u16,
@@ -1185,14 +1240,12 @@ impl Client {
         );
         let payload = Self::build_data_payload(id, variable_type, &variable_name, &data);
 
-        Self::try_send_network_once(
-            &session,
-            &data_key,
-            payload,
-            zenoh::qos::Priority::Background,
-            std::time::Duration::from_millis(crate::BEST_EFFORT_ATTEMPT_TIMEOUT_MS),
-        )
-        .await
+        session
+            .put(&data_key, payload)
+            .priority(zenoh::qos::Priority::Background)
+            .congestion_control(Qos::BestEffort.congestion_control())
+            .wait()
+            .map_err(|e| anyhow::anyhow!("Failed to push best-effort data: {e}"))
     }
 
     /// Network-only send (no SHM) for `Qos::TryReliable`: retry until the
@@ -1237,6 +1290,7 @@ impl Client {
                 &data_key,
                 payload.clone(),
                 zenoh::qos::Priority::Data,
+                Qos::TryReliable.congestion_control(),
                 attempt_timeout.min(remaining),
             )
             .await
@@ -1306,25 +1360,30 @@ impl Client {
             {
                 return result;
             }
-            // If try_shm_send returns None, fall through to network
+            // try_shm_send returned None, so continue on the network path.
             SHM_SEND_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // Network transfer (small messages, SHM disabled, or SHM fallback)
+        // Small messages, SHM disabled, or the SHM fallback.
         let mut payload = Vec::with_capacity(total_len);
         payload.extend_from_slice(&id_bytes);
         payload.push(variable_type.into());
         payload.extend_from_slice(&padded_name);
         payload.extend_from_slice(&data);
-        // Moving the Vec into ZBytes transfers ownership to Zenoh. Passing &Vec here
-        // invokes Zenoh's cloning conversion and copies the entire payload.
+        // Moving the Vec transfers ownership to Zenoh; passing &Vec would hit
+        // the cloning conversion and copy the whole payload.
         let payload = zenoh::bytes::ZBytes::from(payload);
 
         loop {
+            // Spelled out even though Zenoh already defaults a query to
+            // `Block`: that implicit default is what hid the same setting on
+            // the best-effort path, and `Reliable` is the one mode that wants
+            // it.
             let replies = self
                 .session
                 .get(&data_key)
                 .payload(payload.clone())
+                .congestion_control(Qos::Reliable.congestion_control())
                 .wait()
                 .map_err(|e| anyhow!("Failed to send data query: {}", e))?;
 

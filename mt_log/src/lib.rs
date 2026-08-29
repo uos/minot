@@ -1,9 +1,8 @@
 //! One log line format for every process in the Minot stack.
 //!
-//! Minot, Pelorus and Polarstern run as a chain of parent and child
-//! processes, and each one used to flatten its records to text in its own
-//! shape and guess the next one's back out of it. This crate holds the one
-//! format they all write and the one reader they all use:
+//! Minot, Pelorus and Polarstern run as a chain of parent and child processes.
+//! This crate holds the one format they all write and the one reader they all
+//! use, so no process has to guess at another's shape:
 //!
 //! ```text
 //! [LEVEL] [Source] message

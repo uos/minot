@@ -1,7 +1,7 @@
 //! Resumable, credit-controlled chunk streams over a Minot network.
 //!
-//! Minot's pub/sub carries whole messages between nodes that are up. This adds
-//! the two things a bulk transfer over an unreliable link needs on top of that:
+//! Minot's pub/sub carries whole messages between nodes that are up. A bulk
+//! transfer over an unreliable link needs three more things on top of that:
 //!
 //! - **Chunking.** A multi-gigabyte object is never one message.
 //! - **A window.** The receiver limits sender lookahead and memory use.
@@ -18,10 +18,10 @@
 //! contiguously (`ack_through`), and how far the sender may run ahead
 //! (`grant_through`). The sender always sends from `ack_through + 1`.
 //!
-//! That single idempotent message is credit, acknowledgement, and resume at
-//! once. A `Window` lost in the disconnect costs nothing because the next one
-//! supersedes it, and a sender that reconnects needs no special case: it is
-//! already doing exactly what a resume would ask for.
+//! That single idempotent message is credit, acknowledgement and resume at
+//! once. A `Window` lost in a disconnect costs nothing because the next one
+//! supersedes it, and a reconnecting sender needs no special case: it is
+//! already doing what a resume would ask for.
 //!
 //! # QoS
 //!
@@ -123,8 +123,8 @@ fn window_topic(flow: &str) -> String {
 /// Publish, treating a failure while the link is down as "not yet".
 ///
 /// A flow exists to survive disconnects, so the errors a disconnect produces
-/// are the normal case here. A dropped chunk stays in the
-/// retain buffer and the repair timer sends it again once the link is back.
+/// are the normal case here. A dropped chunk stays in the retain buffer and the
+/// repair timer sends it again once the link is back.
 async fn publish_tolerantly<T: mt_sea::Sendable>(
     publisher: &Publisher<T>,
     value: &T,
@@ -134,10 +134,9 @@ async fn publish_tolerantly<T: mt_sea::Sendable>(
     match publisher.publish(value).await {
         Ok(()) => Ok(()),
         Err(error) if mt_sea::ship::is_backpressure(&error) => {
-            // The link is fine and the transport is busy. Treated like a
-            // dropped chunk: the retain buffer still holds it and the repair
-            // timer sends it again. Escalating here would tear down a working
-            // transfer because it was going too fast.
+            // The link is fine and the transport is busy, so this is handled
+            // like a dropped chunk: retained, and resent by the repair timer.
+            // Escalating would tear down a transfer for going too fast.
             debug!("flow: {what} deferred, the send queue is full");
             Ok(())
         }
@@ -155,10 +154,9 @@ async fn publish_tolerantly<T: mt_sea::Sendable>(
 /// The sender's bookkeeping: what the receiver has confirmed, how far the
 /// sender may run, and which chunks are still replayable.
 ///
-/// Split out from [`FlowSender`] with no transport in it, because this is where
-/// the subtle rules live: a stale window must never move a watermark backwards,
-/// and a resume must never be promised for a chunk that has already been
-/// dropped. Direct tests cover these transitions precisely.
+/// Kept apart from [`FlowSender`] and free of transport so its rules can be
+/// tested directly: a stale window must never move a watermark backwards, and a
+/// resume must never be promised for a chunk that has already been dropped.
 #[derive(Debug)]
 struct SenderWindow {
     /// Chunks sent but not yet acknowledged, oldest first. This is the replay
@@ -279,8 +277,8 @@ impl FlowSender {
 
     /// Drain any windows the receiver has published, keeping the newest.
     ///
-    /// Non-blocking: a sender that is not waiting for credit should not stall
-    /// to check for it.
+    /// Non-blocking, so a sender that is not waiting for credit never stalls
+    /// here.
     fn absorb_pending_windows(&mut self) {
         while let Some(window) = self.windows.try_next() {
             self.window.apply(window);
@@ -291,17 +289,15 @@ impl FlowSender {
     /// receiver's watermark whenever the link drops and returns.
     ///
     /// `source` is asked for bytes by absolute offset because a resume can move
-    /// the read position backwards. The watermark is the receiver's, never the sender's
-    /// progress, decides where the stream is.
+    /// the read position backwards. The receiver's watermark decides where the
+    /// stream is, never the sender's own progress.
     ///
-    /// The loop has one rule that is easy to get wrong: **a window whose
-    /// watermark has not moved is a loss report.** It is the only one the
-    /// protocol has. A sender that only ever waits for credit to send *new*
-    /// chunks will deadlock the moment a single chunk is dropped, because the receiver
-    /// cannot advance past the gap, so the grant freezes, so the sender waits
-    /// forever for credit while the one chunk that would unblock everything sits
-    /// in its retain buffer. Retransmission has to be driven by the timer below,
-    /// independently of whether there is credit for anything new.
+    /// **A window whose watermark has not moved is a loss report**, and the only
+    /// one the protocol has. A sender that waits for credit before sending
+    /// anything deadlocks on the first dropped chunk: the receiver cannot
+    /// advance past the gap, the grant freezes, and the chunk that would unblock
+    /// it sits in the retain buffer. Retransmission is therefore driven by the
+    /// timer below, whatever credit exists for new chunks.
     pub async fn send_all<S>(&mut self, source: &mut S) -> Result<u64>
     where
         S: ChunkSource,
@@ -366,9 +362,8 @@ impl FlowSender {
                         payload,
                     };
                     source_exhausted = reached_end;
-                    // Recorded before it is sent: if the publish is lost to a
-                    // disconnect the chunk is already retained, so the repair
-                    // step sends it again.
+                    // Recorded before the send, so a publish lost to a
+                    // disconnect leaves the chunk retained for the repair step.
                     self.window.record(chunk.clone());
                     publish_tolerantly(&self.chunks, &chunk, &self.connection, "a chunk").await?;
                     last_progress = tokio::time::Instant::now();
@@ -398,8 +393,8 @@ impl FlowSender {
                     // the node is really gone and not just disconnected.
                     return Err(anyhow!("flow: the receiver's window channel closed"));
                 }
-                // Not an error: falling through re-runs the repair step, which
-                // is exactly what a silent receiver needs.
+                // Falling through re-runs the repair step, which is what a
+                // silent receiver needs.
                 Err(_) => {}
             }
         }
@@ -500,10 +495,9 @@ impl FlowReceiver {
 
     /// Receive the whole stream into `sink`.
     ///
-    /// The window is republished on a timer as well as on progress, which is
-    /// what lets a transfer recover from a disconnect without either side
-    /// having to detect one: the sender hears an older watermark than it
-    /// expected and replays from there.
+    /// The window is republished on a timer as well as on progress, so neither
+    /// side has to detect a disconnect: the sender hears an older watermark than
+    /// it expected and replays from there.
     pub async fn receive_all<K>(&mut self, sink: &mut K) -> Result<u64>
     where
         K: ChunkSink,
@@ -521,8 +515,8 @@ impl FlowReceiver {
         )
         .await?;
 
-        // Reset whenever the stream moves, so a long but healthy transfer is
-        // never mistaken for a stalled one.
+        // Reset whenever the stream moves, so a long healthy transfer is never
+        // mistaken for a stalled one.
         let mut last_progress = tokio::time::Instant::now();
         loop {
             tokio::select! {
@@ -546,8 +540,9 @@ impl FlowReceiver {
                     };
                     last_progress = tokio::time::Instant::now();
                     if chunk.seq <= self.ack_through {
-                        // A replay of something already written. Expected after
-                        // a reconnect. The sender cannot know what landed.
+                        // A replay of something already written, which is
+                        // expected after a reconnect: the sender cannot know
+                        // what landed.
                         continue;
                     }
                     if chunk.last {
@@ -567,8 +562,8 @@ impl FlowReceiver {
 
                     if self.final_seq == Some(self.ack_through) {
                         self.complete = true;
-                        // Tell the sender it can stop. This is repeated because
-                        // the message whose loss would hang the sender.
+                        // Repeated because losing this message would hang the
+                        // sender.
                         let window = self.window();
                         for _ in 0..3 {
                             publish_tolerantly(
@@ -748,12 +743,12 @@ mod tests {
         }
         state.apply(window(5, 20));
         assert!(state.retained.is_empty());
-        // Everything is acknowledged, so resuming means starting at 6: fine.
+        // Everything is acknowledged, so a resume starts at 6.
         assert!(state.resume_is_possible());
 
-        // Now a window arrives claiming *less* progress than a previous one.
-        // The watermark refuses to move backwards, which is exactly what keeps
-        // this recoverable while the bytes remain available.
+        // A window claiming *less* progress than a previous one. The watermark
+        // refuses to move backwards, which keeps this recoverable while the
+        // bytes remain available.
         state.apply(window(2, 20));
         assert_eq!(state.ack_through, 5);
         assert!(state.resume_is_possible());

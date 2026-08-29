@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use log::{debug, error};
+use log::{debug, error, warn};
 use std::{marker::PhantomData, sync::Arc};
 
 use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
@@ -53,8 +53,8 @@ impl NodeConfig {
     /// Use timing suited to a link that is expected to wobble, and reconnect
     /// when it drops. Shorthand for `.options(NodeOptions::wan())`.
     ///
-    /// Note this does not by itself make a `Qos::Reliable` node resilient:
-    /// that QoS is fatal by contract. Pair it with `Qos::TryReliable`.
+    /// A `Qos::Reliable` node stays fatal by contract, so pair this with
+    /// `Qos::TryReliable`.
     pub fn wan(mut self) -> Self {
         self.options = NodeOptions::wan();
         self
@@ -107,11 +107,19 @@ impl NodeConfig {
     }
 }
 
+/// How long a subscriber waits before retrying a re-registration it still owes,
+/// and the ceiling that wait backs off to.
+///
+/// The coordinator being gone is the ordinary reason to be here, and it can
+/// stay gone, so a fixed short delay would mean failed attempts for as long as
+/// the node lives.
+const REGISTRATION_RETRY_MIN: std::time::Duration = std::time::Duration::from_millis(100);
+const REGISTRATION_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Send a `RegisterShipAtVar` and wait for the coordinator to acknowledge it.
 ///
-/// Resolves coordinator channels from the client at call time because reconnect
-/// replaces both. Returns the sender that
-/// was live for this registration.
+/// Coordinator channels are resolved at call time because reconnect replaces
+/// them. Returns the sender that was live for this registration.
 async fn register_at_var(
     ship: &Arc<NetworkShipImpl>,
     ship_name: &str,
@@ -326,10 +334,10 @@ impl Node {
         )
         .await?;
 
-        // A publisher re-registers lazily: `publish` notices a generation change
-        // and redoes the registration before sending. Doing it eagerly would
-        // need a task per publisher for something that only matters at the next
-        // send anyway.
+        // A publisher re-registers lazily: `publish` notices a generation
+        // change and redoes the registration before sending. Eager
+        // re-registration would cost a task per publisher for something that
+        // only matters at the next send.
         Ok(Publisher {
             topic,
             qos,
@@ -357,9 +365,8 @@ impl Node {
         )
         .await?;
 
-        // Monitor for out-of-band RegistrationError (e.g. a BE publisher registers after us).
-        // The registration check above covers an existing publisher. This task
-        // handles publishers that register later.
+        // The check above covers a publisher that already exists; this task
+        // catches a best-effort publisher that registers later.
         let be_error_token = CancellationToken::new();
         {
             let be_error_token_clone = be_error_token.clone();
@@ -396,10 +403,68 @@ impl Node {
         let (tx, rx) = tokio::sync::mpsc::channel(queue_size);
 
         tokio::spawn(async move {
+            // Set when a re-registration after a reconnect did not go through,
+            // cleared once one does. The subscription stays alive while it is
+            // owed: ending it is invisible to the caller, whose channel simply
+            // closes and whose `next()` yields `None` from then on.
+            let mut needs_registration = false;
+            let mut retry_delay = REGISTRATION_RETRY_MIN;
+
             loop {
                 if tx.is_closed() {
                     return;
                 }
+
+                // Nothing else retries a failed re-registration: the next
+                // generation only arrives on the next reconnect, which may
+                // never come.
+                if needs_registration {
+                    // Checked here too, since the select below is unreachable
+                    // while a registration is owed. A topic that gained a
+                    // best-effort publisher during the outage has nothing left
+                    // to subscribe to, so the retries must stop.
+                    if shutdown.is_cancelled() {
+                        return;
+                    }
+                    if be_error_token.is_cancelled() {
+                        error!(
+                            "Subscriber for '{topic}' shutting down: topic now has a best-effort publisher"
+                        );
+                        return;
+                    }
+                    match register_at_var(
+                        &rat_ship,
+                        &ship_name,
+                        &topic,
+                        net::RatPubRegisterKind::Subscribe,
+                        mode,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            needs_registration = false;
+                            retry_delay = REGISTRATION_RETRY_MIN;
+                            debug!("Subscriber for '{topic}' re-registered on retry");
+                        }
+                        Err(e) => {
+                            debug!(
+                                "Subscriber for '{topic}' still cannot re-register, retrying in \
+                                 {retry_delay:?}: {e}"
+                            );
+                            // Backed off, since a coordinator that is simply
+                            // gone is the common case here. Cancellable, so a
+                            // shutdown does not wait out the longest delay.
+                            tokio::select! {
+                                _ = shutdown.cancelled() => return,
+                                _ = be_error_token.cancelled() => return,
+                                _ = tokio::time::sleep(retry_delay) => {}
+                            }
+                            retry_delay = (retry_delay * 2).min(REGISTRATION_RETRY_MAX);
+                            continue;
+                        }
+                    }
+                }
+
                 tokio::select! {
                     // Shutdown and reconnect are checked before doing more work,
                     // so a subscriber never starts a fetch against a dead link.
@@ -411,16 +476,15 @@ impl Node {
 
                     _ = be_error_token.cancelled() => {
                         error!(
-                            "Subscriber for '{}' shutting down: topic now has a best-effort publisher",
-                            &topic
+                            "Subscriber for '{topic}' shutting down: topic now has a best-effort publisher"
                         );
                         return; // drop tx → closes channel
                     }
 
-                    // The link came back on a new registration. Whatever the
-                    // coordinator knew about this subscription belonged to the
-                    // old one, so establish it again and carry on. The caller's
-                    // `Subscriber` never noticed.
+                    // The link came back on a new registration, so whatever the
+                    // coordinator knew about this subscription is gone with the
+                    // old one and has to be established again. The caller's
+                    // `Subscriber` never notices.
                     generation = reconnects.recv() => {
                         match generation {
                             Ok(generation) => {
@@ -434,15 +498,20 @@ impl Node {
                                 .await
                                 {
                                     Ok(_) => debug!(
-                                        "Subscriber for '{}' re-registered after reconnect (generation {generation})",
-                                        &topic
+                                        "Subscriber for '{topic}' re-registered after reconnect (generation {generation})"
                                     ),
                                     Err(e) => {
-                                        error!(
-                                            "Subscriber for '{}' could not re-register after reconnect: {e}",
-                                            &topic
+                                        // Never fatal. This is where failure is
+                                        // most likely: the link was rebuilt an
+                                        // instant ago and the coordinator may
+                                        // still be tearing down the handler for
+                                        // the previous connection. Giving up
+                                        // would close the channel and leave
+                                        // `next()` at `None` for good.
+                                        warn!(
+                                            "Subscriber for '{topic}' could not re-register after reconnect, retrying: {e}"
                                         );
-                                        return;
+                                        needs_registration = true;
                                     }
                                 }
                             }
@@ -451,7 +520,8 @@ impl Node {
                         }
                     }
 
-                    // Put ask_for_action + catch in one branch so catch() is also cancellable.
+                    // ask_for_action and catch share a branch so the catch is
+                    // cancellable too.
                     result = async {
                         match rat_ship.ask_for_action(&topic).await {
                             Ok((mt_sea::Action::Sail, _)) => {
@@ -459,15 +529,30 @@ impl Node {
                                 Ok(None)
                             }
                             Ok((mt_sea::Action::Shoot { .. }, _)) => {
-                                error!("Received Shoot but we are in a subscriber for {} ", &topic);
+                                error!("Received Shoot but we are in a subscriber for {topic} ");
                                 Ok(None)
                             }
                             Ok((mt_sea::Action::Catch { source, id }, _)) => {
+                                // The id is only what this subscriber was told
+                                // to expect. A coordinator restart re-derives
+                                // the route under a new one while a publisher
+                                // still shoots under the old, and waiting on the
+                                // id alone outlasts that skew for good.
+                                //
+                                // Whether the backlog may be skipped follows
+                                // from the delivery promise. `TryReliable`
+                                // dispatches off the caller's thread like
+                                // `BestEffort`, but still promises not to drop,
+                                // so it takes every sample in arrival order.
                                 let recv_data = rat_ship
                                     .get_cannon()
-                                    .catch_archived::<T>(id)
+                                    .catch_for_variable::<T>(
+                                        id,
+                                        &topic,
+                                        !mode.expects_reliable_delivery(),
+                                    )
                                     .await?;
-                                debug!("Finished catching {} from {:?}", &topic, source);
+                                debug!("Finished catching {topic} from {source:?}");
                                 Ok(Some(recv_data))
                             }
                             Err(e) => Err(e),
@@ -487,15 +572,14 @@ impl Node {
                             Ok(None) => {}
                             Err(e) => {
                                 // Never fatal. A fetch fails for the whole
-                                // window around a disconnect, including the
-                                // moment *before* the supervisor has noticed,
-                                // so `is_connected()` is not a reliable test
-                                // here. Killing the subscription then
-                                // would defeat the reconnect it is about to
-                                // get. The subscription ends when the node
-                                // shuts down, which for a non-reconnecting node
-                                // is exactly when the link drops.
-                                debug!("Subscriber for '{}' retrying after: {e}", &topic);
+                                // window around a disconnect, the moment
+                                // *before* the supervisor notices included, so
+                                // `is_connected()` proves nothing here and
+                                // killing the subscription would defeat the
+                                // reconnect it is about to get. It ends when the
+                                // node shuts down, which for a non-reconnecting
+                                // node is when the link drops.
+                                debug!("Subscriber for '{topic}' retrying after: {e}");
                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             }
                         }
@@ -513,9 +597,9 @@ impl Node {
     }
 
     pub async fn create(config: NodeConfig) -> anyhow::Result<Self> {
-        // A designated owner starts the coordinator without paying discovery time.
-        // AutoStart also does this for local-only mode, where the TCP endpoint gives
-        // us a deterministic and cheap existence check.
+        // A designated owner starts the coordinator without paying discovery
+        // time. AutoStart does the same in local-only mode, where the TCP
+        // endpoint is a cheap and deterministic existence check.
         let start_before_client = matches!(config.coord_mode, CoordMode::Start)
             || (matches!(config.coord_mode, CoordMode::AutoStart)
                 && mt_sea::network::is_local_only()
@@ -578,19 +662,19 @@ impl Node {
 
     /// Returns a token that is cancelled when this node is finished.
     ///
-    /// For a node that reconnects, this fires only on a real shutdown: an
-    /// explicit close or a torpedo, never on a transient link loss. Watch
-    /// [`Node::connection`] to observe the link itself.
+    /// For a node that reconnects this fires only on a real shutdown, so an
+    /// explicit close or a torpedo. Watch [`Node::connection`] for transient
+    /// link loss.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
     }
 
     /// Live state of this node's link to the coordinator.
     ///
-    /// Reports whether the link is currently up and which registration
-    /// generation is live. Publishers and subscriber tasks use this to notice
-    /// that they must re-register. Callers can use it to surface connection
-    /// status without having to poll anything.
+    /// Reports whether the link is up and which registration generation is
+    /// live. Publishers and subscriber tasks use it to notice that they must
+    /// re-register; callers can use it to surface connection status without
+    /// polling.
     pub fn connection(&self) -> Arc<mt_sea::ConnectionState> {
         Arc::clone(&self.ship.connection)
     }

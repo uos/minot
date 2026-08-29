@@ -13,8 +13,8 @@ fn a_record_prints_the_level_first_and_the_source_second() {
     );
 }
 
-/// The source tag is what a parent asked for. A process does not choose it
-/// announces about itself when nobody is listening.
+/// The source tag is what a parent asked for, so it appears only in the tagged
+/// formats.
 #[test]
 fn the_source_tag_appears_only_in_the_tagged_formats() {
     let record = Record::new(LogLevel::Info, "started").with_source("Minot");
@@ -35,8 +35,8 @@ fn a_tagged_line_round_trips_through_the_parser() {
     assert_eq!(parsed.message, "bag is short");
 }
 
-/// JSON keeps what text has to re-derive: a message with a colon in it is
-/// stays separate from the target and provides the explicit level.
+/// JSON keeps what text has to re-derive: a message with a colon in it stays
+/// separate from the target, and the level is explicit.
 #[cfg(feature = "json")]
 #[test]
 fn a_json_line_round_trips_with_every_field_intact() {
@@ -197,8 +197,8 @@ mod tui {
         assert!(!buffer.is_own(&entries[1]));
     }
 
-    /// A foreign crate is named. Our own module paths use the process label.
-    /// line is already known to be ours.
+    /// A foreign crate is named, while our own module paths use the process
+    /// label the line already carries.
     #[test]
     fn a_console_line_names_only_a_foreign_target() {
         let buffer = LogBuffer::new("polarstern");
@@ -267,6 +267,70 @@ mod tui {
 
         assert_eq!(wrap(&"µ".repeat(12), 5, 5), vec!["µµµµµ", "µµµµµ", "µµ"]);
     }
+
+    /// Render the pane and read the screen back as lines of text.
+    fn screen(width: u16, height: u16, buffer: &LogBuffer) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        let entries = buffer.snapshot();
+        let visible: Vec<_> = entries.iter().enumerate().collect();
+        let view = LogView::default();
+        terminal
+            .draw(|frame| crate::pane::render(frame, frame.area(), &visible, &view, " Logs "))
+            .unwrap();
+        let backend = terminal.backend();
+        (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| backend.buffer()[(column, row)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// The block draws its title on the first row and the position readout on
+    /// the last, so the list has two rows less than the area. A line per row of
+    /// area pushes the newest entries off the bottom and cuts the "↳" half off
+    /// a wrapped message.
+    #[test]
+    fn the_newest_entry_is_on_screen_in_full() {
+        let buffer = LogBuffer::new("polarstern");
+        // More than fills the pane, so the tail is what has to be sliced right.
+        for index in 0..20 {
+            buffer.push(LogLevel::Info, "polarstern", format!("line {index}"));
+        }
+        buffer.push(
+            LogLevel::Info,
+            "polarstern",
+            "Registering for topics scope responders subscribe",
+        );
+        let rows = screen(40, 8, &buffer);
+
+        assert!(
+            rows.iter().any(|row| row.contains("Registering")),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("↳") && row.contains("subscribe")),
+            "the wrapped tail of the newest entry is cut off: {rows:#?}"
+        );
+    }
+
+    /// Nothing may be drawn over the title or the position readout either.
+    #[test]
+    fn the_pane_stays_inside_its_own_chrome() {
+        let buffer = LogBuffer::new("polarstern");
+        for index in 0..40 {
+            buffer.push(LogLevel::Info, "polarstern", format!("line {index}"));
+        }
+        let rows = screen(40, 8, &buffer);
+
+        assert!(rows[0].contains("Logs"), "{rows:#?}");
+        assert!(rows[7].contains("entries"), "{rows:#?}");
+        assert!(rows[6].contains("line 39"), "the tail is the newest entry: {rows:#?}");
+    }
 }
 
 #[cfg(all(feature = "env", feature = "tui"))]
@@ -304,10 +368,9 @@ mod quieted_spec {
         }
     }
 
-    /// Held back, still enabled. Nothing in the list is quiet enough to
-    /// swallow a real error: a module that has genuinely failed still has
-    /// something to say, and silencing it wholesale is how a real fault turns
-    /// into a process that stops working with no explanation.
+    /// Held back but still enabled: nothing in the list is quiet enough to
+    /// swallow a real error, so a genuine fault never turns into a process that
+    /// stops working with no explanation.
     #[test]
     fn real_transport_errors_still_come_through() {
         let spec = quieted("info");

@@ -1,9 +1,9 @@
 //! Wire types shared by `marina serve` and the `minot://` registry driver.
 //!
 //! Both ends are the same binary, one running as a server on the machine that
-//! holds the data and one running as a client, so there is no separate protocol
-//! crate. What matters is that these types are the *only* thing crossing the
-//! link. [`Hello`] reports version mismatches with a useful message.
+//! holds the data and one as a client, so there is no separate protocol crate.
+//! These types are the *only* thing crossing the link, and [`Hello`] reports
+//! version mismatches with a useful message.
 //!
 //! Everything here uses rkyv, matching Minot's transport. The `BagRef` in
 //! `crate::model` stays serde-based for config and JSON. [`WireBagRef`] mirrors
@@ -17,9 +17,9 @@ use crate::registry::driver::{BagInfo, PushMeta};
 /// Bumped whenever the meaning of anything below changes.
 ///
 /// A server accepts clients whose major version matches and whose minor version
-/// is no newer than its own. [`Hello`] refuses incompatible versions with a
-/// message naming both versions, because "connection reset" is a miserable way
-/// to learn your marina is out of date.
+/// is no newer than its own. [`Hello`] refuses anything else with a message
+/// naming both versions, so an out-of-date marina does not show up as
+/// "connection reset".
 pub const PROTOCOL_VERSION: (u16, u16) = (2, 3);
 
 /// A [`BagRef`] as it travels.
@@ -160,11 +160,10 @@ pub enum Request {
     Stat { bag: WireBagRef },
     /// A byte range from one file in a materialised dataset.
     ///
-    /// Ranges travel in the reply. Flows move large resumable objects. A
+    /// Ranges travel in the reply while flows move large resumable objects: a
     /// random-access reader issues *thousands* of small requests, and flow
-    /// setup for each would cost far more
-    /// than it saves. These are idempotent, so a failed range is asked
-    /// for again.
+    /// setup for each would cost more than it saves. These are idempotent, so a
+    /// failed range is simply asked for again.
     ReadRange {
         bag: WireBagRef,
         path: String,

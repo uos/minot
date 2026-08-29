@@ -7,26 +7,23 @@
 //!
 //! # Why blocks, and why they are not optional
 //!
-//! Reads are served in fixed-size blocks, never as the exact range asked for.
-//! Phase 0 measured why: opening an MCAP reads its summary in **2130 separate
-//! reads averaging 59 bytes**, and those reads are inherently serial. Each one
-//! depends on the parse state the last produced, so no amount of readahead
-//! helps. At 200 ms round trip that is over four hundred seconds to open one
-//! bag.
+//! Reads are served in fixed-size blocks. Phase 0 measured why: opening an MCAP
+//! reads its summary in **2130 separate reads averaging 59 bytes**, each one
+//! depending on the parse state the last produced, so readahead cannot help. At
+//! 200 ms round trip that is over four hundred seconds to open one bag.
 //!
-//! Fetching whole blocks collapses that: 2130 tiny reads fall inside a handful
-//! of blocks, and every read after the first in a block is a memory copy. The
-//! block size is therefore a correctness property, and
-//! `an_open_costs_only_a_handful_of_requests` guards it.
+//! Whole blocks collapse that: the 2130 tiny reads fall inside a handful of
+//! blocks, and every read after the first in a block is a memory copy. The block
+//! size is therefore a correctness property, guarded by
+//! `an_open_costs_only_a_handful_of_requests`.
 //!
 //! # Why a thread
 //!
-//! The reader above is synchronous and may itself be running inside a Tokio
-//! runtime. Blocking a runtime worker on a future that needs that same runtime
-//! deadlocks, so fetches are handed to a dedicated OS thread, which is not a
-//! runtime worker and may therefore block on a runtime handle safely, and
-//! answered over a plain channel. Ugly, but it is the honest way to put an
-//! async transport under a synchronous `Read`.
+//! The reader above is synchronous and may itself run inside a Tokio runtime.
+//! Blocking a runtime worker on a future that needs that same runtime
+//! deadlocks, so fetches go to a dedicated OS thread, which is no runtime
+//! worker and may block on a runtime handle safely, and come back over a plain
+//! channel.
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,16 +43,15 @@ pub const DEFAULT_BLOCK_BYTES: usize = 1024 * 1024;
 /// How many blocks ahead to fetch in the background on a forward read.
 ///
 /// Chunk offsets were measured to be strictly monotonic, so "the next few
-/// blocks" is a good guess and needs no cleverness. Sixteen one-MiB blocks keep
-/// the same 16 MiB byte window as four four-MiB blocks, but make each possible
-/// underrun four times shorter.
+/// blocks" is a good guess. Sixteen one-MiB blocks keep the same 16 MiB window
+/// as four four-MiB blocks while making each possible underrun four times
+/// shorter.
 pub const DEFAULT_READAHEAD_BLOCKS: usize = 16;
 
 /// Fetches byte ranges for a [`RemoteFile`].
 ///
 /// A trait so the cache and read logic can be tested against a local file with
-/// no network at all, which is what makes the equivalence test cheap enough to
-/// run every time.
+/// no network, which keeps the equivalence test cheap enough to run every time.
 pub trait RangeFetcher: Send + Sync {
     /// Read up to `len` bytes at `offset`. A short read means end of file.
     fn fetch(&self, path: &str, offset: u64, len: u32) -> Result<Vec<u8>>;
@@ -96,7 +92,7 @@ impl<F: RangeFetcher> RangeFetcher for CountingFetcher<F> {
 }
 
 /// Reads ranges straight out of a local file. For tests, and for a server and
-/// client that happen to be the same machine.
+/// client on the same machine.
 pub struct LocalFetcher {
     pub root: std::path::PathBuf,
 }
@@ -120,9 +116,9 @@ impl RangeFetcher for LocalFetcher {
 /// How many blocks stay in memory in front of the store.
 ///
 /// This is what makes the tiny-read case cheap: an MCAP summary read touches
-/// the same block thousands of times, and going to the store, even a local
-/// file, for each of those would be thousands of syscalls. Small, because its
-/// job is to catch repeats. The store behind it is the cache.
+/// the same block thousands of times, and going to the store for each would be
+/// thousands of syscalls even against a local file. Kept small, since its job
+/// is only to catch repeats; the store behind it is the cache.
 pub const DEFAULT_HOT_BLOCKS: usize = 8;
 
 enum PrefetchedBlock {
@@ -135,8 +131,8 @@ struct PrefetchState {
 }
 
 /// A bounded, best-effort worker that keeps network reads off the playback
-/// thread. `RemoteFile` owns the block store. The
-/// worker only fetches bytes, and the reader commits them when it needs them.
+/// thread. `RemoteFile` owns the block store: this worker only fetches bytes,
+/// and the reader commits them when it needs them.
 struct Prefetch {
     requests: std::sync::mpsc::SyncSender<u64>,
     state: Arc<(Mutex<PrefetchState>, Condvar)>,
@@ -157,12 +153,11 @@ impl Prefetch {
             }),
             Condvar::new(),
         ));
-        // One worker, so one range request is ever on the wire. More was tried
-        // and had to come out: every publish makes the coordinator answer a
-        // `VariableTaskRequest`, and that answer arrives on a 256-deep broadcast
-        // shared with all other traffic. One request in flight stays under that;
-        // several do not, and a receiver that falls behind has its answer
-        // dropped with no way to ask for it again.
+        // One worker, so only one range request is ever on the wire. Every
+        // publish makes the coordinator answer a `VariableTaskRequest`, and
+        // that answer arrives on a 256-deep broadcast shared with all other
+        // traffic. Several requests in flight overrun it, and a receiver that
+        // falls behind loses its answer with no way to ask again.
         let worker_state = Arc::clone(&state);
         std::thread::Builder::new()
             .name("marina-readahead".to_string())
@@ -198,9 +193,9 @@ impl Prefetch {
         }
     }
 
-    /// Wait for a block that is already on its way. Waiting here is still
-    /// useful: normally the request started while the previous block was being
-    /// decoded, including reads issued between block boundaries.
+    /// Wait for a block that is already on its way. The request normally
+    /// started while the previous block was being decoded, so the wait is
+    /// short.
     fn take(&self, index: u64) -> Option<Result<Vec<u8>, String>> {
         let (lock, ready) = &*self.state;
         let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
@@ -227,9 +222,8 @@ impl Prefetch {
 
 /// A bounded most-recently-used window of blocks held in memory.
 ///
-/// The bound matters: in ephemeral mode this is the *only* thing holding
-/// blocks, so its limit is what keeps memory flat while reading a file of any
-/// size.
+/// In ephemeral mode this is the *only* thing holding blocks, so its limit is
+/// what keeps memory flat while reading a file of any size.
 struct HotBlocks {
     limit: usize,
     blocks: std::collections::HashMap<u64, Arc<Vec<u8>>>,
@@ -299,12 +293,11 @@ pub struct RemoteFile {
     hot: HotBlocks,
     /// Built on first use, once the block size is settled.
     ///
-    /// A store is tied to a block size, because its map records which *blocks* it
-    /// holds, so the same index means a different byte range at a different
-    /// size. Building eagerly meant that setting the block size afterwards
-    /// discarded a cache that had just been opened, and a second run would
-    /// throw away everything the first had fetched. Deferring until the first
-    /// read lets the builder be called in any order.
+    /// A store is tied to a block size, since its map records which *blocks* it
+    /// holds and the same index means a different byte range at a different
+    /// size. Building it eagerly would discard a just-opened cache whenever the
+    /// block size is set afterwards, so it waits for the first read and the
+    /// builder can be called in any order.
     store: Option<Box<dyn BlockStore>>,
     mode: CacheMode,
 }
@@ -360,7 +353,7 @@ impl RemoteFile {
 
     /// Whether every block has been fetched, so the local copy is complete.
     ///
-    /// False before the first read, when there is nothing to have completed.
+    /// False before the first read.
     pub fn is_complete(&self) -> bool {
         self.store
             .as_ref()
@@ -373,13 +366,11 @@ impl RemoteFile {
         self.hot.len()
     }
 
-    /// Set the block size.
-    ///
-    /// Rebuilds the store, because a store's map records which *blocks* it
-    /// holds and the same index means a different byte range at a different
-    /// block size. Without this, calling it after [`RemoteFile::with_cache`]
-    /// would leave the two disagreeing and quietly corrupt the cache.
     /// Set the block size. Must be called before the first read.
+    ///
+    /// A store's map records which *blocks* it holds, and the same index means
+    /// a different byte range at a different block size, so the store is built
+    /// only once this is settled.
     pub fn with_block_bytes(mut self, block_bytes: usize) -> Self {
         assert!(block_bytes > 0, "block size must be greater than zero");
         debug_assert!(
@@ -470,8 +461,8 @@ impl RemoteFile {
 
     /// Start pulling the next few blocks after `index` that are not cached yet.
     ///
-    /// Non-blocking. A failed speculative read is retried normally
-    /// if playback actually reaches that block.
+    /// Non-blocking. A failed speculative read is retried the ordinary way if
+    /// playback reaches that block.
     fn schedule_readahead(&mut self, index: u64) {
         if self.readahead == 0 || self.last_readahead == Some(index) {
             return;
@@ -531,7 +522,7 @@ impl Seek for RemoteFile {
                 "cannot seek before the start of the file",
             ));
         }
-        // Seeking past the end is legal and reads return nothing, matching a
+        // Seeking past the end is legal and reads return nothing, as with a
         // real file.
         self.position = target as u64;
         let target_block = self.position / self.block_bytes as u64;
@@ -569,8 +560,8 @@ struct FetchRequest {
 impl NetworkFetcher {
     /// `fetch` is run on the given runtime, from a thread of this fetcher's own.
     ///
-    /// Takes a closure so the transport stays out of this module and tests can
-    /// drive it without a network.
+    /// A closure, so the transport stays out of this module and tests can drive
+    /// it without a network.
     pub fn spawn<F, Fut>(handle: tokio::runtime::Handle, fetch: F) -> Self
     where
         F: Fn(String, u64, u32) -> Fut + Send + 'static,
@@ -584,8 +575,8 @@ impl NetworkFetcher {
                 // closes, so the thread cannot outlive its users.
                 while let Ok(request) = incoming.recv() {
                     let result = handle.block_on(fetch(request.path, request.offset, request.len));
-                    // A gone receiver means the reader stopped caring. Nothing
-                    // to do but drop the bytes.
+                    // A gone receiver means the reader stopped caring, so the
+                    // bytes are dropped.
                     let _ = request.reply.send(result);
                 }
             })
@@ -728,10 +719,9 @@ mod tests {
 
     /// The guard for the finding that motivated block caching at all.
     ///
-    /// An MCAP summary read is thousands of tiny sequential reads. Served
-    /// naively that is thousands of round trips. Served in blocks it is a
-    /// handful. If this ever regresses, opening a bag over a real link goes
-    /// from under a second to several minutes.
+    /// An MCAP summary read is thousands of tiny sequential reads: thousands of
+    /// round trips served naively, a handful served in blocks. A regression here
+    /// takes opening a bag over a real link from under a second to minutes.
     #[test]
     fn an_open_costs_only_a_handful_of_requests() {
         let (_dir, _bytes, mut remote, fetcher) = fixture(300_000, DEFAULT_BLOCK_BYTES);
@@ -960,9 +950,8 @@ mod tests {
     /// The deadlock this design exists to avoid.
     ///
     /// A synchronous reader used from inside a Tokio runtime must not wedge.
-    /// Blocking a worker thread on a future that needs the same runtime is the
-    /// classic way to hang, and it is exactly what a bag reader driven from an
-    /// async task would do.
+    /// Blocking a worker thread on a future that needs the same runtime hangs,
+    /// which is what a bag reader driven from an async task would do.
     #[test]
     fn reading_from_inside_a_runtime_does_not_deadlock() {
         let runtime = tokio::runtime::Builder::new_multi_thread()

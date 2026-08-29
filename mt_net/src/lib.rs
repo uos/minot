@@ -224,7 +224,6 @@ impl Rules {
     /// - If the client is a target in a Shoot action, it is removed from the target list. If the list becomes empty, the Shoot rule is removed, AND the shooter ship is registered as a publisher in the cache.
     /// - Any cache registrations for the client are removed.
     pub fn remove_client(&mut self, client: &str) {
-        // Process store rules
         let mut variables_to_remove_from_store = Vec::new();
         let mut cache_registrations_from_store: HashMap<
             Variable,
@@ -237,12 +236,11 @@ impl Rules {
             let mut variable_has_remaining_rules = false;
 
             for rule in rules.drain(..) {
-                // Use drain to efficiently iterate and remove
                 if rule.ship == client {
-                    // Case 1: Client is the main ship performing an action. Remove the rule.
+                    // The client performs the action, so the rule goes and any
+                    // partner is put back into the cache in its opposite role.
                     match &rule.strategy {
                         Some(ActionPlan::Shoot { target, id: _ }) if !target.is_empty() => {
-                            // The client was the shooter, and the targets acted as subscribers
                             cache_registrations_from_store
                                 .entry(variable.clone())
                                 .or_default()
@@ -254,18 +252,15 @@ impl Rules {
                                 );
                         }
                         Some(ActionPlan::Catch { source, id: _ }) => {
-                            // The client was the catcher, the source was the publisher
                             cache_registrations_from_store
                                 .entry(variable.clone())
                                 .or_default()
                                 .insert((source.clone(), RatPubRegisterKind::Publish));
                         }
-                        _ => {
-                            // Sail, None, or no strategy - no partners to register
-                        }
+                        // Sail, None and no strategy have no partner.
+                        _ => {}
                     }
                 } else if let Some(ActionPlan::Shoot { target, id }) = &rule.strategy {
-                    // Case 2: Rule is a Shoot action. Check if client is a target.
                     let initial_target_count = target.len();
                     let new_target = target
                         .iter()
@@ -274,16 +269,14 @@ impl Rules {
                         .collect::<Vec<_>>();
 
                     if new_target.len() < initial_target_count {
-                        // The client was in the target list and has been removed.
                         if new_target.is_empty() {
-                            // Target list is now empty, remove the Shoot rule.
-                            // The shooter ship is registered as a publisher.
+                            // Nothing left to shoot at, so the rule goes and the
+                            // shooter returns to the cache as a publisher.
                             cache_registrations_from_store
                                 .entry(variable.clone())
                                 .or_default()
                                 .insert((rule.ship.clone(), RatPubRegisterKind::Publish));
                         } else {
-                            // Target list is not empty, keep the rule with the updated target list.
                             rules_to_keep_in_variable.push(VariableHuman {
                                 ship: rule.ship.clone(),
                                 strategy: Some(ActionPlan::Shoot {
@@ -294,32 +287,27 @@ impl Rules {
                             variable_has_remaining_rules = true;
                         }
                     } else {
-                        // Client was not in the target list, keep the rule as is.
                         rules_to_keep_in_variable.push(rule);
                         variable_has_remaining_rules = true;
                     }
                 } else if let Some(ActionPlan::Catch { source, id: _ }) = &rule.strategy {
-                    // Case 3: Rule is a Catch action. Check if client is the source.
                     if source == client {
-                        // The client being removed is the source of this Catch rule. Remove the rule.
-                        // The ship performing the Catch is registered as a subscriber.
+                        // The source is going, so the catcher returns to the
+                        // cache as a subscriber.
                         cache_registrations_from_store
                             .entry(variable.clone())
                             .or_default()
                             .insert((rule.ship.clone(), RatPubRegisterKind::Subscribe));
                     } else {
-                        // Client is not the source, keep the rule as is.
                         rules_to_keep_in_variable.push(rule);
                         variable_has_remaining_rules = true;
                     }
                 } else {
-                    // Case 4: Rule does not involve the client, keep it.
                     rules_to_keep_in_variable.push(rule);
                     variable_has_remaining_rules = true;
                 }
             }
 
-            // Decide whether to update or remove the variable entry in the store
             if variable_has_remaining_rules {
                 store_updates.insert(variable.clone(), rules_to_keep_in_variable);
             } else {
@@ -327,7 +315,6 @@ impl Rules {
             }
         }
 
-        // Apply store updates and removals
         for (variable, updated_rules) in store_updates {
             self.store.insert(variable, updated_rules);
         }
@@ -335,7 +322,6 @@ impl Rules {
             self.store.remove(&var);
         }
 
-        // Add collected cache registrations from store processing to the main cache
         for (variable, registrations) in cache_registrations_from_store {
             self.cache
                 .entry(variable)
@@ -343,7 +329,6 @@ impl Rules {
                 .extend(registrations);
         }
 
-        // Process cache registrations
         let mut variables_to_remove_from_cache = Vec::new();
         for (variable, registrations) in self.cache.iter_mut() {
             let initial_count = registrations.len();
@@ -353,13 +338,11 @@ impl Rules {
             }
         }
 
-        // Remove variables from the cache that have no remaining registrations
         for var in variables_to_remove_from_cache {
             self.cache.remove(&var);
         }
 
-        // After removing clients from both store and cache, resolve the cache
-        // to potentially generate new rules from remaining cache entries.
+        // Remaining cache entries may now form new rules.
         self.resolve_cache();
     }
 
@@ -377,17 +360,15 @@ impl Rules {
     ///   cache registrations for that variable are used to update/regenerate
     ///   the Shoot rules based on the combined set of publishers and subscribers
     ///   from the store and cache. The cache entry is removed.
-    /// - Variables without Shoot rules
-    ///   it requires a publisher/subscriber pair *within the cache* to generate new
-    ///   Shoot rules. These are added (either to a new entry or by extending
-    ///   a non-Shoot entry in the store). If no pair exists in the cache,
-    ///   the cache entry remains.
+    /// - Variables without Shoot rules need a publisher/subscriber pair *within
+    ///   the cache* to generate new Shoot rules. These are added to a new entry
+    ///   or by extending a non-Shoot entry in the store. If no pair exists in
+    ///   the cache, the cache entry remains.
     pub fn resolve_cache(&mut self) {
-        // Collect variables from cache keys to avoid borrowing issues while modifying
+        // Collected up front so the cache can be modified in the loop.
         let vars_to_process: Vec<Variable> = self.cache.keys().cloned().collect();
 
         for var_name in vars_to_process {
-            // Get and remove cache registrations for this variable
             if let Some(registrations) = self.cache.remove(&var_name) {
                 let mut new_pubs: HashSet<String> = HashSet::new();
                 let mut new_subs: HashSet<String> = HashSet::new();
@@ -403,11 +384,10 @@ impl Rules {
                     }
                 }
 
-                // Temporarily remove existing rules from the store
+                // Taken out of the store and put back below, once it is known
+                // which of the three cases applies.
                 let existing_rules_option = self.store.remove(&var_name);
 
-                // Check if the existing store entry (if any) contains Shoot rules
-                // We now only care about existing Shoot rules for the first case
                 let had_existing_shoot = &existing_rules_option.as_ref().and_then(|rules| {
                     rules
                         .iter()
@@ -427,8 +407,8 @@ impl Rules {
 
                 match had_existing_shoot {
                     Some(id) => {
-                        // Case 1: Variable was in store AND had Shoot rules.
-                        // Combine clients from existing rules and new cache registrations, then regenerate Shoot rules.
+                        // Existing Shoot rules: regenerate them from the union
+                        // of the store's clients and the cache registrations.
                         let mut all_pubs: HashSet<String> = HashSet::new();
                         let mut all_subs: HashSet<String> = HashSet::new();
                         let mut other_vh: Vec<VariableHuman> = Vec::new();
@@ -438,10 +418,9 @@ impl Rules {
                                 match vh.strategy {
                                     Some(ActionPlan::Shoot { target, id: _ }) => {
                                         all_pubs.insert(vh.ship);
-                                        // Also collect existing subscribers from targets of existing shoots
                                         all_subs.extend(target);
                                     }
-                                    // Treat existing Catch rules' ships as subscribers for combining lists
+                                    // A catcher counts as a subscriber here.
                                     Some(ActionPlan::Catch { source: _, id: _ }) => {
                                         all_subs.insert(vh.ship);
                                     }
@@ -451,7 +430,6 @@ impl Rules {
                                 }
                             }
                         }
-                        // Add new clients from cache registrations
                         all_pubs.extend(new_pubs);
                         all_subs.extend(new_subs);
 
@@ -462,7 +440,6 @@ impl Rules {
                         generated_rules.extend(other_vh);
 
                         if !sorted_all_pubs.is_empty() && !sorted_all_subs.is_empty() {
-                            // Add Shoot rules for all publishers targeting all subscribers
                             for pub_client in &sorted_all_pubs {
                                 generated_rules.push(VariableHuman {
                                     ship: pub_client.clone(),
@@ -474,14 +451,12 @@ impl Rules {
                             }
                         }
 
-                        // Re-insert the generated rules into the store
                         self.store.insert(var_name.clone(), generated_rules);
                     }
                     None => {
-                        // Case 2: The variable has no Shoot rules.
-                        // Require a publisher/subscriber pair *in the cache* to generate rules.
+                        // No Shoot rules yet, so the cache must supply a whole
+                        // publisher/subscriber pair before any can be generated.
                         if !new_pubs.is_empty() && !new_subs.is_empty() {
-                            // Generate Shoot rules (new_pubs -> new_subs) from the cache pair
                             let mut sorted_new_pubs: Vec<String> = new_pubs.into_iter().collect();
                             sorted_new_pubs.sort();
                             let mut sorted_new_subs: Vec<String> = new_subs.into_iter().collect();
@@ -500,20 +475,17 @@ impl Rules {
                             }
 
                             if let Some(mut existing_rules) = existing_rules_option {
-                                // Extend the existing non-Shoot rules with the newly generated pair Shoot rules
                                 existing_rules.extend(pair_generated_rules);
                                 self.store.insert(var_name.clone(), existing_rules);
                             } else {
-                                // Insert a new entry with the generated pair Shoot rules
                                 self.store.insert(var_name.clone(), pair_generated_rules);
                             }
                         } else {
-                            // Case 3: No pair in cache, and no Shoot in store rules.
-                            // Put the original store rules back (if any) and keep the cache entry.
+                            // Nothing to resolve, so store and cache go back
+                            // untouched.
                             if let Some(existing_rules) = existing_rules_option {
                                 self.store.insert(var_name.clone(), existing_rules);
                             }
-                            // Put original cache registrations back as they weren't processed
                             self.cache.insert(var_name.clone(), registrations);
                         }
                     }
@@ -526,7 +498,7 @@ impl Rules {
     pub fn subscriber_ships(&self, var: &str) -> Vec<String> {
         let mut ships = Vec::new();
 
-        // From cache: pending registrations not yet matched into rules
+        // Registrations not yet matched into rules.
         if let Some(entries) = self.cache.get(var) {
             for (ship, kind) in entries {
                 if *kind == RatPubRegisterKind::Subscribe {
@@ -535,7 +507,7 @@ impl Rules {
             }
         }
 
-        // From store: already-matched rules where ship has a Catch action (subscriber role)
+        // Matched rules, where a subscriber holds a Catch action.
         if let Some(rules) = self.store.get(var) {
             for vh in rules {
                 if matches!(vh.strategy, Some(ActionPlan::Catch { .. })) {
@@ -604,11 +576,10 @@ impl Rules {
     /// Remove a registration. Leaves the variable in place when other clients
     /// still use it, so one viewer leaving does not disturb the rest.
     ///
-    /// Has to touch both halves of the state: `cache` holds registrations that
-    /// have not been resolved yet, while `resolve_cache` moves them into
-    /// `store` as routing rules. A client can be in either, and after
-    /// resolution a subscriber exists only as a name inside each publisher's
-    /// `Shoot` target list.
+    /// Touches both halves of the state, since a client can be in either:
+    /// `cache` holds unresolved registrations, and `resolve_cache` turns them
+    /// into `store` rules where a subscriber exists only as a name inside each
+    /// publisher's `Shoot` target list.
     pub fn unregister(&mut self, var: &str, client: &str, kind: RatPubRegisterKind) -> bool {
         let mut removed = false;
 
@@ -649,9 +620,8 @@ impl Rules {
             }
 
             // A publisher whose last subscriber left keeps its rule with an
-            // empty target list. Dropping it would forget the publisher
-            // entirely, and the next subscriber to arrive would have nothing
-            // to be routed from.
+            // empty target list, so the next subscriber still has something to
+            // be routed from.
             if rules.is_empty() {
                 self.store.remove(var);
             }
@@ -705,15 +675,14 @@ mod tests {
 
     use std::collections::{HashMap, HashSet};
 
-    // Helper function to sort VariableHuman vectors for consistent comparison
+    // Sorts the outer vector and the targets inside Shoot strategies, so
+    // comparisons do not depend on ordering.
     fn sort_variable_humans(humans: &mut [VariableHuman]) {
-        // Sort the outer vector based on ship and then strategy debug representation
         humans.sort_by(|a, b| {
             a.ship
                 .cmp(&b.ship)
                 .then(format!("{:?}", a.strategy).cmp(&format!("{:?}", b.strategy)))
         });
-        // Also sort the target vector inside Shoot strategies for deterministic comparison
         for human in humans.iter_mut() {
             if let Some(ActionPlan::Shoot { target, id: _ }) = &mut human.strategy {
                 target.sort();
@@ -764,7 +733,7 @@ mod tests {
         let generated_rules = rules.cache.get("var1").unwrap();
         assert_eq!(generated_rules.len(), 1); // resolve_cache requires a pub/sub pair in cache if no existing shoot rule
 
-        // Let's re-run with an existing subscriber in cache for the resolution to work
+        // Re-run with an existing subscriber in the cache so resolution works.
         let mut rules = create_rules();
         rules.insert(
             "var1".to_string(),
@@ -913,7 +882,7 @@ mod tests {
         assert_eq!(rules.cache.len(), 1);
         assert_eq!(rules.store.len(), 0);
 
-        // Let's re-run with an existing subscriber in cache for the resolution to work
+        // Re-run with an existing subscriber in the cache so resolution works.
         let mut rules = create_rules();
         rules.insert(
             "var1".to_string(),

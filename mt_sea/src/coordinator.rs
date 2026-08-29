@@ -39,21 +39,19 @@ impl crate::Coordinator for CoordinatorImpl {
         ship: String,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<String>> {
         debug!("trying to get request queue");
-        // Subscribe BEFORE checking the map to avoid race condition
-        // where client is added between check and subscribe
+        // Subscribed before the map is checked, so a client added in between
+        // is still seen.
         let mut notify = self.new_client_notify.subscribe();
         loop {
             if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
                 return Ok(client_info.queue.subscribe());
             }
 
-            // Wait for a new client notification
             loop {
                 match notify.recv().await {
                     Ok(name) if name == ship => break,
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Re-check the map in case we missed notifications
                         break;
                     }
                     Err(_) => return Err(anyhow!("Client notification channel closed")),
@@ -63,7 +61,8 @@ impl crate::Coordinator for CoordinatorImpl {
     }
 
     async fn blow_wind(&self, ship: String, data: Vec<crate::WindData>) -> anyhow::Result<()> {
-        // Subscribe BEFORE checking the map to avoid race condition
+        // Subscribed before the map is checked, so a client added in between
+        // is still seen.
         let mut notify = self.new_client_notify.subscribe();
         loop {
             if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
@@ -85,13 +84,11 @@ impl crate::Coordinator for CoordinatorImpl {
                     .map_err(|e| anyhow!("Error while sending wind: {e}"));
             }
 
-            // Wait for client to connect
             loop {
                 match notify.recv().await {
                     Ok(name) if name == ship => break,
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Re-check the map in case we missed notifications
                         break;
                     }
                     Err(_) => return Err(anyhow!("Client notification channel closed")),
@@ -126,7 +123,7 @@ impl crate::Coordinator for CoordinatorImpl {
                                 lock_until_ack: false,
                             },
                         };
-                        // Best-effort: skip if ship not connected
+                        // Skip a ship that is not connected.
                         if let Some(ci) = self.rat_qs.read().await.get(&ship).cloned() {
                             let _ = ci.sender.send(packet).await;
                         }
@@ -152,7 +149,7 @@ impl crate::Coordinator for CoordinatorImpl {
         best_effort: bool,
     ) -> anyhow::Result<()> {
         if best_effort {
-            // Try-once: send if connected, silently skip if not
+            // One attempt; a disconnected ship is skipped.
             if let Some(ci) = self.rat_qs.read().await.get(&ship).cloned() {
                 let action = self.convert_action(&action, &variable).await?;
                 let paket = Packet {
@@ -168,7 +165,8 @@ impl crate::Coordinator for CoordinatorImpl {
             return Ok(());
         }
 
-        // Subscribe BEFORE checking the map to avoid race condition
+        // Subscribed before the map is checked, so a client added in between
+        // is still seen.
         let mut notify = self.new_client_notify.subscribe();
         loop {
             let client_info = {
@@ -193,13 +191,11 @@ impl crate::Coordinator for CoordinatorImpl {
                     .map_err(|e| anyhow!("Error while sending rat action: {e}"));
             }
 
-            // Wait for client to connect
             loop {
                 match notify.recv().await {
                     Ok(name) if name == ship => break,
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Re-check the map in case we missed notifications
                         break;
                     }
                     Err(_) => return Err(anyhow!("Client notification channel closed")),
@@ -211,7 +207,8 @@ impl crate::Coordinator for CoordinatorImpl {
 
 impl CoordinatorImpl {
     pub async fn rat_send(&self, ship: String, kind: PacketKind) -> anyhow::Result<()> {
-        // Subscribe BEFORE checking the map to avoid race condition
+        // Subscribed before the map is checked, so a client added in between
+        // is still seen.
         let mut notify = self.new_client_notify.subscribe();
         loop {
             if let Some(client_info) = self.rat_qs.read().await.get(&ship) {
@@ -226,13 +223,11 @@ impl CoordinatorImpl {
                     .map_err(|e| anyhow!("Error while sending: {e}"));
             }
 
-            // Wait for client to connect
             loop {
                 match notify.recv().await {
                     Ok(name) if name == ship => break,
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Re-check the map in case we missed notifications
                         break;
                     }
                     Err(_) => return Err(anyhow!("Client notification channel closed")),
@@ -241,7 +236,7 @@ impl CoordinatorImpl {
         }
     }
 
-    /// Wait until all given clients are connected (deterministic, no timing)
+    /// Wait until all given clients are connected.
     pub async fn ensure_clients_connected(
         rats: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ClientInfo>>>,
         clients: HashSet<String>,
@@ -252,7 +247,6 @@ impl CoordinatorImpl {
             .filter(|c| c != COMPARE_NODE_NAME)
             .collect();
 
-        // First check what's already connected
         {
             let rat = rats.read().await;
             remaining.retain(|client| !rat.contains_key(client));
@@ -262,7 +256,6 @@ impl CoordinatorImpl {
             return;
         }
 
-        // Wait for remaining clients
         let mut sub = notify.subscribe();
         while !remaining.is_empty() {
             match sub.recv().await {
@@ -270,12 +263,10 @@ impl CoordinatorImpl {
                     remaining.remove(&name);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    // Re-check current state
                     let rat = rats.read().await;
                     remaining.retain(|client| !rat.contains_key(client));
                 }
                 Err(_) => {
-                    // Channel closed - check if all connected
                     let rat = rats.read().await;
                     remaining.retain(|client| !rat.contains_key(client));
                     if remaining.is_empty() {
@@ -294,8 +285,8 @@ impl CoordinatorImpl {
     /// Wait until the given ship appears in `rat_qs`.
     /// Returns immediately if already present.
     pub async fn wait_for_client(&self, ship: &str) {
-        // Subscribe BEFORE checking the map to avoid the race where the ship
-        // is inserted between our map-check and the subscribe.
+        // Subscribed before the map is checked, so a ship added in between is
+        // still seen.
         let mut notify = self.new_client_notify.subscribe();
         loop {
             if self.rat_qs.read().await.contains_key(ship) {

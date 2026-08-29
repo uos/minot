@@ -548,9 +548,8 @@ impl Marina {
             driver.write_http_index().await?;
         }
 
-        // Ensure the bag lives in our cache so local_dir is always under our
-        // control.  If the caller already pushed from the cache path we skip
-        // the copy/move.
+        // The bag must live in the cache so local_dir stays under our control.
+        // A caller pushing from the cache path already satisfies that.
         let ready_dir = cache_dir.join("ready");
         let canonical_source = source_dir.canonicalize()?;
         if canonical_source != ready_dir.canonicalize().unwrap_or_default() {
@@ -757,15 +756,15 @@ impl Marina {
 
     /// Make a dataset available locally, streaming it when the registry can.
     ///
-    /// The result is the same as [`Marina::pull_exact_with_progress`], a local
-    /// directory registered in the catalog, but the route differs. A registry
-    /// that supports byte-range reads is streamed block by block, which means:
+    /// Produces the same result as [`Marina::pull_exact_with_progress`]: a local
+    /// directory registered in the catalog. A registry that supports byte-range
+    /// reads is streamed block by block, so:
     ///
     /// - interrupted transfers resume from their saved position, and
     /// - blocks already fetched by ordinary streamed reads are not fetched again.
     ///
-    /// Everything else falls back to an ordinary pull, so callers can use this
-    /// unconditionally and get the better behaviour where it is available.
+    /// Any other registry falls back to an ordinary pull, so callers can use
+    /// this unconditionally.
     pub async fn materialize_with_progress(
         &mut self,
         bag: &BagRef,
@@ -786,9 +785,8 @@ impl Marina {
                         match streaming.open_dataset(&bag_owned).await {
                             Ok(dataset) => Some(dataset.materialize(progress)),
                             Err(error) => {
-                                // Not fatal: a dataset that cannot be streamed
-                                // (a sqlite3 bag, say) is still perfectly
-                                // pullable, and saying so beats failing.
+                                // A dataset that cannot be streamed, a sqlite3
+                                // bag for instance, is still pullable.
                                 progress.emit(
                                     "stream",
                                     format!(
@@ -991,10 +989,10 @@ impl Marina {
 
     /// Resolve a target to either a local path or a range-readable dataset.
     ///
-    /// Unlike [`Marina::resolve_target`], this method is allowed to transfer
-    /// data: it pulls when the selected access mode requires a local result or
-    /// when streaming is unavailable. Ambiguous targets remain an error so a
-    /// caller never reads from an arbitrary registry.
+    /// This may transfer data, where [`Marina::resolve_target`] may not: it
+    /// pulls when the selected access mode requires a local result or when
+    /// streaming is unavailable. Ambiguous targets stay an error, so a caller
+    /// never reads from an arbitrary registry.
     pub async fn resolve_access(
         &mut self,
         target: &str,
@@ -1019,10 +1017,10 @@ impl Marina {
         #[cfg(feature = "minot-registry")]
         let mut stream_attempted = false;
 
-        // An explicit registry is an instruction to use that registry:
-        // `PreferStream` must consult it before the local catalog. This is what
-        // lets callers compare or test a remote copy even when the same bag is
-        // already cached. Concrete filesystem paths keep their local fast path.
+        // An explicit registry is an instruction to use it, so `PreferStream`
+        // consults it before the local catalog and a caller can compare or test
+        // a remote copy of an already cached bag. Concrete filesystem paths
+        // keep their local fast path.
         #[cfg(feature = "minot-registry")]
         if mode == AccessMode::PreferStream
             && let Some(registry_name) = registry
@@ -1127,8 +1125,8 @@ impl Marina {
 
     /// Resolve a target, pulling it first when an exact remote pull is possible.
     ///
-    /// This keeps [`Marina::resolve_target`] lookup-only while giving CLI and library callers
-    /// the same "yes, fetch it now" behavior.
+    /// Keeps [`Marina::resolve_target`] lookup-only while CLI and library
+    /// callers get a fetch-now entry point.
     pub async fn resolve_target_or_pull_with_progress_and_options(
         &mut self,
         target: &str,

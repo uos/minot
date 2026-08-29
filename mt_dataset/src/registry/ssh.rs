@@ -385,10 +385,9 @@ impl SshRegistry {
     /// Forward a local port to `remote_port` on the far side's loopback.
     ///
     /// This is what makes `marina serve` reachable across machines. The server
-    /// binds loopback only because Minot carries no authentication of its own,
-    /// so the SSH connection *is* the security boundary, and the credentials
-    /// are the ones already configured for this registry, so nothing new has to
-    /// be set up.
+    /// binds loopback only, since Minot carries no authentication of its own
+    /// and the SSH connection *is* the security boundary. The credentials are
+    /// the ones already configured for this registry.
     ///
     /// The returned [`SshTunnel`] keeps the forwarder alive. Dropping it stops
     /// accepting new connections.
@@ -400,8 +399,8 @@ impl SshRegistry {
 
         let handle = self.get_handle().await?;
         self.wait_for_remote_port(&handle, remote_port).await?;
-        // Port 0: let the OS pick, so two marina processes on one machine do not
-        // collide over a hardcoded choice.
+        // Port 0 lets the OS pick, so two marina processes on one machine
+        // cannot collide over a hardcoded choice.
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .context("failed to bind a local port for the ssh tunnel")?;
@@ -433,7 +432,7 @@ impl SshRegistry {
                         }
                     };
                     let mut remote = channel.into_stream();
-                    // Errors here are ordinary connection lifecycle, not faults.
+                    // Errors here are ordinary connection lifecycle.
                     if let Err(error) = tokio::io::copy_bidirectional(&mut local, &mut remote).await
                     {
                         log::debug!("ssh tunnel connection ended: {error}");
@@ -454,9 +453,9 @@ impl SshRegistry {
         })
     }
 
-    /// Do not advertise a forward until SSH has proved that its destination is
-    /// accepting connections. Binding the local listener alone only proves the
-    /// near side. This check avoids Zenoh reconnect noise during server startup.
+    /// A forward is advertised only once SSH has proved that its destination
+    /// accepts connections, since binding the local listener proves the near
+    /// side alone. Keeps Zenoh from making reconnect noise during startup.
     #[cfg(feature = "minot-registry")]
     async fn wait_for_remote_port(
         &self,
@@ -886,8 +885,8 @@ impl SshRegistry {
                 if secret_path.exists() {
                     cmd.arg("-i").arg(secret_path);
                 } else if self.transport == SshTransport::OpenSsh {
-                    // The OpenSSH transport is non-interactive in Marina.
-                    // Password auth would require sshpass/askpass plumbing, so keep it explicit.
+                    // The OpenSSH transport is non-interactive in Marina, and
+                    // password auth would need sshpass/askpass plumbing.
                     cmd.arg("-o").arg("IdentitiesOnly=yes");
                 }
             }

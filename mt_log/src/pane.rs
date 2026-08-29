@@ -28,6 +28,11 @@ const LEFT_GUTTER: usize = 1;
 const COMPACT_WIDTH: u16 = 72;
 /// Columns the "↳ " marker on a wrapped line occupies.
 const HANGING_INDENT: usize = 2;
+/// Rows the block keeps for itself. The pane draws no borders, but a title on
+/// top and the position readout on the bottom each take a line out of the
+/// area, so the list is two rows shorter than the space it was given. Slicing
+/// more lines than that would push the newest ones off the bottom unseen.
+const CHROME_LINES: u16 = 2;
 
 /// The colour a level is drawn in.
 pub fn level_color(level: LogLevel) -> Color {
@@ -172,7 +177,7 @@ pub fn render(
         .unwrap_or(floor)
         .max(floor);
     let level_width = if compact { 3 } else { 7 };
-    let height = area.height.saturating_sub(1) as usize;
+    let height = area.height.saturating_sub(CHROME_LINES) as usize;
     // One column goes to the selector, prepended when the items are built.
     let inner = (area.width as usize).saturating_sub(1);
     // "<gutter><time> <level> ".

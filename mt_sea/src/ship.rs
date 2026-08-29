@@ -16,47 +16,51 @@ use crate::{
     net::{PacketKind, Qos, sanitize_key},
 };
 
-/// Asynchronously dispatched sends, bounded by target *and* variable. Covers
-/// every mode where `Qos::dispatch_is_async` holds, so both `TryReliable` and
-/// `BestEffort`.
-///
-/// Keying on the target alone would make every variable sent to one ship share
-/// one budget for the whole network round trip, so two publishes in the same
-/// frame would starve each other. That is invisible on loopback, where the
-/// first send completes in microseconds, and deterministic over WiFi.
+/// Send budget key for asynchronously dispatched sends, so every mode where
+/// `Qos::dispatch_is_async` holds. Keyed by target *and* variable: one budget
+/// per target would let two variables published in the same frame starve each
+/// other, which is invisible on loopback and reproducible over WiFi.
 type AsyncSendKey = (String, String);
 
 /// How many sends of one variable may be on the wire to one ship at once.
 ///
-/// The bound exists for fairness between variables. Concurrency here is safe:
-/// each send is an independent Zenoh query carrying its own reply channel, and
-/// the receiver appends to a per-id buffer, so several may be in flight without
-/// interfering.
-///
-/// It was one, which suits a stream of samples. On a request/response topic
-/// every request shares a single variable name, so one meant a second request
-/// could never be on the wire beside the first, and before this became a wait
-/// it was silently thrown away.
+/// Bounded for fairness between variables. Overlapping sends are safe: each is
+/// an independent Zenoh query carrying its own reply channel, and the receiver
+/// appends to a per-id buffer. On a request/response topic every request shares
+/// one variable name, so a bound of 1 would serialize the whole topic.
 const MAX_CONCURRENT_SENDS_PER_KEY: usize = 8;
 
 /// How many further sends may wait for a slot before a caller is refused.
-///
-/// Refusing matters here. A caller told "no" can retry in milliseconds, where a
-/// caller whose message was dropped in silence waits out its own timeout, 30 s
-/// for a `mt_service` request, for an answer that can never come.
+/// A refused caller retries in milliseconds; a silently dropped one waits out
+/// its own timeout (30 s for an `mt_service` request) for an answer that can
+/// never come.
 const MAX_QUEUED_SENDS_PER_KEY: usize = 32;
 
-/// Marks a refusal that means "no room right now" on a healthy link.
-///
-/// Callers treat a publish failure as evidence the link is gone. Backpressure
-/// is not that, and a caller that confuses the two tears down a working
-/// connection under load. See [`is_backpressure`].
+/// Marks a refusal that means "no room right now" on a healthy link, so a
+/// caller does not tear down a working connection under load. See
+/// [`is_backpressure`].
 pub const BACKPRESSURE: &str = "send queue full";
 
-/// True when an error means "no room right now" on a link that is otherwise
-/// fine, so the caller should retry rather than conclude the peer is gone.
+/// True when an error means the link is fine but has no room right now, so the
+/// caller should retry.
 pub fn is_backpressure(error: &anyhow::Error) -> bool {
     error.to_string().contains(BACKPRESSURE)
+}
+
+/// Record a fan-out failure, preferring a hard failure over [`BACKPRESSURE`].
+///
+/// A fan-out can produce both but only one can be returned, and the order of
+/// targets must not decide which: callers shrug off backpressure (`mt_flow`
+/// lets its repair timer resend), so reporting it would hide the real failure.
+/// `make` is lazy because the message costs a format.
+fn remember_failure(slot: &mut Option<anyhow::Error>, make: impl FnOnce() -> anyhow::Error) {
+    if slot.as_ref().is_some_and(|held| !is_backpressure(held)) {
+        return; // a hard failure outranks anything else
+    }
+    let error = make();
+    if slot.is_none() || !is_backpressure(&error) {
+        *slot = Some(error);
+    }
 }
 
 /// The send budget for one key: permits for what is on the wire, and a count of
@@ -81,24 +85,20 @@ struct QueuedSend(Arc<std::sync::atomic::AtomicUsize>);
 
 impl Drop for QueuedSend {
     fn drop(&mut self) {
-        self.0
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
 #[derive(Debug)]
 pub struct NetworkShipImpl {
     pub client: Arc<tokio::sync::Mutex<Client>>,
-    /// The coordinator heartbeat channel, held directly.
-    ///
-    /// Reached without locking `client`, because that lock is what every send,
-    /// every route lookup and every registration contends on. A heartbeat that
-    /// has to queue behind data traffic for its turn is a heartbeat that can
-    /// miss `DISCONNECT_TIMEOUT_MS`, and the coordinator then drops a client
-    /// that was healthy and busy.
+    /// The coordinator heartbeat channel, held outside the `client` lock that
+    /// every send, route lookup and registration contends on. A beat queued
+    /// behind data traffic can miss `DISCONNECT_TIMEOUT_MS`, and the
+    /// coordinator then drops a client that was healthy and busy.
     heartbeat_send: Arc<std::sync::RwLock<Option<tokio::sync::mpsc::Sender<()>>>>,
-    /// Time of the last heartbeat, kept independent of application
-    /// traffic. A busy Wind producer still needs heartbeat echoes to prove its
+    /// Time of the last heartbeat, tracked independently of application
+    /// traffic: a busy Wind producer still needs echoes to prove its
     /// coordinator connection to the client-side liveness detector.
     pub last_heartbeat: Arc<tokio::sync::Mutex<Instant>>,
     /// Runtime captured during initialization because `shoot` can be invoked
@@ -133,10 +133,14 @@ impl crate::Cannon for NetworkShipImpl {
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
-        // The archived representation is identical for every target. Keep one aligned
-        // allocation alive across the whole fan-out for one serialization pass.
+        // Identical for every target, so serialize once and keep the aligned
+        // allocation alive for the whole fan-out.
         let data_bytes =
             Arc::new(to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data"));
+
+        // The fan-out always runs to completion and reports afterwards, so one
+        // bad target cannot cut the others off. See [`remember_failure`].
+        let mut deferred_error: Option<anyhow::Error> = None;
 
         for target in targets.iter() {
             let target_ship_name = match &target.kind {
@@ -146,10 +150,9 @@ impl crate::Cannon for NetworkShipImpl {
 
             let target_mode = target.node_mode;
             if target_mode.dispatch_is_async() {
-                // Both modes dispatch off the caller's thread so a slow link can
-                // never wedge a publisher's loop. They differ in what happens on
-                // the wire: BestEffort tries once, TryReliable retries until its
-                // budget is spent.
+                // Both modes dispatch off the caller's thread so a slow link
+                // cannot wedge a publisher's loop. BestEffort tries once,
+                // TryReliable retries until its budget is spent.
                 let (send_budget, is_reliable_mode) = match target_mode {
                     Qos::TryReliable => (
                         Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS)
@@ -159,8 +162,6 @@ impl crate::Cannon for NetworkShipImpl {
                     _ => (Duration::from_secs(5), false),
                 };
 
-                // Bounded per (target, variable), so two variables published in
-                // the same frame cannot starve each other.
                 let slots = {
                     let mut in_flight = self.async_sends_in_flight.lock().unwrap();
                     in_flight
@@ -169,22 +170,19 @@ impl crate::Cannon for NetworkShipImpl {
                         .clone()
                 };
 
-                // Taken before any permit. Holding a permit while waiting on
-                // this lock would park the whole per-key budget behind whatever
-                // else holds it, and `register` holds it across a network round
-                // trip.
+                // Taken before any permit: `register` holds this lock across a
+                // network round trip, and waiting on it while holding a permit
+                // would park the whole per-key budget behind that.
                 let (session, domain_id) = {
                     let c = self.client.lock().await;
                     (c.session(), c.domain_id())
                 };
 
-                // A free slot is the ordinary case: send now, wait for nothing.
                 let ready = Arc::clone(&slots.permits).try_acquire_owned().ok();
                 let queued = match &ready {
                     Some(_) => None,
                     None if !is_reliable_mode => {
-                        // A sampled stream would rather lose this one than
-                        // deliver it late, since the next sample is worth more.
+                        // A sampled stream prefers the next sample over a late one.
                         debug!(
                             "Dropping {:?} message '{}' for '{}': send already in progress",
                             target_mode, variable_name, target_ship_name
@@ -193,8 +191,8 @@ impl crate::Cannon for NetworkShipImpl {
                     }
                     None => {
                         // TryReliable: nobody else will resend this, so wait
-                        // for a slot. The wait happens in the spawned task
-                        // below, off the caller's loop.
+                        // for a slot in the spawned task below, off the
+                        // caller's loop.
                         let waiting = slots
                             .waiting
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -202,19 +200,22 @@ impl crate::Cannon for NetworkShipImpl {
                             slots
                                 .waiting
                                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                            // Refused so the caller can retry now, instead of
-                            // waiting out a timeout for nothing. Prefixed so a
-                            // caller can tell this apart from a dead link:
-                            // everything here is working, there is just no room
-                            // this instant.
-                            return Err(anyhow!(
-                                "{BACKPRESSURE}: too many sends of '{}' already queued for \
-                                 '{}' ({} on the wire, {} waiting)",
-                                variable_name,
-                                target_ship_name,
-                                MAX_CONCURRENT_SENDS_PER_KEY,
-                                waiting
-                            ));
+                            // Prefixed so the caller can tell congestion from
+                            // a dead link and retry immediately. Recorded and
+                            // reported after the fan-out, so one congested
+                            // subscriber does not stop the sample reaching
+                            // everybody else.
+                            remember_failure(&mut deferred_error, || {
+                                anyhow!(
+                                    "{BACKPRESSURE}: too many sends of '{}' already queued for \
+                                     '{}' ({} on the wire, {} waiting)",
+                                    variable_name,
+                                    target_ship_name,
+                                    MAX_CONCURRENT_SENDS_PER_KEY,
+                                    waiting
+                                )
+                            });
+                            continue;
                         }
                         Some(QueuedSend(Arc::clone(&slots.waiting)))
                     }
@@ -269,12 +270,9 @@ impl crate::Cannon for NetworkShipImpl {
                     // Backstop only: each send path already bounds itself.
                     match tokio::time::timeout(send_budget, send).await {
                         Ok(Ok(())) => {}
-                        // What failed and to whom is the whole of what a
-                        // warning is for here. The chain underneath is Zenoh
-                        // describing a query that timed out, which says nothing
-                        // a reader of the warning did not already know, and a
-                        // peer going away turns every publisher into a source
-                        // of it at once.
+                        // The chain underneath is Zenoh reporting a timed-out
+                        // query, and one departed peer turns every publisher
+                        // into a source of it, so it stays at debug.
                         Ok(Err(e)) => {
                             warn!(
                                 "{:?} send '{}' to '{}' failed",
@@ -293,7 +291,7 @@ impl crate::Cannon for NetworkShipImpl {
                 });
             } else {
                 let client = self.client.lock().await;
-                client
+                if let Err(error) = client
                     .send_raw_to_other_client(
                         id,
                         data_bytes.as_slice(),
@@ -301,10 +299,17 @@ impl crate::Cannon for NetworkShipImpl {
                         variable_name,
                         &target_ship_name,
                     )
-                    .await?;
+                    .await
+                {
+                    remember_failure(&mut deferred_error, || error);
+                }
             }
         }
-        Ok(())
+
+        match deferred_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     /// Catch the dumped data from the source.
@@ -314,6 +319,50 @@ impl crate::Cannon for NetworkShipImpl {
             .into_iter()
             .map(|message| message.deserialize())
             .collect()
+    }
+
+    async fn catch_for_variable<T: Sendable>(
+        &self,
+        id: u32,
+        variable_name: &str,
+        drop_stale: bool,
+    ) -> anyhow::Result<Vec<ArchivedMessage<T>>> {
+        let (buf, mut update_chan) = {
+            let client = self.client.lock().await;
+            let buf = std::sync::Arc::clone(&client.raw_recv_buff);
+            let update_chan = client.updated_raw_recv.subscribe();
+            (buf, update_chan)
+        };
+
+        loop {
+            // The route id is only a preference. A coordinator restart derives
+            // a new one while publishers still shoot under the old, so entries
+            // buffered under any id are taken; requiring `id` would wait out
+            // that skew forever.
+            let taken = {
+                let mut buf_lock = buf.write().unwrap();
+                Self::take_for_variable(&mut buf_lock, id, variable_name, drop_stale)
+            };
+
+            if let Some(entries) = taken {
+                return entries
+                    .into_iter()
+                    .map(ArchivedMessage::from_aligned_bytes)
+                    .collect();
+            }
+
+            match update_chan.recv().await {
+                // Any arrival may be this variable, whatever id it came under.
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    debug!("catch_for_variable receiver lagged by {n} messages, checking buffer");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(anyhow!("Update channel closed while waiting for data"));
+                }
+            }
+        }
     }
 
     async fn catch_archived<T: Sendable>(
@@ -327,11 +376,9 @@ impl crate::Cannon for NetworkShipImpl {
             (buf, update_chan)
         };
 
-        // Loop until we get data for our id
-        // We must check the buffer on EVERY iteration because notifications
-        // might have been sent before we started waiting on the channel
+        // The buffer is checked on every iteration because a notification can
+        // land between subscribing and waiting on the channel.
         loop {
-            // Check if data is already in buffer
             let data_opt = {
                 let mut buf_lock = buf.write().unwrap();
                 buf_lock.remove(&id)
@@ -344,19 +391,13 @@ impl crate::Cannon for NetworkShipImpl {
                     .collect();
             }
 
-            // No data yet - wait for notification
-            // Use recv() which blocks until a message arrives
-            // If we miss a notification, the next iteration will check the buffer again
             match update_chan.recv().await {
                 Ok(update_id) => {
                     if update_id == id {
-                        // Our data might be ready, loop back to check buffer
                         continue;
                     }
-                    // Not our id, keep waiting
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    // We missed some messages - that's fine, just check the buffer
                     debug!("Catch receiver lagged by {} messages, checking buffer", n);
                     continue;
                 }
@@ -405,18 +446,15 @@ impl crate::Cannon for NetworkShipImpl {
             (buf, update_chan)
         };
 
-        // Loop until we get data for our id
-        // We must check the buffer on EVERY iteration because notifications
-        // might have been sent before we started waiting on the channel
+        // The buffer is checked on every iteration because a notification can
+        // land between subscribing and waiting on the channel.
         loop {
-            // Check if data is already in buffer
             let data_opt = {
                 let mut buf_lock = buf.write().unwrap();
                 buf_lock.remove(&id)
             };
 
             if let Some(data_vec) = data_opt {
-                // Data found - convert and return
                 let mut out_buf = Vec::with_capacity(data_vec.len());
                 for (raw, var_type, var_name) in data_vec {
                     out_buf.push((to_dyn_str(var_type, raw)?, var_type, var_name));
@@ -424,17 +462,13 @@ impl crate::Cannon for NetworkShipImpl {
                 return Ok(out_buf);
             }
 
-            // No data yet - wait for notification
             match update_chan.recv().await {
                 Ok(update_id) => {
                     if update_id == id {
-                        // Our data might be ready, loop back to check buffer
                         continue;
                     }
-                    // Not our id, keep waiting
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    // We missed some messages - that's fine, just check the buffer
                     debug!(
                         "Catch_dyn receiver lagged by {} messages, checking buffer",
                         n
@@ -452,9 +486,9 @@ impl crate::Cannon for NetworkShipImpl {
 #[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<(crate::Action, bool)> {
-        // Fast path: use cached route if available (coordinator pushes updates proactively).
-        // Bypassed for ShipKind::Rat so VariableTaskRequest always reaches the coordinator
-        // (required for TUI catch, comparison loop, and RatAction{Shoot} delivery).
+        // The coordinator pushes route updates, so the cache is authoritative.
+        // ShipKind::Rat bypasses it: TUI catch, the comparison loop and
+        // RatAction{Shoot} delivery all need the coordinator to see the request.
         if !self.bypass_cache {
             if let Some(cached) = self.route_cache.read().unwrap().get(variable_name).cloned() {
                 debug!("ask_for_action: cache hit for {}", variable_name);
@@ -475,7 +509,7 @@ impl crate::Ship for NetworkShipImpl {
                 data: PacketKind::VariableTaskRequest(variable_name.to_string()),
             };
 
-            // Subscribe BEFORE sending request to avoid race condition
+            // Subscribe before sending so the reply cannot arrive first.
             let mut sub = client
                 .coordinator_receive
                 .read()
@@ -486,26 +520,15 @@ impl crate::Ship for NetworkShipImpl {
                     "Sender to Coordinator is available but Receiver is not."
                 ))?;
 
-            // Release client lock before sending to avoid deadlock
+            // Release the client lock before sending to avoid a deadlock.
             drop(client);
 
-            // Send the request
             sender.send(action_request).await?;
 
-            // Wait for the response matching our variable.
-            //
-            // Bounded, and with a fallback on lag, because the reply exists in
-            // exactly one place: this broadcast stream. The channel holds 256
-            // packets, and a receiver that falls behind has the oldest dropped
-            // and gets `Lagged`. Those packets are gone for this receiver, so a
-            // reply among them never arrives, and an unbounded wait here then
-            // hangs the caller for good: `publish` never returns, the range
-            // request is never sent, the fetch thread blocks on its reply
-            // channel, and the block a reader is waiting on stays pending
-            // forever. The stream stops dead with no error and no timeout.
-            //
-            // Lag needs a burst, so this is rare with one request in flight and
-            // reachable with several.
+            // The reply exists only in this broadcast stream, whose 256-packet
+            // channel drops the oldest on lag. A reply among those is gone for
+            // good, so the wait below is bounded: an unbounded one would hang
+            // the caller with no error and no timeout.
             let answer = async {
                 loop {
                     match sub.recv().await {
@@ -516,8 +539,8 @@ impl crate::Ship for NetworkShipImpl {
                                     action,
                                     lock_until_ack,
                                 } => {
-                                    // Cache every RatAction we see (background task also does this,
-                                    // but caching here covers the first-call slow path).
+                                    // Also cached by the background task; this
+                                    // covers the first-call slow path.
                                     self.route_cache
                                         .write()
                                         .unwrap()
@@ -525,21 +548,16 @@ impl crate::Ship for NetworkShipImpl {
                                     if variable == variable_name {
                                         return Ok((action, lock_until_ack));
                                     }
-                                    // Wrong variable, keep waiting
                                 }
                                 PacketKind::RegistrationError(msg) => {
                                     return Err(anyhow!("{}", msg));
                                 }
-                                _ => {
-                                    // Not a RatAction or RegistrationError, keep waiting
-                                }
+                                _ => {}
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            // The dropped packets are gone for this receiver,
-                            // and the answer may have been one of them. Nothing
-                            // here can get it back, so this only keeps waiting
-                            // and lets the deadline below end it.
+                            // The answer may have been among the dropped
+                            // packets, so keep waiting for the deadline below.
                             log::warn!("ask_for_action receiver lagged by {n} messages");
                             continue;
                         }
@@ -571,7 +589,6 @@ impl crate::Ship for NetworkShipImpl {
     }
 
     async fn wait_for_wind(&self) -> anyhow::Result<Vec<crate::WindData>> {
-        // Get the wind receiver and coordinator sender from client
         let (wind_receiver, coord_send) = {
             let client = self.client.lock().await;
             let receiver = std::sync::Arc::clone(&client.wind_receiver);
@@ -581,12 +598,10 @@ impl crate::Ship for NetworkShipImpl {
 
         let sender = coord_send.ok_or(anyhow!("Coordinator send not available"))?;
 
-        // Lock the wind receiver and wait for the next packet
         let mut receiver = wind_receiver.lock().await;
         match receiver.recv().await {
             Some(packet) => {
                 if let PacketKind::Wind(bwd) = packet.data {
-                    // Send ack to coordinator
                     sender
                         .send(crate::net::Packet {
                             header: crate::net::Header::default(),
@@ -653,9 +668,9 @@ async fn ping_peer(session: &zenoh::Session, key: &str) -> anyhow::Result<()> {
 /// Continuously ping a peer and send `PeerDead` to the coordinator after
 /// `PEER_DEAD_THRESHOLD` consecutive failures.
 ///
-/// The cancellation token belongs to the *observer*. It is only an input that
-/// stops this task when the observer shuts down. Cancelling it because another peer missed heartbeats
-/// would make a server kill itself whenever a client disappears.
+/// The cancellation token belongs to the *observer* and is only an input here:
+/// cancelling it on missed peer heartbeats would make a server kill itself
+/// whenever a client disappears.
 async fn monitor_peer(
     session: Arc<zenoh::Session>,
     domain_id: u16,
@@ -694,7 +709,7 @@ async fn monitor_peer(
                         ship: peer_name.clone(),
                     },
                 };
-                // Notify the coordinator when it remains reachable.
+                // Best effort: the coordinator may already be gone too.
                 coord_tx.send(packet).await.ok();
                 return;
             }
@@ -704,16 +719,14 @@ async fn monitor_peer(
 
 /// Watch the coordinator link for the lifetime of the node.
 ///
-/// Registration hands back a one-shot that fires when the link drops. Before
-/// reconnect existed, that one-shot was wired straight to the node's shutdown
-/// token, which made every disconnect terminal. Now it is the top of a loop: on
-/// a drop, a node whose policy allows it re-registers with backoff and
-/// publishes a new generation, and everything holding a publisher or subscriber
-/// re-establishes itself against the new registration.
+/// Registration hands back a one-shot that fires when the link drops. A node
+/// whose policy allows it then re-registers with backoff and publishes a new
+/// generation, and everything holding a publisher or subscriber re-establishes
+/// itself against that registration.
 ///
-/// The coordinator is already built for this: a `JoinRequest` from a name it
-/// knows aborts the stale handler and rejoins, and rules for a node that does
-/// not remove them on exit are still there when it comes back.
+/// The coordinator supports this: a `JoinRequest` from a name it already knows
+/// aborts the stale handler and rejoins, and rules for a node that did not
+/// remove them on exit are still there when it comes back.
 #[allow(clippy::too_many_arguments)]
 fn spawn_connection_supervisor(
     client: Arc<tokio::sync::Mutex<Client>>,
@@ -735,8 +748,7 @@ fn spawn_connection_supervisor(
 
             let (initial_backoff_ms, max_backoff_ms) = match policy {
                 crate::ReconnectPolicy::Never => {
-                    // Preserves the original contract: losing the coordinator
-                    // finishes the node.
+                    // Losing the coordinator finishes the node.
                     info!("{kind:?} lost the coordinator and does not reconnect — shutting down");
                     disconnect.cancel();
                     return;
@@ -758,9 +770,9 @@ fn spawn_connection_supervisor(
                     _ = tokio::time::sleep(backoff) => {}
                 }
 
-                // `register` retries the join internally and only returns once
-                // the coordinator welcomes it, so it is bounded here to keep the
-                // backoff meaningful when there is nothing listening at all.
+                // `register` retries the join internally and returns only once
+                // welcomed, so bound it here to keep the backoff meaningful
+                // when nothing is listening at all.
                 let attempt = timeout(timing.registration_timeout(), async {
                     client.lock().await.register().await
                 })
@@ -788,6 +800,69 @@ fn spawn_connection_supervisor(
 }
 
 impl NetworkShipImpl {
+    /// Take this variable's samples, preferring the route `id`, and optionally
+    /// keeping only the newest.
+    ///
+    /// `id` is what the coordinator told this subscriber to expect. A mismatched
+    /// id is still accepted because a coordinator restart re-derives the route
+    /// under a new id while the publisher may still shoot under the old one.
+    fn take_for_variable(
+        buf: &mut crate::client::RecvBuffer,
+        id: u32,
+        variable_name: &str,
+        drop_stale: bool,
+    ) -> Option<Vec<AlignedVec>> {
+        let mut taken = Self::take_variable(buf, id, variable_name).or_else(|| {
+            let stale_id = buf.iter().find_map(|(other, entries)| {
+                entries
+                    .iter()
+                    .any(|(_, _, name)| name == variable_name)
+                    .then_some(*other)
+            })?;
+            debug!("No '{variable_name}' under route id {id}, taking stale id {stale_id} instead");
+            Self::take_variable(buf, stale_id, variable_name)
+        })?;
+
+        if drop_stale && taken.len() > 1 {
+            // Arrival-ordered within an id, so the last is the newest.
+            debug!(
+                "Dropping {} stale '{variable_name}' sample(s) in favour of the newest",
+                taken.len() - 1
+            );
+            taken.drain(..taken.len() - 1);
+        }
+        Some(taken)
+    }
+
+    /// Remove and return this variable's entries under `id`.
+    ///
+    /// One id can carry several variables, so only this variable's entries are
+    /// taken and the id is dropped only once nothing is left under it.
+    fn take_variable(
+        buf: &mut crate::client::RecvBuffer,
+        id: u32,
+        variable_name: &str,
+    ) -> Option<Vec<AlignedVec>> {
+        let entries = buf.get_mut(&id)?;
+        // Entries hold whole samples, point clouds among them, so they are
+        // drained and moved out by hand. `retain` would only lend its items.
+        let mut kept = Vec::with_capacity(entries.len());
+        let mut taken = Vec::new();
+        for entry in entries.drain(..) {
+            if entry.2 == variable_name {
+                taken.push(entry.0);
+            } else {
+                kept.push(entry);
+            }
+        }
+        if kept.is_empty() {
+            buf.remove(&id);
+        } else {
+            *entries = kept;
+        }
+        (!taken.is_empty()).then_some(taken)
+    }
+
     #[allow(dead_code)]
     async fn spawn_recursive_rejoin_task(
         disconnect_handle: tokio::sync::oneshot::Receiver<()>,
@@ -815,19 +890,18 @@ impl NetworkShipImpl {
     /// Keep the coordinator's handler for this client alive while it is idle.
     ///
     /// The coordinator drops any client that sends nothing for
-    /// `DISCONNECT_TIMEOUT_MS` and tears down the task that answers its variable
+    /// `DISCONNECT_TIMEOUT_MS` and tears down the task answering its variable
     /// requests, so a ship that only speaks when it has something to say hangs
-    /// forever on its next request after a long pause. Every ship must run this,
-    /// and exactly once. `init` leaves it unstarted so the owner of the `Arc`
+    /// forever on its next request after a long pause. Every ship must run this
+    /// exactly once; `init` leaves it unstarted so the owner of the `Arc`
     /// decides. The task ends when the connection is lost.
     ///
-    /// Cost is one small control message per `HEARTBEAT_INTERVAL_MS`. The
-    /// heartbeat uses its own real-time-priority publisher and bounded channel.
-    /// application traffic cannot queue ahead of it. Only another heartbeat
-    /// suppresses it, so a busy ship still beats on schedule.
+    /// Costs one control message per `HEARTBEAT_INTERVAL_MS`, sent through its
+    /// own real-time-priority publisher and bounded channel, so application
+    /// traffic cannot queue ahead of it.
     pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
-        // Tells the disconnect detector that silence from the coordinator is
-        // meaningful for this node, because it is asking for a reply.
+        // Silence from the coordinator now means something, since this node
+        // asks for a reply.
         self.connection.mark_heartbeating();
         let ship = std::sync::Arc::clone(self);
         let disconnect = ship.disconnect.clone();
@@ -837,7 +911,9 @@ impl NetworkShipImpl {
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {
                         if let Err(e) = ship.send_heartbeat().await {
-                            debug!("Failed to send heartbeat: {e}");
+                            // The node is the only side that can still report
+                            // the diverging views.
+                            warn!("Failed to send heartbeat: {e}");
                         }
                     }
                     _ = disconnect.cancelled() => return,
@@ -857,10 +933,23 @@ impl NetworkShipImpl {
         let heartbeat_send = self.heartbeat_send.read().unwrap().clone();
 
         if let Some(sender) = heartbeat_send {
-            // Capacity one is intentional: heartbeats represent current
-            // liveness, so another pending beat is enough. This path is
-            // independent of wind/data packet queues.
-            let _ = sender.try_send(());
+            // Capacity one: a beat only signals current liveness, so one
+            // pending is enough and `Full` is the channel working as intended.
+            // `Closed` means the forwarder to the network is gone, so the node
+            // believes it is alive while the coordinator counts down to
+            // dropping it.
+            match sender.try_send(()) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {
+                    debug!("Heartbeat already pending, skipping this beat");
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                    return Err(anyhow!(
+                        "heartbeat path is closed: this node is not reaching the coordinator \
+                         and will be dropped by it"
+                    ));
+                }
+            }
             *self.last_heartbeat.lock().await = Instant::now();
             Ok(Some(()))
         } else {
@@ -969,8 +1058,8 @@ impl NetworkShipImpl {
         let reconnect = options.reconnect_policy(node_mode);
         let mut start_coord = Some(start_coord);
 
-        // Create torpedo channel before potentially starting an embedded coordinator so that
-        // the coordinator can signal this node to shut down via the torpedo mechanism.
+        // Created before any embedded coordinator starts, so that coordinator
+        // can signal this node to shut down through it.
         let (torpedo_tx, mut torpedo_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         let connection = Arc::new(crate::ConnectionState::new());
@@ -1001,14 +1090,13 @@ impl NetworkShipImpl {
             }
             Ok(Err(e)) => return Err(e),
             Err(_elapsed) => {
-                // No coordinator found, so call the provided startup function and retry
                 if let Some(start_coord) = start_coord.take() {
                     start_coord(Some(torpedo_tx)).await?;
                 }
-                // The startup callback does not return until a coordinator started by this
-                // process has installed its join subscriber. If another process owns the
-                // coordinator lock, retrying registration itself is the readiness wait.
-                // A fixed sleep here only adds latency and cannot close any race.
+                // The callback returns only once a coordinator started by this
+                // process has installed its join subscriber. When another
+                // process owns the coordinator lock, the retry below is itself
+                // the readiness wait.
                 match try_register().await {
                     Ok(Ok(handle)) => {
                         info!("{:?} Registered.", &kind);
@@ -1036,7 +1124,8 @@ impl NetworkShipImpl {
             kind.clone(),
         );
 
-        // Cancel disconnect when the embedded coordinator fires a torpedo (if one was started).
+        // An embedded coordinator, if one was started, shuts this node down by
+        // firing a torpedo.
         let disconnect_torpedo = disconnect.clone();
         tokio::spawn(async move {
             if torpedo_rx.recv().await.is_some() {
@@ -1056,17 +1145,17 @@ impl NetworkShipImpl {
             tokio::task::AbortHandle,
         >::new()));
 
-        // Set by the node, not inferred from its kind. Every `mt_pubsub`,
-        // `mt_scope` and `mt_rat` ship is a `ShipKind::Rat`, so inferring it
-        // here made the whole system ask the coordinator for a route on every
-        // publish when only the comparison path needs that.
+        // Set by the node: every `mt_pubsub`, `mt_scope` and `mt_rat` ship is a
+        // `ShipKind::Rat`, so deriving it from the kind would make all of them
+        // ask the coordinator for a route on every publish when only the
+        // comparison path needs that.
         let bypass_cache = options.bypass_route_cache;
 
         let ship = Self {
             client,
             heartbeat_send,
             runtime_handle: tokio::runtime::Handle::current(),
-            // Initialize far enough in the past so the first heartbeat fires immediately
+            // Far enough in the past that the first heartbeat fires immediately.
             last_heartbeat: Arc::new(tokio::sync::Mutex::new(
                 Instant::now() - timing.registration_timeout(),
             )),
@@ -1079,8 +1168,8 @@ impl NetworkShipImpl {
             connection,
         };
 
-        // Background task: listen for RatAction packets pushed by the coordinator,
-        // update route_cache, and reconcile per-peer monitor tasks.
+        // Background task: take RatAction packets pushed by the coordinator,
+        // update route_cache and reconcile the per-peer monitor tasks.
         {
             let coord_receive_arc = {
                 let c = ship.client.lock().await;
@@ -1099,7 +1188,7 @@ impl NetworkShipImpl {
             let peer_monitor_bg = Arc::clone(&ship.peer_monitor);
             let shutdown = ship.disconnect.clone();
 
-            // subscribe() after registration guarantees the sender is set
+            // Registration has run, so the sender is set.
             let mut rx = coord_receive_arc
                 .read()
                 .unwrap()
@@ -1107,9 +1196,9 @@ impl NetworkShipImpl {
                 .expect("coordinator_receive must be set after registration")
                 .subscribe();
 
-            // Per-variable peer sets: the required global peer set is their union.
-            // This prevents a Sail response for one variable (e.g. /nothing_here)
-            // from aborting monitors that are still needed by other variables.
+            // Peers are tracked per variable and monitored on the union, so a
+            // Sail response for one variable does not abort monitors that other
+            // variables still need.
             let mut per_var_peers: HashMap<String, HashSet<String>> = HashMap::new();
 
             tokio::spawn(async move {
@@ -1134,7 +1223,6 @@ impl NetworkShipImpl {
                                             route_cache_bg.write().unwrap()
                                                 .insert(variable.clone(), (action.clone(), lock_until_ack));
 
-                                            // Update this variable's peer set and recompute the union.
                                             per_var_peers.insert(variable.clone(), extract_peers(&action));
                                             let required: HashSet<String> = per_var_peers
                                                 .values()
@@ -1150,7 +1238,6 @@ impl NetworkShipImpl {
                                                     .collect()
                                             };
 
-                                            // Abort monitors for peers no longer needed by any variable
                                             {
                                                 let to_remove: Vec<String> = current_peers
                                                     .iter()
@@ -1165,7 +1252,6 @@ impl NetworkShipImpl {
                                                 }
                                             }
 
-                                            // Spawn monitors for newly required peers
                                             for peer in &required {
                                                 if !current_peers.contains(peer) {
                                                     let coord_sender =
@@ -1188,6 +1274,12 @@ impl NetworkShipImpl {
                                             }
                                         }
                                         PacketKind::Torpedo(dead_clients) => {
+                                            // The run is over, so every node stops
+                                            // whatever its own QoS. Resilient QoS keeps
+                                            // a run alive past one node's death, and
+                                            // filtering here would leave nodes
+                                            // reconnecting forever against a coordinator
+                                            // that has already shut itself down.
                                             info!(
                                                 "Torpedo received from coordinator for {:?} — shutting down",
                                                 dead_clients
@@ -1201,7 +1293,6 @@ impl NetworkShipImpl {
                                     continue;
                                 }
                                 Err(_) => {
-                                    // Channel closed, so abort all peer monitors and exit
                                     let mut monitors = peer_monitor_bg.write().unwrap();
                                     for (_, handle) in monitors.drain() {
                                         handle.abort();
@@ -1216,160 +1307,5 @@ impl NetworkShipImpl {
         }
 
         Ok(ship)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn peer(name: &str, node_mode: Qos) -> crate::NetworkShipAddress {
-        crate::NetworkShipAddress {
-            ip: [127, 0, 0, 1],
-            port: 0,
-            ship: 0,
-            kind: crate::ShipKind::Rat(name.to_string()),
-            node_mode,
-        }
-    }
-
-    #[test]
-    fn peer_monitors_exclude_best_effort_shoot_targets() {
-        let action = crate::Action::Shoot {
-            target: vec![
-                peer("reliable################", Qos::Reliable),
-                peer("scope################", Qos::BestEffort),
-            ],
-            id: 1,
-        };
-
-        assert_eq!(
-            extract_peers(&action),
-            HashSet::from(["reliable".to_string()])
-        );
-    }
-
-    #[test]
-    fn peer_monitors_exclude_best_effort_catch_sources() {
-        let action = crate::Action::Catch {
-            source: peer("scope", Qos::BestEffort),
-            id: 1,
-        };
-
-        assert!(extract_peers(&action).is_empty());
-    }
-
-    /// A TryReliable peer is reliable on the wire but not fatal, so nothing
-    /// may heartbeat-monitor it: a monitored peer that stops answering fires a
-    /// Torpedo, which is exactly what this mode exists to avoid.
-    #[test]
-    fn peer_monitors_exclude_try_reliable_shoot_targets() {
-        let action = crate::Action::Shoot {
-            target: vec![
-                peer("reliable################", Qos::Reliable),
-                peer("viewer################", Qos::TryReliable),
-            ],
-            id: 1,
-        };
-
-        assert_eq!(
-            extract_peers(&action),
-            HashSet::from(["reliable".to_string()])
-        );
-    }
-
-    #[test]
-    fn peer_monitors_exclude_try_reliable_catch_sources() {
-        let action = crate::Action::Catch {
-            source: peer("viewer", Qos::TryReliable),
-            id: 1,
-        };
-
-        assert!(extract_peers(&action).is_empty());
-    }
-
-    /// Shoot and Catch decide monitoring through the same predicate. They used
-    /// to spell the question two opposite ways (`== Reliable` on one side,
-    /// `== BestEffort` on the other), which agreed only while there were
-    /// exactly two variants and silently disagreed the moment a third existed.
-    #[test]
-    fn shoot_and_catch_agree_on_which_modes_are_monitored() {
-        for mode in [Qos::Reliable, Qos::TryReliable, Qos::BestEffort] {
-            let shoot = crate::Action::Shoot {
-                target: vec![peer("peer", mode)],
-                id: 1,
-            };
-            let catch = crate::Action::Catch {
-                source: peer("peer", mode),
-                id: 1,
-            };
-
-            assert_eq!(
-                extract_peers(&shoot).is_empty(),
-                extract_peers(&catch).is_empty(),
-                "Shoot and Catch disagree about monitoring {mode:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn send_slots_allow_several_of_one_variable_without_starving_another() {
-        let in_flight: Arc<std::sync::Mutex<HashMap<AsyncSendKey, SendSlots>>> =
-            Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let slots = |ship: &str, var: &str| {
-            in_flight
-                .lock()
-                .unwrap()
-                .entry((ship.to_string(), var.to_string()))
-                .or_insert_with(SendSlots::new)
-                .clone()
-        };
-
-        // Several sends of one variable may be on the wire at once. A
-        // request/response topic, where every request shares one variable name,
-        // makes no progress past one round trip at a time without this.
-        let cloud = slots("scope", "cloud");
-        let mut held = Vec::new();
-        for _ in 0..MAX_CONCURRENT_SENDS_PER_KEY {
-            held.push(
-                Arc::clone(&cloud.permits)
-                    .try_acquire_owned()
-                    .expect("a slot under the limit should be free"),
-            );
-        }
-        // But only up to the limit, so one variable cannot take the link.
-        assert!(
-            Arc::clone(&cloud.permits).try_acquire_owned().is_err(),
-            "the per-key limit must still bound what one variable can occupy"
-        );
-
-        // A different variable to the same target must not be starved by it.
-        let delta = slots("scope", "delta");
-        assert!(Arc::clone(&delta.permits).try_acquire_owned().is_ok());
-        // A different target is independent, as before.
-        let other = slots("other", "cloud");
-        assert!(Arc::clone(&other.permits).try_acquire_owned().is_ok());
-
-        // A finished send frees its slot for whoever is waiting.
-        held.pop();
-        assert!(Arc::clone(&cloud.permits).try_acquire_owned().is_ok());
-    }
-
-    #[test]
-    fn captured_runtime_handle_spawns_from_plain_thread() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        let handle = runtime.handle().clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        std::thread::spawn(move || {
-            handle.spawn(async move {
-                tx.send(()).expect("test receiver should still exist");
-            });
-        })
-        .join()
-        .expect("plain worker thread should not panic");
-
-        rx.recv_timeout(Duration::from_secs(1))
-            .expect("task spawned through the captured runtime should run");
     }
 }

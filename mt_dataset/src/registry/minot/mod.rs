@@ -5,9 +5,8 @@
 //! answers on its behalf, so this driver implements [`RegistryDriver`] with the
 //! same semantics as the registry behind it.
 //!
-//! Keeping it boring matters: the streaming work that follows depends on
-//! this transport, and it is much easier to trust once `marina pull` over
-//! `minot://` behaves exactly like `marina pull` over SSH.
+//! The streaming work built on top depends on this transport, so `marina pull`
+//! over `minot://` must behave exactly like `marina pull` over SSH.
 
 pub mod block_store;
 pub mod protocol;
@@ -54,9 +53,9 @@ enum Reach {
     /// A coordinator addressed directly. No authentication: only for a trusted
     /// network.
     Direct(String),
-    /// Tunnelled over SSH, using an existing registry's credentials. This is
-    /// the supported way to reach another machine, because `marina serve` binds
-    /// loopback and the SSH connection is the security boundary.
+    /// Tunnelled over SSH with an existing registry's credentials. The
+    /// supported way to reach another machine: `marina serve` binds loopback and
+    /// the SSH connection is the security boundary.
     Ssh {
         ssh: Box<SshRegistry>,
         remote_port: u16,
@@ -131,7 +130,7 @@ impl MinotRegistry {
 
     /// Parse a `minot://` URI.
     ///
-    /// Three forms, in increasing order of how much they set up for you:
+    /// Three forms, in increasing order of what they set up:
     ///
     /// - `minot://<registry>`: the server is already reachable on this machine
     ///   (both ends local, or a tunnel you opened yourself).
@@ -166,9 +165,9 @@ impl MinotRegistry {
                     "minot+ssh URI must be minot+ssh://[user@]host[:port]/<registry> (got '{uri}')"
                 ));
             }
-            // The SSH registry is used purely as a connection: its root path is
-            // never read, because everything about the dataset comes from the
-            // marina server on the far side.
+            // The SSH registry is only a connection here. Its root path is
+            // never read; the dataset comes from the marina server on the far
+            // side.
             let ssh = SshRegistry::from_uri(
                 &format!("{name}-tunnel"),
                 &format!("ssh://{target}/"),
@@ -203,9 +202,9 @@ impl MinotRegistry {
             Some((host, registry)) if !registry.is_empty() => {
                 (Reach::Direct(format!("tcp/{host}")), registry.to_string())
             }
-            // `minot://host:7447/` trims to a single segment, so it is not
-            // distinguishable here from `minot://team/` by shape alone. The
-            // check below catches it by content instead.
+            // `minot://host:7447/` trims to a single segment, so its shape
+            // matches `minot://team/`. The check below separates them by
+            // content.
             _ => (Reach::Local, rest.to_string()),
         };
 
@@ -230,8 +229,8 @@ impl MinotRegistry {
     async fn session(&self) -> Result<&Arc<Session>> {
         self.session
             .get_or_try_init(|| async {
-                // Established before the node, because the node's very first
-                // action is to reach the coordinator through it.
+                // Established before the node, whose first action is to reach
+                // the coordinator through it.
                 let tunnel = match &self.reach {
                     Reach::Local => {
                         mt_sea::network::set_local_only(true);
@@ -248,8 +247,8 @@ impl MinotRegistry {
                             "could not open an ssh tunnel to the marina server. Check the \
                              host and credentials, and that `marina serve` is running there.",
                         )?;
-                        // The forward makes the remote server look local, which
-                        // is exactly the shape the local form already handles.
+                        // The forward makes the remote server look local, so
+                        // the local form handles the rest.
                         unsafe {
                             std::env::set_var(
                                 "MINOT_COORD_ADDR",
@@ -402,9 +401,8 @@ impl MinotRegistry {
     /// Where streamed blocks are kept, and under what identity.
     ///
     /// Keyed by the dataset's bundle hash when the server knows one, so a cache
-    /// written for one version of a dataset is never served for another. With
-    /// no hash available the size still guards it, and a mismatch
-    /// discards and refetches.
+    /// written for one version is never served for another. Without a hash the
+    /// size guards it, and a mismatch discards and refetches.
     async fn default_cache(&self, bag: &BagRef) -> CacheMode {
         let validity = self
             .bag_info(bag)
@@ -512,8 +510,8 @@ impl MinotRegistry {
     }
 
     /// Await a disk-bound server operation until it completes or the transport
-    /// reports that the peer disappeared. Packing or publishing a large bag is
-    /// not a control-plane timeout and has no honest fixed duration.
+    /// reports that the peer disappeared. Packing or publishing a large bag has
+    /// no honest fixed duration, so no control-plane timeout applies.
     async fn request_without_deadline(&self, request: Request) -> Result<Response> {
         let session = self.session().await?;
         session
@@ -682,10 +680,9 @@ impl RemoteDataset {
     /// Choose what happens to the blocks this dataset's files fetch.
     ///
     /// The default is [`CacheMode::Disk`]: reading warms a local copy, so a
-    /// second read is free and a complete read leaves the whole
-    /// dataset local. Switch to [`CacheMode::Ephemeral`] for a read that leaves
-    /// nothing behind. The file is never touched on disk and memory stays
-    /// bounded regardless of the dataset's size.
+    /// second read is free and a complete read leaves the whole dataset local.
+    /// [`CacheMode::Ephemeral`] leaves nothing behind, never touches the disk,
+    /// and keeps memory bounded whatever the dataset's size.
     pub fn with_cache(mut self, cache: CacheMode) -> Self {
         self.cache = cache;
         self
@@ -760,18 +757,16 @@ impl RemoteDataset {
 
     /// Read every byte of the dataset, then install it as an ordinary local one.
     ///
-    /// The whole design turns on this: **streaming and pulling are
-    /// the same operation in different orders.** A streamed read fills the
-    /// block cache. Once every block of every file is present, the sparse files
-    /// *are* the dataset, so they are moved into `ready/` and registered in the
-    /// catalog. From then on `marina resolve` returns a plain path and nothing
-    /// downstream knows or cares that it arrived by streaming.
+    /// **Streaming and pulling are the same operation in different orders.** A
+    /// streamed read fills the block cache, and once every block of every file
+    /// is present the sparse files *are* the dataset, so they move into `ready/`
+    /// and are registered in the catalog. `marina resolve` then returns a plain
+    /// path and nothing downstream sees that it arrived by streaming.
     ///
-    /// Unlike a pull, this resumes: blocks fetched by an earlier interrupted
-    /// read or by ordinary use are not fetched again.
+    /// This resumes where a pull does not: blocks fetched by an earlier
+    /// interrupted read or by ordinary use are not fetched again.
     ///
-    /// Refuses in ephemeral mode, where there is nothing to
-    /// promote.
+    /// Refused in ephemeral mode, where there is nothing to promote.
     pub fn materialize(&self, progress: &mut ProgressReporter<'_>) -> Result<PathBuf> {
         let CacheMode::Disk { root, validity } = &self.cache else {
             return Err(anyhow!(
@@ -796,8 +791,8 @@ impl RemoteDataset {
             }
             progress.emit("stream", format!("fetching {}", file.path));
             let mut remote = self.open(&file.path)?;
-            // Read it through: the bytes are wanted only for their effect on
-            // the cache. Ephemeral mode discards completed blocks as they arrive.
+            // The bytes are read only for their effect on the cache. Ephemeral
+            // mode discards completed blocks as they arrive.
             std::io::copy(&mut remote, &mut std::io::sink())
                 .with_context(|| format!("failed streaming '{}'", file.path))?;
             if !remote.is_complete() {
@@ -821,7 +816,7 @@ impl RemoteDataset {
         let cache_dir = crate::storage::cache::bag_cache_dir(&self.bag)?;
         let ready = cache_dir.join("ready");
         // Assembled beside the destination and renamed, so an interrupted
-        // install never leaves a half-built tree that looks ready.
+        // install leaves no half-built tree that looks ready.
         let staging = cache_dir.join(".stream-incoming");
         if staging.exists() {
             std::fs::remove_dir_all(&staging)?;
@@ -847,9 +842,8 @@ impl RemoteDataset {
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            // A rename keeps the bytes where they are when the cache and the
-            // dataset usually share a filesystem. The copy is
-            // the fallback when they do not.
+            // Cache and dataset usually share a filesystem, where a rename
+            // keeps the bytes in place. The copy covers the other case.
             if std::fs::rename(&complete, &target).is_err() {
                 std::fs::copy(&complete, &target).with_context(|| {
                     format!("failed installing '{}' from the stream cache", file.path)
@@ -916,8 +910,8 @@ pub enum StatResult {
 
 /// Writes a flow straight to disk at the offset the sender gave it.
 ///
-/// A sparse write is exactly what a resumed transfer produces, so the file is
-/// extended as needed to support resumed chunks in any order.
+/// The file is extended as needed, so the sparse writes a resumed transfer
+/// produces can arrive in any order.
 struct FileSink {
     file: std::fs::File,
 }
@@ -1058,8 +1052,8 @@ impl RegistryDriver for MinotRegistry {
             .await
             .with_context(|| format!("transfer of '{bag}' failed"))?;
 
-        // The server told us the size up front, so a stream that ended early
-        // so a short transfer is reported before the bundle is installed.
+        // The server gave the size up front, so a short transfer is caught
+        // before the bundle is installed.
         if received != packed_bytes {
             return Err(anyhow!(
                 "incomplete transfer of '{bag}': received {received} of {packed_bytes} bytes"

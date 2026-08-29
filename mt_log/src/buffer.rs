@@ -11,8 +11,8 @@ const MAX_LOG_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
-    /// Seconds since the run started. Wall clock is not useful while watching
-    /// a live run. Time since start lines up with everything else on screen.
+    /// Seconds since the run started, which lines up with everything else on
+    /// screen while watching a live run.
     pub timestamp: f64,
     pub level: LogLevel,
     pub target: String,
@@ -86,8 +86,8 @@ impl LogBuffer {
     /// One entry as a record.
     ///
     /// The target is kept only when it is not ours: a foreign crate's name is
-    /// worth the width, and our own module paths are not. The process is
-    /// already identified by the line it is printed on.
+    /// worth the width, where our own module paths repeat what the line already
+    /// says.
     pub fn record(&self, level: LogLevel, target: &str, message: &str) -> Record {
         let mut record = Record::new(level, message);
         if !self.owns(target) {
