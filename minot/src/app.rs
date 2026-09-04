@@ -1794,7 +1794,7 @@ impl App {
                                 match opened {
                                     Err(e) => {
                                         error!(
-                                            "Could not resolve required bagfile or Marina dataset {path:?}: {e:#}"
+                                            "Could not open required bagfile or Marina dataset {path:?}: {e:#}"
                                         );
                                         std::process::exit(1);
                                     }

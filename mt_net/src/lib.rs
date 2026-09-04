@@ -14,116 +14,115 @@ pub enum Qos {
     Custom(QosProfile),
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-pub enum HistoryValue {
-    Numeric(i32),
-    String(HistoryPolicy),
+enum PolicyValue {
+    Numeric(i64),
+    String(String),
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoryPolicy {
-    KeepLast,
-    KeepAll,
+
+fn normalize_policy(value: PolicyValue, names: &[(i64, &'static str)]) -> String {
+    let unknown = || {
+        names
+            .iter()
+            .find(|(_, name)| *name == "unknown")
+            .map(|(_, name)| (*name).to_string())
+            .expect("every policy mapping lists unknown")
+    };
+
+    match value {
+        PolicyValue::Numeric(n) => names
+            .iter()
+            .find(|(code, _)| *code == n)
+            .map(|(_, name)| (*name).to_string())
+            .unwrap_or_else(unknown),
+        PolicyValue::String(s) => {
+            let s = s.trim().to_ascii_lowercase();
+            // Some writers quote the numeric enumerator, so a string that is
+            // really a number still has to resolve by code.
+            if let Ok(n) = s.parse::<i64>() {
+                return normalize_policy(PolicyValue::Numeric(n), names);
+            }
+            names
+                .iter()
+                .find(|(_, name)| *name == s)
+                .map(|(_, name)| (*name).to_string())
+                .unwrap_or_else(unknown)
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(untagged)]
-pub enum ReliabilityValue {
-    Numeric(i32),
-    String(ReliabilityPolicy),
-}
+const HISTORY_POLICIES: &[(i64, &str)] = &[
+    (0, "system_default"),
+    (1, "keep_last"),
+    (2, "keep_all"),
+    (3, "unknown"),
+];
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum ReliabilityPolicy {
-    Reliable,
-    BestEffort,
-}
+const RELIABILITY_POLICIES: &[(i64, &str)] = &[
+    (0, "system_default"),
+    (1, "reliable"),
+    (2, "best_effort"),
+    (3, "unknown"),
+    (4, "best_available"),
+];
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(untagged)]
-pub enum DurabilityValue {
-    Numeric(i32),
-    String(DurabilityPolicy),
-}
+const DURABILITY_POLICIES: &[(i64, &str)] = &[
+    (0, "system_default"),
+    (1, "transient_local"),
+    (2, "volatile"),
+    (3, "unknown"),
+    (4, "best_available"),
+];
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum DurabilityPolicy {
-    Volatile,
-    TransientLocal,
-}
-
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(untagged)]
-pub enum LivelinessValue {
-    Numeric(i32),
-    String(LivelinessPolicy),
-}
-
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum LivelinessPolicy {
-    Automatic,
-    ManualByTopic,
-}
+const LIVELINESS_POLICIES: &[(i64, &str)] = &[
+    (0, "system_default"),
+    (1, "automatic"),
+    (2, "manual_by_node"),
+    (3, "manual_by_topic"),
+    (4, "unknown"),
+    (5, "best_available"),
+];
 
 fn deserialize_history<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = HistoryValue::deserialize(deserializer)?;
-    Ok(match value {
-        HistoryValue::Numeric(1) => "keep_last".to_string(),
-        HistoryValue::Numeric(2) => "keep_all".to_string(),
-        HistoryValue::Numeric(_) => "keep_last".to_string(), // default
-        HistoryValue::String(HistoryPolicy::KeepLast) => "keep_last".to_string(),
-        HistoryValue::String(HistoryPolicy::KeepAll) => "keep_all".to_string(),
-    })
+    Ok(normalize_policy(
+        PolicyValue::deserialize(deserializer)?,
+        HISTORY_POLICIES,
+    ))
 }
 
 fn deserialize_reliability<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = ReliabilityValue::deserialize(deserializer)?;
-    Ok(match value {
-        ReliabilityValue::Numeric(1) => "reliable".to_string(),
-        ReliabilityValue::Numeric(2) => "best_effort".to_string(),
-        ReliabilityValue::Numeric(_) => "reliable".to_string(), // default
-        ReliabilityValue::String(ReliabilityPolicy::Reliable) => "reliable".to_string(),
-        ReliabilityValue::String(ReliabilityPolicy::BestEffort) => "best_effort".to_string(),
-    })
+    Ok(normalize_policy(
+        PolicyValue::deserialize(deserializer)?,
+        RELIABILITY_POLICIES,
+    ))
 }
 
 fn deserialize_durability<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = DurabilityValue::deserialize(deserializer)?;
-    Ok(match value {
-        DurabilityValue::Numeric(1) => "transient_local".to_string(),
-        DurabilityValue::Numeric(2) => "volatile".to_string(),
-        DurabilityValue::Numeric(_) => "volatile".to_string(), // default
-        DurabilityValue::String(DurabilityPolicy::TransientLocal) => "transient_local".to_string(),
-        DurabilityValue::String(DurabilityPolicy::Volatile) => "volatile".to_string(),
-    })
+    Ok(normalize_policy(
+        PolicyValue::deserialize(deserializer)?,
+        DURABILITY_POLICIES,
+    ))
 }
 
 fn deserialize_liveliness<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = LivelinessValue::deserialize(deserializer)?;
-    Ok(match value {
-        LivelinessValue::Numeric(1) => "automatic".to_string(),
-        LivelinessValue::Numeric(3) => "manual_by_topic".to_string(),
-        LivelinessValue::Numeric(_) => "automatic".to_string(), // default
-        LivelinessValue::String(LivelinessPolicy::Automatic) => "automatic".to_string(),
-        LivelinessValue::String(LivelinessPolicy::ManualByTopic) => "manual_by_topic".to_string(),
-    })
+    Ok(normalize_policy(
+        PolicyValue::deserialize(deserializer)?,
+        LIVELINESS_POLICIES,
+    ))
 }
 
 #[derive(

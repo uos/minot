@@ -895,7 +895,9 @@ pub(crate) async fn open_playback_bag(
     let path = std::path::Path::new(target);
     if path.exists() {
         let mut bagfile = mt_bagread::Bagfile::default();
-        bagfile.reset(Some(path))?;
+        bagfile
+            .reset(Some(path))
+            .with_context(|| format!("could not read local bag '{}'", path.display()))?;
         info!("Playing local bag: {}", path.display());
         return Ok(OpenedPlaybackBag {
             bagfile,
