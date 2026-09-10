@@ -199,25 +199,26 @@ EOF
 }
 
 get_latest_version() {
-        info "Fetching latest release version..."
-            if command -v curl >/dev/null 2>&1; then
-                # Keep silent for API calls but show a one-line info before
-                VERSION=$(curl -sSf "${FORGEJO_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-            elif command -v wget >/dev/null 2>&1; then
-                VERSION=$(wget -qO- "${FORGEJO_API}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-            else
-                warn "Neither curl nor wget found. Will fall back to building from source."
-                return 1
-            fi
+    info "Fetching latest release version..."
+    if command -v curl >/dev/null 2>&1; then
+        # Forgejo returns compact JSON, so extract tag_name specifically rather
+        # than the final quoted value on the (potentially very long) line.
+        VERSION=$(curl -sSf "${FORGEJO_API}/releases/latest" 2>/dev/null | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' || true)
+    elif command -v wget >/dev/null 2>&1; then
+        VERSION=$(wget -qO- "${FORGEJO_API}/releases/latest" 2>/dev/null | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' || true)
+    else
+        warn "Neither curl nor wget found. Will fall back to building from source."
+        return 1
+    fi
 
-        if [ -z "$VERSION" ]; then
-            warn "Failed to fetch latest version from Codeberg. Will fall back to building from source."
-            return 1
-        fi
+    if [ -z "$VERSION" ]; then
+        warn "Failed to fetch latest version from Codeberg. Will fall back to building from source."
+        return 1
+    fi
 
-        success "Latest version: ${CYAN}$VERSION${NC}"
-        return 0
-    }
+    success "Latest version: ${CYAN}$VERSION${NC}"
+    return 0
+}
 
 detect_os() {
     local uname_s
@@ -456,7 +457,7 @@ resolve_requested_version() {
             fi
 
             local any_tag=0
-            for tag in $(printf "%s" "$releases_json" | grep '"tag_name"' | sed -E 's/.*"([^\"]+)".*/\1/' ); do
+            for tag in $(printf "%s" "$releases_json" | awk 'BEGIN { RS = "\"tag_name\"[[:space:]]*:[[:space:]]*\"" } NR > 1 { sub(/".*/, ""); print }'); do
                 any_tag=1
                 t=${tag#v}
                 parsed=$(parse_semver "$t" 2>/dev/null || true)
