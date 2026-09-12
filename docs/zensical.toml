@@ -22,7 +22,7 @@ site_description = "A new project generated from the default template project."
 # The site_author attribute. This is used in the HTML head element.
 #
 # Read more: https://zensical.org/docs/setup/basics/#site_author
-site_author = "Christopher Sieh"
+site_author = "stelzo"
 
 repo_url = "https://codeberg.org/stelzo/minot"
 repo_name = "stelzo/minot"
@@ -37,7 +37,7 @@ repo_name = "stelzo/minot"
 #
 # Read more: https://zensical.org/docs/setup/basics/#copyright
 copyright = """
-Copyright &copy; 2026 Christopher Sieh
+Copyright &copy; 2026 stelzo
 """
 
 # Zensical supports both implicit navigation and explicitly defined navigation.

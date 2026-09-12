@@ -3,8 +3,8 @@
   <name>minot</name>
   <version>0.11.0</version>
   <description>A versatile toolset for debugging and verifying stateful robot perception software.</description>
-  <maintainer email="stelzo@steado.de">Christopher Sieh</maintainer>
-  <author email="stelzo@steado.de">Christopher Sieh</author>
+  <maintainer email="stelzo@steado.de">stelzo</maintainer>
+  <author email="stelzo@steado.de">stelzo</author>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
