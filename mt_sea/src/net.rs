@@ -79,89 +79,113 @@ impl<T: nalgebra::Scalar> From<NetArray<T>> for DMatrix<T> {
     }
 }
 
-/// Delivery mode for a node.
-///
-/// Two independent axes are encoded here:
-///
-/// * **Wire QoS**: how Zenoh carries the bytes ([`Qos::reliability`],
-///   [`Qos::congestion_control`]).
-/// * **Failure policy**: what the rest of the system does when this node stops
-///   answering ([`Qos::is_monitored`], [`Qos::fires_torpedo`],
-///   [`Qos::removes_rules_on_exit`]).
-///
-/// Use the predicates below to interpret delivery behavior across every variant.
+/// Reliability and failure handling.
 #[derive(Serialize, Deserialize, Archive, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Qos {
-    /// Reliable wire delivery, and a node whose loss is fatal to the system:
-    /// peers heartbeat-monitor it and a Torpedo tears the run down when it dies.
-    /// Sends to it block the caller until they land.
+pub enum Reliability {
     #[default]
     Reliable,
-    /// Reliable wire delivery and ordering, without the fatal failure policy.
-    ///
-    /// Comparable to a ROS 2 DDS `RELIABLE` subscriber: writes are retried and
-    /// ordered, a write that cannot land within its deadline fails on its own
-    /// while peers remain connected.
-    /// Sends are dispatched off the caller's thread, so a slow or roaming link
-    /// cannot wedge the publisher's loop. Intended for links where latency is
-    /// unpredictable: WiFi viewers, tablets, anything off the LAN.
     TryReliable,
-    /// Unreliable single-attempt delivery, dropped under congestion, non-fatal.
-    /// For high-rate streams where the next sample is worth more than this one.
     BestEffort,
 }
 
+/// Message durability.
+#[derive(Serialize, Deserialize, Archive, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Durability {
+    #[default]
+    Volatile,
+    TransientLocal,
+}
+
+/// Delivery policy for a node or topic.
+#[derive(Serialize, Deserialize, Archive, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Qos {
+    reliability: Reliability,
+    durability: Durability,
+}
+
+#[allow(non_upper_case_globals)]
 impl Qos {
-    /// Wire reliability. Close to free over TCP, which already retransmits and
-    /// orders; it matters on lossy transports.
+    pub const Reliable: Self = Self::new(Reliability::Reliable, Durability::Volatile);
+    pub const TryReliable: Self = Self::new(Reliability::TryReliable, Durability::Volatile);
+    pub const BestEffort: Self = Self::new(Reliability::BestEffort, Durability::Volatile);
+
+    pub const fn new(reliability: Reliability, durability: Durability) -> Self {
+        Self {
+            reliability,
+            durability,
+        }
+    }
+
+    pub const fn reliability_mode(self) -> Reliability {
+        self.reliability
+    }
+
+    pub const fn durability(self) -> Durability {
+        self.durability
+    }
+
     pub fn reliability(self) -> zenoh::qos::Reliability {
-        match self {
-            Qos::Reliable | Qos::TryReliable => zenoh::qos::Reliability::Reliable,
-            Qos::BestEffort => zenoh::qos::Reliability::BestEffort,
+        match self.reliability {
+            Reliability::Reliable | Reliability::TryReliable => zenoh::qos::Reliability::Reliable,
+            Reliability::BestEffort => zenoh::qos::Reliability::BestEffort,
         }
     }
 
-    /// Backpressure behaviour when the transmit queue is full.
-    ///
-    /// `Reliable` blocks indefinitely and so wedges a publisher when the link
-    /// stalls. `TryReliable` uses `BlockFirst`: wait for the first message, drop
-    /// later ones once the bounded queue is full.
     pub fn congestion_control(self) -> zenoh::qos::CongestionControl {
-        match self {
-            Qos::Reliable => zenoh::qos::CongestionControl::Block,
-            Qos::TryReliable => zenoh::qos::CongestionControl::BlockFirst,
-            Qos::BestEffort => zenoh::qos::CongestionControl::Drop,
+        match self.reliability {
+            Reliability::Reliable => zenoh::qos::CongestionControl::Block,
+            Reliability::TryReliable => zenoh::qos::CongestionControl::BlockFirst,
+            Reliability::BestEffort => zenoh::qos::CongestionControl::Drop,
         }
     }
 
-    /// Whether peers must heartbeat-monitor this node and report it dead.
     pub fn is_monitored(self) -> bool {
-        matches!(self, Qos::Reliable)
+        self.reliability == Reliability::Reliable
     }
 
-    /// Whether losing this node fires a Torpedo that stops the whole run.
     pub fn fires_torpedo(self) -> bool {
-        matches!(self, Qos::Reliable)
+        self.reliability == Reliability::Reliable
     }
 
-    /// Whether the coordinator drops this node's routing rules when it goes
-    /// away. Resilient nodes keep theirs so a reconnect finds its routes intact.
     pub fn removes_rules_on_exit(self) -> bool {
-        matches!(self, Qos::Reliable)
+        self.reliability == Reliability::Reliable
     }
 
-    /// Whether delivery to this node is expected not to silently drop samples.
-    /// Used to reject pairings with a best-effort publisher.
     pub fn expects_reliable_delivery(self) -> bool {
-        matches!(self, Qos::Reliable | Qos::TryReliable)
+        self.reliability != Reliability::BestEffort
     }
 
-    /// Whether sends to this node are dispatched off the caller's thread.
-    ///
-    /// False only for `Reliable`, whose send is awaited inline and retried
-    /// without bound. No other mode may wedge a frame loop.
     pub fn dispatch_is_async(self) -> bool {
-        !matches!(self, Qos::Reliable)
+        self.reliability != Reliability::Reliable
+    }
+
+    pub const fn transient_local(mut self) -> Self {
+        self.durability = Durability::TransientLocal;
+        self
+    }
+
+    pub const fn is_transient_local(self) -> bool {
+        matches!(self.durability, Durability::TransientLocal)
+    }
+}
+
+#[cfg(test)]
+mod qos_tests {
+    use super::{Durability, Qos, Reliability};
+
+    #[test]
+    fn transient_local_is_an_optional_modifier() {
+        assert_eq!(Qos::default().durability(), Durability::Volatile);
+
+        for reliability in [
+            Reliability::Reliable,
+            Reliability::TryReliable,
+            Reliability::BestEffort,
+        ] {
+            let qos = Qos::new(reliability, Durability::Volatile).transient_local();
+            assert_eq!(qos.reliability_mode(), reliability);
+            assert_eq!(qos.durability(), Durability::TransientLocal);
+        }
     }
 }
 

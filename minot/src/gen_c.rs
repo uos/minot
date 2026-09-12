@@ -295,7 +295,7 @@ fn ffi_lib_rs() -> String {
 use std::ffi::{c_char, CStr, CString};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
-use mt_pubsub::{Node, NodeConfig, Qos};
+use mt_pubsub::{Durability, Node, NodeConfig, Qos, Reliability};
 pub mod generated;
 
 static RT: LazyLock<Mutex<Option<Arc<tokio::runtime::Runtime>>>> =
@@ -369,20 +369,31 @@ fn parse_level(filter: &str) -> Option<log::LevelFilter> {
     }
 }
 
-pub(crate) fn qos_from_i32(qos: i32) -> Option<Qos> {
-    match qos {
-        0 => Some(Qos::Reliable),
-        1 => Some(Qos::BestEffort),
-        _ => None,
-    }
+pub(crate) fn qos_from_i32(reliability: i32, durability: i32) -> Option<Qos> {
+    let reliability = match reliability {
+        0 => Reliability::Reliable,
+        1 => Reliability::TryReliable,
+        2 => Reliability::BestEffort,
+        _ => return None,
+    };
+    let durability = match durability {
+        0 => Durability::Volatile,
+        1 => Durability::TransientLocal,
+        _ => return None,
+    };
+    Some(Qos::new(reliability, durability))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mt_node_init(name: *const c_char, node_qos: i32) -> i32 {
+pub unsafe extern "C" fn mt_node_init(
+    name: *const c_char,
+    reliability: i32,
+    durability: i32,
+) -> i32 {
     if name.is_null() {
         return -1;
     }
-    let Some(mode) = qos_from_i32(node_qos) else {
+    let Some(mode) = qos_from_i32(reliability, durability) else {
         return -1;
     };
     let name_str = match CStr::from_ptr(name).to_str() {
@@ -492,11 +503,12 @@ fn go_core_file() -> String {
 
 /*
 #include <stdlib.h>
+#include <stdint.h>
 #cgo darwin CFLAGS: -mmacosx-version-min=26.2
 #cgo darwin LDFLAGS: -L${SRCDIR}/../../ffi/target/release -lminot_ffi -framework Security -framework CoreFoundation -mmacosx-version-min=26.2
-#cgo linux LDFLAGS: -L${SRCDIR}/../../ffi/target/release -lminot_ffi -lpthread -ldl
+#cgo linux LDFLAGS: -L${SRCDIR}/../../ffi/target/release -lminot_ffi -lpthread -ldl -lm
 
-extern int mt_node_init(const char* name, int node_qos);
+extern int mt_node_init(const char* name, int reliability, int durability);
 extern void mt_sleep_ms(uint64_t ms);
 extern int mt_node_shutdown_cancelled(void);
 extern int mt_configure_logging(const char* filter);
@@ -512,12 +524,36 @@ import (
 "unsafe"
 )
 
-type Qos int
+type Reliability int
 
 const (
-QosReliable   Qos = 0
-QosBestEffort Qos = 1
+ReliabilityReliable Reliability = iota
+ReliabilityTryReliable
+ReliabilityBestEffort
 )
+
+type Durability int
+
+const (
+DurabilityVolatile Durability = iota
+DurabilityTransientLocal
+)
+
+type Qos struct {
+Reliability Reliability
+Durability  Durability
+}
+
+var (
+QosReliable    = Qos{Reliability: ReliabilityReliable}
+QosTryReliable = Qos{Reliability: ReliabilityTryReliable}
+QosBestEffort  = Qos{Reliability: ReliabilityBestEffort}
+)
+
+func (q Qos) TransientLocal() Qos {
+q.Durability = DurabilityTransientLocal
+return q
+}
 
 type Node struct {
 Name     string
@@ -585,7 +621,7 @@ return cb, ok
 func NewNode(name string, nodeQos Qos) (*Node, error) {
 cName := C.CString(name)
 defer C.free(unsafe.Pointer(cName))
-if C.mt_node_init(cName, C.int(nodeQos)) != 0 {
+if C.mt_node_init(cName, C.int(nodeQos.Reliability), C.int(nodeQos.Durability)) != 0 {
 return nil, fmt.Errorf("failed to initialize Minot node")
 }
 n := &Node{Name: name, shutdown: make(chan struct{})}
@@ -767,9 +803,9 @@ fn go_typed_message_spec(
 
     let root_c = format!("minot_{}", root_go.to_snake_case());
     out.push_str(&format!(
-        "extern uintptr_t mt_create_{root_safe}_publisher(const char* topic, int qos);\n"
+        "extern uintptr_t mt_create_{root_safe}_publisher(const char* topic, int reliability, int durability);\n"
     ));
-    out.push_str(&format!("extern uintptr_t mt_create_{root_safe}_subscriber(const char* topic, uint32_t queue_size, int qos, uintptr_t callback_handle);\n"));
+    out.push_str(&format!("extern uintptr_t mt_create_{root_safe}_subscriber(const char* topic, uint32_t queue_size, int reliability, int durability, uintptr_t callback_handle);\n"));
     out.push_str(&format!("extern int mt_{root_safe}_publisher_publish(uintptr_t publisher_handle, const {root_c}* message);\n"));
     out.push_str(&format!("extern void mt_register_{root_safe}_callback(uintptr_t handle, void (*callback)(const {root_c}*, uintptr_t));\n"));
     out.push_str(&format!(
@@ -781,7 +817,7 @@ fn go_typed_message_spec(
     out.push_str(&format!("extern int mt_{root_safe}_service_request(uintptr_t client_handle, const {root_c}* request, uint64_t timeout_ms, {root_c}** out_response);\n"));
     out.push_str(&format!("extern void mt_register_{root_safe}_service_callback(uintptr_t handle, int (*callback)(const {root_c}* request, {root_c}* response, uintptr_t));\n"));
     out.push_str(&format!("extern uintptr_t mt_create_{root_safe}_service_server(const char* topic, uintptr_t callback_handle);\n"));
-    out.push_str(&format!("extern uintptr_t mt_create_{root_safe}_action_client(const char* topic, int feedback_qos);\n"));
+    out.push_str(&format!("extern uintptr_t mt_create_{root_safe}_action_client(const char* topic, int reliability, int durability);\n"));
     out.push_str(&format!("extern int mt_{root_safe}_action_wait_for_server(uintptr_t client_handle, uint64_t timeout_ms);\n"));
     out.push_str(&format!("extern int mt_{root_safe}_action_send_goal(uintptr_t client_handle, uint64_t goal_id, const {root_c}* goal, uint64_t timeout_ms, int* out_accepted, uint64_t* out_time_ms);\n"));
     out.push_str(&format!("extern int mt_{root_safe}_action_cancel_goal(uintptr_t client_handle, uint64_t goal_id, uint64_t timeout_ms);\n"));
@@ -866,10 +902,10 @@ fn go_typed_message_spec(
         .get(root)
         .ok_or_else(|| anyhow!("missing root type"))?;
     let root_c_type = format!("C.minot_{}", root_type.to_snake_case());
-    out.push_str(&format!("func create{root_go}Publisher(topic string, qos Qos) (uintptr, error) {{\n\tcTopic := C.CString(topic)\n\tdefer C.free(unsafe.Pointer(cTopic))\n\th := C.mt_create_{root_safe}_publisher(cTopic, C.int(qos))\n\tif h == 0 {{\n\t\treturn 0, fmt.Errorf(\"failed to create publisher for topic %s\", topic)\n\t}}\n\treturn uintptr(h), nil\n}}\n\n"));
+    out.push_str(&format!("func create{root_go}Publisher(topic string, qos Qos) (uintptr, error) {{\n\tcTopic := C.CString(topic)\n\tdefer C.free(unsafe.Pointer(cTopic))\n\th := C.mt_create_{root_safe}_publisher(cTopic, C.int(qos.Reliability), C.int(qos.Durability))\n\tif h == 0 {{\n\t\treturn 0, fmt.Errorf(\"failed to create publisher for topic %s\", topic)\n\t}}\n\treturn uintptr(h), nil\n}}\n\n"));
     out.push_str(&format!("func publish{root_go}(handle uintptr, msg {root_type}) error {{\n\tcMsg := toC{root_type}(msg)\n\tdefer freeC{root_type}(&cMsg)\n\tif C.mt_{root_safe}_publisher_publish(C.uintptr_t(handle), (*{root_c_type})(unsafe.Pointer(&cMsg))) != 0 {{\n\t\treturn fmt.Errorf(\"publish failed\")\n\t}}\n\treturn nil\n}}\n\n"));
     out.push_str(&format!("//export Go{root_go}Callback\nfunc Go{root_go}Callback(message *{root_c_type}, handle C.uintptr_t) {{\n\tif cb, ok := GetHandler(uintptr(handle)); ok {{\n\t\tif typedCb, ok := cb.(func({root_type})); ok {{\n\t\t\tif message == nil {{\n\t\t\t\tvar zero {root_type}\n\t\t\t\ttypedCb(zero)\n\t\t\t\treturn\n\t\t\t}}\n\t\t\ttypedCb(cToGo{root_type}(*message))\n\t\t}}\n\t}}\n}}\n\n"));
-    out.push_str(&format!("func create{root_go}Subscriber(topic string, queueSize int, qos Qos, callback func({root_type})) (uintptr, error) {{\n\th := RegisterHandler(callback)\n\tcTopic := C.CString(topic)\n\tdefer C.free(unsafe.Pointer(cTopic))\n\tC.registerGo{root_go}Callback(C.uintptr_t(h))\n\ts := C.mt_create_{root_safe}_subscriber(cTopic, C.uint32_t(queueSize), C.int(qos), C.uintptr_t(h))\n\tif s == 0 {{\n\t\treturn 0, fmt.Errorf(\"failed to create subscriber for topic %s\", topic)\n\t}}\n\treturn uintptr(s), nil\n}}\n\n"));
+    out.push_str(&format!("func create{root_go}Subscriber(topic string, queueSize int, qos Qos, callback func({root_type})) (uintptr, error) {{\n\th := RegisterHandler(callback)\n\tcTopic := C.CString(topic)\n\tdefer C.free(unsafe.Pointer(cTopic))\n\tC.registerGo{root_go}Callback(C.uintptr_t(h))\n\ts := C.mt_create_{root_safe}_subscriber(cTopic, C.uint32_t(queueSize), C.int(qos.Reliability), C.int(qos.Durability), C.uintptr_t(h))\n\tif s == 0 {{\n\t\treturn 0, fmt.Errorf(\"failed to create subscriber for topic %s\", topic)\n\t}}\n\treturn uintptr(s), nil\n}}\n\n"));
     out.push_str(&format!("var {root_go}Spec = MessageSpec[{root_type}]{{\n\tCreatePublisher: create{root_go}Publisher,\n\tPublish: publish{root_go},\n\tCreateSubscriber: create{root_go}Subscriber,\n}}\n\n"));
     out.push_str(&format!("func (n *Node) New{root_go}Publisher(topic string, qos Qos) (*Publisher[{root_type}], error) {{\n\treturn newPublisher(topic, qos, {root_go}Spec)\n}}\n\n"));
     out.push_str(&format!("func (n *Node) New{root_go}Subscriber(topic string, queueSize int, qos Qos, callback func({root_type})) (*Subscriber[{root_type}], error) {{\n\treturn newSubscriber(topic, queueSize, qos, {root_go}Spec, callback)\n}}\n"));
@@ -887,7 +923,7 @@ fn go_typed_message_spec(
     out.push_str(&format!(
         "type {root_go}ActionClient struct {{\n\thandle uintptr\n\ttopic  string\n}}\n\n"
     ));
-    out.push_str(&format!("func (n *Node) New{root_go}ActionClient(topic string, feedbackQos Qos) (*{root_go}ActionClient, error) {{\n\tcTopic := C.CString(topic)\n\tdefer C.free(unsafe.Pointer(cTopic))\n\th := C.mt_create_{root_safe}_action_client(cTopic, C.int(feedbackQos))\n\tif h == 0 {{\n\t\treturn nil, fmt.Errorf(\"failed to create action client for topic %s\", topic)\n\t}}\n\treturn &{root_go}ActionClient{{handle: uintptr(h), topic: topic}}, nil\n}}\n\n"));
+    out.push_str(&format!("func (n *Node) New{root_go}ActionClient(topic string, feedbackQos Qos) (*{root_go}ActionClient, error) {{\n\tcTopic := C.CString(topic)\n\tdefer C.free(unsafe.Pointer(cTopic))\n\th := C.mt_create_{root_safe}_action_client(cTopic, C.int(feedbackQos.Reliability), C.int(feedbackQos.Durability))\n\tif h == 0 {{\n\t\treturn nil, fmt.Errorf(\"failed to create action client for topic %s\", topic)\n\t}}\n\treturn &{root_go}ActionClient{{handle: uintptr(h), topic: topic}}, nil\n}}\n\n"));
     out.push_str(&format!("func (c *{root_go}ActionClient) WaitForServer(timeoutMs uint64) bool {{\n\treturn C.mt_{root_safe}_action_wait_for_server(C.uintptr_t(c.handle), C.uint64_t(timeoutMs)) != 0\n}}\n\n"));
     out.push_str(&format!("func (c *{root_go}ActionClient) SendGoal(goalID uint64, goal {root_type}, timeoutMs uint64) (bool, uint64, error) {{\n\tcGoal := toC{root_type}(goal)\n\tdefer freeC{root_type}(&cGoal)\n\tvar accepted C.int\n\tvar timeMs C.uint64_t\n\tres := C.mt_{root_safe}_action_send_goal(C.uintptr_t(c.handle), C.uint64_t(goalID), (*{root_c_type})(unsafe.Pointer(&cGoal)), C.uint64_t(timeoutMs), &accepted, &timeMs)\n\tif res != 0 {{\n\t\treturn false, 0, fmt.Errorf(\"send goal failed\")\n\t}}\n\treturn accepted != 0, uint64(timeMs), nil\n}}\n\n"));
     out.push_str(&format!("func (c *{root_go}ActionClient) CancelGoal(goalID uint64, timeoutMs uint64) error {{\n\tif C.mt_{root_safe}_action_cancel_goal(C.uintptr_t(c.handle), C.uint64_t(goalID), C.uint64_t(timeoutMs)) != 0 {{\n\t\treturn fmt.Errorf(\"cancel goal failed\")\n\t}}\n\treturn nil\n}}\n\n"));
@@ -1012,15 +1048,15 @@ fn rust_typed_message_module(
     out.push_str(&format!("#[no_mangle]\npub extern \"C\" fn mt_register_{}_callback(handle: usize, callback: extern \"C\" fn(*const {}, usize)) {{\n    {}_CALLBACKS.lock().unwrap().insert(handle, callback);\n}}\n\n", root_safe, root_c, root_safe.to_ascii_uppercase()));
     out.push_str(&format!("#[no_mangle]\npub extern \"C\" fn mt_register_{}_service_callback(handle: usize, callback: extern \"C\" fn(*const {}, *mut {}, usize) -> i32) {{\n    {}_SERVICE_CALLBACKS.lock().unwrap().insert(handle, callback);\n}}\n\n", root_safe, root_c, root_c, root_safe.to_ascii_uppercase()));
 
-    out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_publisher(topic: *const c_char, qos: i32) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let Some(q) = qos_from_i32(qos) else {{ return 0; }};\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let publisher = match rt.block_on(async {{ node.create_publisher::<{}>(topic_str, q).await }}) {{ Ok(p) => p, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    {}_PUBLISHERS.lock().unwrap().insert(handle, publisher);\n    handle\n}}\n\n", root_safe, root_mod_type, root_safe.to_ascii_uppercase()));
+    out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_publisher(topic: *const c_char, reliability: i32, durability: i32) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let Some(q) = qos_from_i32(reliability, durability) else {{ return 0; }};\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let publisher = match rt.block_on(async {{ node.create_publisher::<{}>(topic_str, q).await }}) {{ Ok(p) => p, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    {}_PUBLISHERS.lock().unwrap().insert(handle, publisher);\n    handle\n}}\n\n", root_safe, root_mod_type, root_safe.to_ascii_uppercase()));
 
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_{}_publisher_publish(publisher_handle: usize, message: *const {}) -> i32 {{\n    let rust_msg = match {}_to_rust(message) {{ Ok(m) => m, Err(_) => return -3 }};\n    let publishers = {}_PUBLISHERS.lock().unwrap();\n    let publisher = match publishers.get(&publisher_handle) {{ Some(p) => p.clone(), None => return -1 }};\n    drop(publishers);\n    let publish_fut = async move {{ publisher.publish(&rust_msg).await }};\n    let result = if tokio::runtime::Handle::try_current().is_ok() {{ tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(publish_fut)) }} else {{ let rt_lock = RT.lock().unwrap(); let Some(rt) = rt_lock.as_ref().cloned() else {{ return -4; }}; drop(rt_lock); rt.block_on(publish_fut) }};\n    if result.is_ok() {{ 0 }} else {{ -2 }}\n}}\n\n", root_safe, root_c, root_go.to_snake_case(), root_safe.to_ascii_uppercase()));
 
-    out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_subscriber(topic: *const c_char, queue_size: u32, qos: i32, callback_handle: usize) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let Some(q) = qos_from_i32(qos) else {{ return 0; }};\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let mut subscriber = match rt.block_on(async {{ node.create_subscriber::<{}>(topic_str, queue_size as usize, q).await }}) {{ Ok(s) => s, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    rt.spawn(async move {{\n        while let Some(msg) = subscriber.next().await {{\n            let c_msg = {}_from_rust(&msg);\n            let cb_opt = {{ let map = {}_CALLBACKS.lock().unwrap(); map.get(&callback_handle).copied() }};\n            if let Some(cb) = cb_opt {{\n                let boxed = Box::new(c_msg);\n                cb(Box::as_ref(&boxed), callback_handle);\n                let raw = Box::into_raw(boxed);\n                mt_free_{}_message(raw);\n            }}\n        }}\n    }});\n    handle\n}}\n", root_safe, root_mod_type, root_go.to_snake_case(), root_safe.to_ascii_uppercase(), root_safe));
+    out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_subscriber(topic: *const c_char, queue_size: u32, reliability: i32, durability: i32, callback_handle: usize) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let Some(q) = qos_from_i32(reliability, durability) else {{ return 0; }};\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let mut subscriber = match rt.block_on(async {{ node.create_subscriber::<{}>(topic_str, queue_size as usize, q).await }}) {{ Ok(s) => s, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    rt.spawn(async move {{\n        while let Some(msg) = subscriber.next().await {{\n            let c_msg = {}_from_rust(&msg);\n            let cb_opt = {{ let map = {}_CALLBACKS.lock().unwrap(); map.get(&callback_handle).copied() }};\n            if let Some(cb) = cb_opt {{\n                let boxed = Box::new(c_msg);\n                cb(Box::as_ref(&boxed), callback_handle);\n                let raw = Box::into_raw(boxed);\n                mt_free_{}_message(raw);\n            }}\n        }}\n    }});\n    handle\n}}\n", root_safe, root_mod_type, root_go.to_snake_case(), root_safe.to_ascii_uppercase(), root_safe));
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_service_client(topic: *const c_char) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let client = match rt.block_on(async {{ ServiceClient::<{}, {}>::new(node, topic_str).await }}) {{ Ok(c) => c, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    {}_SERVICE_CLIENTS.lock().unwrap().insert(handle, client);\n    handle\n}}\n\n", root_safe, root_mod_type, root_mod_type, root_safe.to_ascii_uppercase()));
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_{}_service_request(client_handle: usize, request: *const {}, timeout_ms: u64, out_response: *mut *mut {}) -> i32 {{\n    if out_response.is_null() {{ return -1; }}\n    let req = match {}_to_rust(request) {{ Ok(v) => v, Err(_) => return -2 }};\n    let clients = {}_SERVICE_CLIENTS.lock().unwrap();\n    let Some(client) = clients.get(&client_handle) else {{ return -3; }};\n    let fut = client.request(req, Some(Duration::from_millis(timeout_ms)));\n    let result = if tokio::runtime::Handle::try_current().is_ok() {{ tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut)) }} else {{ let rt_lock = RT.lock().unwrap(); let Some(rt) = rt_lock.as_ref().cloned() else {{ return -4; }}; drop(rt_lock); rt.block_on(fut) }};\n    match result {{\n        Ok(resp) => {{\n            let c_resp = {}_from_rust(&resp);\n            *out_response = Box::into_raw(Box::new(c_resp));\n            0\n        }}\n        Err(_) => -5,\n    }}\n}}\n\n", root_safe, root_c, root_c, root_go.to_snake_case(), root_safe.to_ascii_uppercase(), root_go.to_snake_case()));
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_service_server(topic: *const c_char, callback_handle: usize) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let cb_opt = {{ let cbs = {}_SERVICE_CALLBACKS.lock().unwrap(); cbs.get(&callback_handle).copied() }};\n    let Some(cb) = cb_opt else {{ return 0; }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let server = match rt.block_on(async {{ ServiceServer::<{}, {}>::new(node, topic_str).await }}) {{ Ok(s) => s, Err(_) => return 0 }};\n    let server_clone = server.clone();\n    rt.spawn(async move {{\n        let callback = std::sync::Arc::new(move |req: {}| {{\n            let c_req = {}_from_rust(&req);\n            let mut c_resp: {} = unsafe {{ std::mem::zeroed() }};\n            let rc = cb(&c_req as *const {}, &mut c_resp as *mut {}, callback_handle);\n            std::future::ready(if rc != 0 {{\n                Err(\"service callback failed\".to_string())\n            }} else {{\n                match {}_to_rust(&c_resp as *const {}) {{\n                    Ok(v) => Ok(v),\n                    Err(_) => Err(\"service callback response conversion failed\".to_string()),\n                }}\n            }})\n        }});\n        let _ = ServiceServer::start(server_clone, callback).await;\n    }});\n    let handle = rand::random::<usize>();\n    {}_SERVICE_SERVERS.lock().unwrap().insert(handle, server);\n    handle\n}}\n\n", root_safe, root_safe.to_ascii_uppercase(), root_mod_type, root_mod_type, root_mod_type, root_go.to_snake_case(), root_c, root_c, root_c, root_go.to_snake_case(), root_c, root_safe.to_ascii_uppercase()));
-    out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_action_client(topic: *const c_char, feedback_qos: i32) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let Some(q) = qos_from_i32(feedback_qos) else {{ return 0; }};\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let client = match rt.block_on(async {{ ActionClient::<{}, {}, {}>::new(node, topic_str, q).await }}) {{ Ok(c) => c, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    {}_ACTION_CLIENTS.lock().unwrap().insert(handle, client);\n    handle\n}}\n\n", root_safe, root_mod_type, root_mod_type, root_mod_type, root_safe.to_ascii_uppercase()));
+    out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_create_{}_action_client(topic: *const c_char, reliability: i32, durability: i32) -> usize {{\n    if topic.is_null() {{ return 0; }}\n    let Some(q) = qos_from_i32(reliability, durability) else {{ return 0; }};\n    let topic_str = match CStr::from_ptr(topic).to_str() {{ Ok(s) => s.to_owned(), Err(_) => return 0 }};\n    let node_lock = NODE.lock().unwrap();\n    let Some(node) = node_lock.as_ref().cloned() else {{ return 0; }};\n    drop(node_lock);\n    let rt_lock = RT.lock().unwrap();\n    let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }};\n    drop(rt_lock);\n    let client = match rt.block_on(async {{ ActionClient::<{}, {}, {}>::new(node, topic_str, q).await }}) {{ Ok(c) => c, Err(_) => return 0 }};\n    let handle = rand::random::<usize>();\n    {}_ACTION_CLIENTS.lock().unwrap().insert(handle, client);\n    handle\n}}\n\n", root_safe, root_mod_type, root_mod_type, root_mod_type, root_safe.to_ascii_uppercase()));
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_{}_action_wait_for_server(client_handle: usize, timeout_ms: u64) -> i32 {{\n    let clients = {}_ACTION_CLIENTS.lock().unwrap();\n    let Some(client) = clients.get(&client_handle) else {{ return 0; }};\n    let fut = ActionClient::<{}, {}, {}>::wait_for_action_server(client.clone(), Duration::from_millis(timeout_ms));\n    let ready = if tokio::runtime::Handle::try_current().is_ok() {{ tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut)) }} else {{ let rt_lock = RT.lock().unwrap(); let Some(rt) = rt_lock.as_ref().cloned() else {{ return 0; }}; drop(rt_lock); rt.block_on(fut) }};\n    if ready {{ 1 }} else {{ 0 }}\n}}\n\n", root_safe, root_safe.to_ascii_uppercase(), root_mod_type, root_mod_type, root_mod_type));
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_{}_action_send_goal(client_handle: usize, goal_id: u64, goal: *const {}, timeout_ms: u64, out_accepted: *mut i32, out_time_ms: *mut u64) -> i32 {{\n    if out_accepted.is_null() || out_time_ms.is_null() {{ return -1; }}\n    let goal_msg = match {}_to_rust(goal) {{ Ok(v) => v, Err(_) => return -2 }};\n    let clients = {}_ACTION_CLIENTS.lock().unwrap();\n    let Some(client) = clients.get(&client_handle) else {{ return -3; }};\n    let req = ActionSendGoalRequest {{ id: goal_id, goal: goal_msg }};\n    let fut = ActionClient::<{}, {}, {}>::send_goal(client.clone(), req, Some(Duration::from_millis(timeout_ms)));\n    let result = if tokio::runtime::Handle::try_current().is_ok() {{ tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut)) }} else {{ let rt_lock = RT.lock().unwrap(); let Some(rt) = rt_lock.as_ref().cloned() else {{ return -4; }}; drop(rt_lock); rt.block_on(fut) }};\n    match result {{\n        Ok(resp) => {{\n            *out_accepted = if resp.accepted {{ 1 }} else {{ 0 }};\n            *out_time_ms = resp.time.unwrap_or(0) as u64;\n            0\n        }}\n        Err(_) => -5,\n    }}\n}}\n\n", root_safe, root_c, root_go.to_snake_case(), root_safe.to_ascii_uppercase(), root_mod_type, root_mod_type, root_mod_type));
     out.push_str(&format!("#[no_mangle]\npub unsafe extern \"C\" fn mt_{}_action_cancel_goal(client_handle: usize, goal_id: u64, timeout_ms: u64) -> i32 {{\n    let clients = {}_ACTION_CLIENTS.lock().unwrap();\n    let Some(client) = clients.get(&client_handle) else {{ return -1; }};\n    let req = ActionCancelGoalRequest {{ id: Some(goal_id), time: None }};\n    let fut = ActionClient::<{}, {}, {}>::cancel_goal(client.clone(), req, Some(Duration::from_millis(timeout_ms)));\n    let result = if tokio::runtime::Handle::try_current().is_ok() {{ tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut)) }} else {{ let rt_lock = RT.lock().unwrap(); let Some(rt) = rt_lock.as_ref().cloned() else {{ return -2; }}; drop(rt_lock); rt.block_on(fut) }};\n    if result.is_ok() {{ 0 }} else {{ -3 }}\n}}\n\n", root_safe, root_safe.to_ascii_uppercase(), root_mod_type, root_mod_type, root_mod_type));
@@ -2420,6 +2456,20 @@ fn c_and_go_scalar(ty: &Type) -> Result<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn go_qos_combines_reliability_and_durability() {
+        let go = go_core_file();
+        assert!(go.contains("type Reliability int"));
+        assert!(go.contains("type Durability int"));
+        assert!(go.contains("type Qos struct"));
+        assert!(go.contains("func (q Qos) TransientLocal() Qos"));
+
+        let ffi = ffi_lib_rs();
+        assert!(ffi.contains("1 => Reliability::TryReliable"));
+        assert!(ffi.contains("1 => Durability::TransientLocal"));
+        assert!(ffi.contains("Some(Qos::new(reliability, durability))"));
+    }
 
     #[test]
     fn test_parse_and_generate_simple_struct() {

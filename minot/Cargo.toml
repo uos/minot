@@ -108,6 +108,25 @@ assets = [
   ],
 ]
 
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+bin-dir = "minot-{ target }/min/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "https://uos-robotics.codeberg.page/ppa/bin/minot-{ version }-x86_64-unknown-linux-gnu.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "https://uos-robotics.codeberg.page/ppa/bin/minot-{ version }-x86_64-unknown-linux-musl.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "https://uos-robotics.codeberg.page/ppa/bin/minot-{ version }-aarch64-unknown-linux-gnu.tar.gz"
+
+[package.metadata.binstall.overrides.armv7-unknown-linux-gnueabihf]
+pkg-url = "https://uos-robotics.codeberg.page/ppa/bin/minot-{ version }-armv7-unknown-linux-gnueabihf.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "https://uos-robotics.codeberg.page/ppa/bin/minot-{ version }-aarch64-apple-darwin.tar.gz"
+
 [package.metadata.generate-rpm]
 
 [[package.metadata.generate-rpm.assets]]

@@ -5,7 +5,9 @@ use std::{marker::PhantomData, sync::Arc};
 use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
 use tokio_util::sync::CancellationToken;
 
-pub use mt_sea::{ArchivedMessage, NodeOptions, Qos, ReconnectPolicy, Timing};
+pub use mt_sea::{
+    ArchivedMessage, Durability, NodeOptions, Qos, ReconnectPolicy, Reliability, Timing,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum CoordMode {
@@ -217,6 +219,12 @@ impl<T: Sendable> Publisher<T> {
     }
 
     pub async fn publish(&self, data: &T) -> anyhow::Result<()> {
+        if self.qos.is_transient_local() {
+            self.ship
+                .get_cannon()
+                .retain(data, VariableType::StaticOnly, &self.topic)
+                .await?;
+        }
         self.ensure_registered().await?;
         match self.ship.ask_for_action(&self.topic).await {
             Ok((mt_sea::Action::Sail, _)) => {

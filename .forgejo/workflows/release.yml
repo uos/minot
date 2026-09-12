@@ -1081,11 +1081,29 @@ jobs:
           cd ppa
           git sparse-checkout init --cone
           for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
+            git sparse-checkout set "ubuntu/pool/main/$s" bin
             mkdir -p "ubuntu/pool/main/$s"
             cp ../$DEB_PATH "ubuntu/pool/main/$s/"
             git add "ubuntu/pool/main/$s/"*.deb || true
           done
+
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
+          mkdir -p bin
+          for target in \
+            x86_64-unknown-linux-gnu \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-gnu \
+            armv7-unknown-linux-gnueabihf \
+            aarch64-apple-darwin; do
+            archive=$(find ../artifacts -type f -name "minot-${target}.tar.gz" -print -quit)
+            if [ -z "$archive" ]; then
+              echo "Missing default binary archive for ${target}" >&2
+              exit 1
+            fi
+            cp "$archive" "bin/minot-${VERSION}-${target}.tar.gz"
+          done
+          git add bin/
           git config --global user.email $(git log -1 --pretty=format:'%ae')
           git config --global user.name $(git log -1 --pretty=format:'%an')
           REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"

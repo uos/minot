@@ -4,7 +4,7 @@ pub mod net;
 pub mod network;
 pub mod ship;
 
-pub use net::Qos;
+pub use net::{Durability, Qos, Reliability};
 
 // ---------------------------------------------------------------------------
 // Timing constants. These values are interdependent.
@@ -619,6 +619,17 @@ pub trait Cannon: Send + Sync + 'static {
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()>;
+
+    /// Keep the latest value of a transient-local topic.
+    async fn retain<T: Sendable>(
+        &self,
+        data: &T,
+        variable_type: VariableType,
+        variable_name: &str,
+    ) -> anyhow::Result<()> {
+        let _ = (data, variable_type, variable_name);
+        Ok(())
+    }
 
     /// Catch the dumped data from the source.
     /// The returning Vec can contain previously missed entities of T from existing sync connections.

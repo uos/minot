@@ -48,15 +48,15 @@ If you have multiple Minot networks on the same physical network, use the `MINOT
 
 ## Delivery modes
 
-`Qos` sets a node's delivery mode. It encodes two independent things, and it is worth
-keeping them apart: how Zenoh carries the bytes, and what the rest of the system does
-when the node stops answering.
+`Qos` combines `Reliability` and `Durability`. Reliability also controls failure
+handling and congestion behavior.
 
-| | Wire | Congestion | Peer monitoring | On loss | Send dispatch |
-|---|---|---|---|---|---|
-| `Reliable` | reliable | `Block` | yes | torpedoes the run | inline, unbounded retry |
-| `TryReliable` | reliable | `BlockFirst` | no | rest keeps running | spawned, retry within budget |
-| `BestEffort` | best-effort | `Drop` | no | rest keeps running | spawned, single attempt |
+| | Wire | Congestion | Peer monitoring | On loss | Send dispatch | Durability |
+|---|---|---|---|---|---|---|
+| `Reliable` | reliable | `Block` | yes | torpedoes the run | inline, unbounded retry | volatile |
+| `TryReliable` | reliable | `BlockFirst` | no | rest keeps running | spawned, retry within budget | volatile |
+| `BestEffort` | best-effort | `Drop` | no | rest keeps running | spawned, single attempt | volatile |
+| `.transient_local()` | preserves base mode | preserves base mode | preserves base mode | preserves base mode | preserves base mode | replay latest sample to late subscribers |
 
 `Reliable` is the default and the strict one: peers heartbeat-monitor each other, and a
 node that stops answering tears the whole run down. That is what you want for a
@@ -69,6 +69,15 @@ are dispatched off the caller's thread, so a slow or roaming link cannot wedge a
 publisher's loop.
 
 `BestEffort` tries once and moves on.
+
+Transient-local durability combines with every reliability mode. It retains the latest
+sample and replays it to late subscribers. It is disabled by default.
+
+```rust
+let publisher = node
+    .create_publisher::<Transform>("/tf_static".to_owned(), Qos::Reliable.transient_local())
+    .await?;
+```
 
 Note that reliable wire delivery is close to free over TCP, which already retransmits and
 orders. The meaningful difference between `Reliable` and `TryReliable` is the failure

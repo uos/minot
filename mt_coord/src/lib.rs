@@ -5,7 +5,7 @@ use mt_sea::net::{self, Packet};
 use mt_sea::{coordinator::CoordinatorImpl, net::PacketKind};
 
 use mt_net::{ActionPlan, COMPARE_NODE_NAME, RatPubRegisterKind, Rules, VariableHuman};
-use mt_sea::{Coordinator, Qos, ShipKind, WindData};
+use mt_sea::{Coordinator, Qos, Reliability, ShipKind, WindData};
 
 const EMBEDDED_COORDINATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -1095,7 +1095,9 @@ fn run_coordinator_with_ready(
                     node_mode,
                 } => {
                     // Track BE publishers
-                    if kind == net::RatPubRegisterKind::Publish && node_mode == Qos::BestEffort {
+                    if kind == net::RatPubRegisterKind::Publish
+                        && node_mode.reliability_mode() == Reliability::BestEffort
+                    {
                         coordinator
                             .be_publisher_vars
                             .write()

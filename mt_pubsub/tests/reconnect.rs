@@ -556,3 +556,64 @@ async fn a_returning_publisher_learns_about_a_subscriber_that_joined_while_it_wa
 
     coordinator.kill().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transient_local_replays_the_latest_sample_to_a_late_subscriber() {
+    let _guard = COORDINATOR_PORT.lock().await;
+    let _ = env_logger::builder().is_test(true).try_init();
+    mt_sea::network::set_local_only(true);
+
+    let Some(mut coordinator) = Coordinator::start().await else {
+        eprintln!("skipping: the `minot` binary was not built or did not start");
+        return;
+    };
+
+    let topic = unique_name("transient_local");
+    let make = |name: String| {
+        Node::create(
+            NodeConfig::new(name)
+                .mode(Qos::TryReliable)
+                .coord_mode(CoordMode::External)
+                .timing(test_timing()),
+        )
+    };
+
+    let publisher_node = make(unique_name("transient_local_tx"))
+        .await
+        .expect("publisher node should register");
+    let publisher = publisher_node
+        .create_publisher::<Sample>(topic.clone(), Qos::TryReliable.transient_local())
+        .await
+        .expect("publisher should be created");
+
+    publisher
+        .publish(&Sample { sequence: 41 })
+        .await
+        .expect("first route-less publish should be retained");
+    publisher
+        .publish(&Sample { sequence: 42 })
+        .await
+        .expect("latest route-less publish should replace it");
+
+    let subscriber_node = make(unique_name("transient_local_rx"))
+        .await
+        .expect("subscriber node should register");
+    let mut subscriber = subscriber_node
+        .create_subscriber::<Sample>(topic, 10, Qos::TryReliable)
+        .await
+        .expect("late subscriber should be created");
+
+    let replay = timeout(Duration::from_secs(30), subscriber.next())
+        .await
+        .expect("late subscriber should receive the retained sample")
+        .expect("subscriber should remain open");
+    assert_eq!(replay.sequence, 42);
+    assert!(
+        timeout(Duration::from_millis(500), subscriber.next())
+            .await
+            .is_err(),
+        "only the latest retained sample should be replayed"
+    );
+
+    coordinator.kill().await;
+}

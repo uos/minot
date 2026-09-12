@@ -13,7 +13,7 @@ use zenoh::Wait;
 use crate::{
     ArchivedMessage, Sendable, ShipKind, VariableType,
     client::Client,
-    net::{PacketKind, Qos, sanitize_key},
+    net::{PacketKind, Qos, Reliability, sanitize_key},
 };
 
 /// Send budget key for asynchronously dispatched sends, so every mode where
@@ -121,6 +121,13 @@ pub struct NetworkShipImpl {
     timing: crate::Timing,
     /// Live coordinator-link state. See `ConnectionState` for reconnect behavior.
     pub connection: Arc<crate::ConnectionState>,
+    retained_payloads: Arc<std::sync::RwLock<HashMap<String, RetainedPayload>>>,
+}
+
+#[derive(Clone, Debug)]
+struct RetainedPayload {
+    bytes: Arc<AlignedVec>,
+    variable_type: VariableType,
 }
 
 #[async_trait::async_trait]
@@ -138,178 +145,37 @@ impl crate::Cannon for NetworkShipImpl {
         let data_bytes =
             Arc::new(to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data"));
 
-        // The fan-out always runs to completion and reports afterwards, so one
-        // bad target cannot cut the others off. See [`remember_failure`].
-        let mut deferred_error: Option<anyhow::Error> = None;
+        Self::shoot_bytes(
+            &self.async_sends_in_flight,
+            &self.client,
+            &self.runtime_handle,
+            targets,
+            id,
+            data_bytes,
+            variable_type,
+            variable_name,
+        )
+        .await
+    }
 
-        for target in targets.iter() {
-            let target_ship_name = match &target.kind {
-                ShipKind::Rat(name) => name.clone(),
-                ShipKind::Wind(name) => name.clone(),
-            };
-
-            let target_mode = target.node_mode;
-            if target_mode.dispatch_is_async() {
-                // Both modes dispatch off the caller's thread so a slow link
-                // cannot wedge a publisher's loop. BestEffort tries once,
-                // TryReliable retries until its budget is spent.
-                let (send_budget, is_reliable_mode) = match target_mode {
-                    Qos::TryReliable => (
-                        Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS)
-                            + Duration::from_secs(1),
-                        true,
-                    ),
-                    _ => (Duration::from_secs(5), false),
-                };
-
-                let slots = {
-                    let mut in_flight = self.async_sends_in_flight.lock().unwrap();
-                    in_flight
-                        .entry((target_ship_name.clone(), variable_name.to_string()))
-                        .or_insert_with(SendSlots::new)
-                        .clone()
-                };
-
-                // Taken before any permit: `register` holds this lock across a
-                // network round trip, and waiting on it while holding a permit
-                // would park the whole per-key budget behind that.
-                let (session, domain_id) = {
-                    let c = self.client.lock().await;
-                    (c.session(), c.domain_id())
-                };
-
-                let ready = Arc::clone(&slots.permits).try_acquire_owned().ok();
-                let queued = match &ready {
-                    Some(_) => None,
-                    None if !is_reliable_mode => {
-                        // A sampled stream prefers the next sample over a late one.
-                        debug!(
-                            "Dropping {:?} message '{}' for '{}': send already in progress",
-                            target_mode, variable_name, target_ship_name
-                        );
-                        continue;
-                    }
-                    None => {
-                        // TryReliable: nobody else will resend this, so wait
-                        // for a slot in the spawned task below, off the
-                        // caller's loop.
-                        let waiting = slots
-                            .waiting
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if waiting >= MAX_QUEUED_SENDS_PER_KEY {
-                            slots
-                                .waiting
-                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                            // Prefixed so the caller can tell congestion from
-                            // a dead link and retry immediately. Recorded and
-                            // reported after the fan-out, so one congested
-                            // subscriber does not stop the sample reaching
-                            // everybody else.
-                            remember_failure(&mut deferred_error, || {
-                                anyhow!(
-                                    "{BACKPRESSURE}: too many sends of '{}' already queued for \
-                                     '{}' ({} on the wire, {} waiting)",
-                                    variable_name,
-                                    target_ship_name,
-                                    MAX_CONCURRENT_SENDS_PER_KEY,
-                                    waiting
-                                )
-                            });
-                            continue;
-                        }
-                        Some(QueuedSend(Arc::clone(&slots.waiting)))
-                    }
-                };
-
-                let variable_name = variable_name.to_string();
-                let data_bytes = Arc::clone(&data_bytes);
-                let permits = Arc::clone(&slots.permits);
-                self.runtime_handle.spawn(async move {
-                    let _permit = match ready {
-                        Some(permit) => permit,
-                        None => {
-                            // Counted as waiting only while actually waiting.
-                            let _queued = queued;
-                            match tokio::time::timeout(send_budget, permits.acquire_owned()).await {
-                                Ok(Ok(permit)) => permit,
-                                _ => {
-                                    warn!(
-                                        "{:?} send '{}' to '{}' gave up waiting for a send slot",
-                                        target_mode, variable_name, target_ship_name
-                                    );
-                                    return;
-                                }
-                            }
-                        }
-                    };
-                    let send = async {
-                        if is_reliable_mode {
-                            Client::send_raw_network_bounded(
-                                session,
-                                domain_id,
-                                id,
-                                data_bytes,
-                                variable_type,
-                                variable_name.clone(),
-                                target_ship_name.clone(),
-                            )
-                            .await
-                        } else {
-                            Client::send_raw_network(
-                                session,
-                                domain_id,
-                                id,
-                                data_bytes,
-                                variable_type,
-                                variable_name.clone(),
-                                target_ship_name.clone(),
-                            )
-                            .await
-                        }
-                    };
-                    // Backstop only: each send path already bounds itself.
-                    match tokio::time::timeout(send_budget, send).await {
-                        Ok(Ok(())) => {}
-                        // The chain underneath is Zenoh reporting a timed-out
-                        // query, and one departed peer turns every publisher
-                        // into a source of it, so it stays at debug.
-                        Ok(Err(e)) => {
-                            warn!(
-                                "{:?} send '{}' to '{}' failed",
-                                target_mode, variable_name, target_ship_name
-                            );
-                            debug!(
-                                "{:?} send '{}' to '{}' failed: {e:#}",
-                                target_mode, variable_name, target_ship_name
-                            );
-                        }
-                        Err(_) => warn!(
-                            "{:?} send '{}' to '{}' timed out",
-                            target_mode, variable_name, target_ship_name
-                        ),
-                    }
-                });
-            } else {
-                let client = self.client.lock().await;
-                if let Err(error) = client
-                    .send_raw_to_other_client(
-                        id,
-                        data_bytes.as_slice(),
-                        variable_type,
-                        variable_name,
-                        &target_ship_name,
-                    )
-                    .await
-                {
-                    remember_failure(&mut deferred_error, || error);
-                }
-            }
-        }
-
-        match deferred_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+    async fn retain<T: Sendable>(
+        &self,
+        data: &T,
+        variable_type: VariableType,
+        variable_name: &str,
+    ) -> anyhow::Result<()> {
+        let bytes = Arc::new(
+            to_bytes::<rkyv::rancor::Error>(data)
+                .map_err(|error| anyhow!("Could not serialize retained data: {error}"))?,
+        );
+        self.retained_payloads.write().unwrap().insert(
+            variable_name.to_string(),
+            RetainedPayload {
+                bytes,
+                variable_type,
+            },
+        );
+        Ok(())
     }
 
     /// Catch the dumped data from the source.
@@ -483,6 +349,177 @@ impl crate::Cannon for NetworkShipImpl {
     }
 }
 
+impl NetworkShipImpl {
+    async fn shoot_bytes<'b>(
+        async_sends_in_flight: &Arc<std::sync::Mutex<HashMap<AsyncSendKey, SendSlots>>>,
+        client: &Arc<tokio::sync::Mutex<Client>>,
+        runtime_handle: &tokio::runtime::Handle,
+        targets: &'b [crate::NetworkShipAddress],
+        id: u32,
+        data_bytes: Arc<AlignedVec>,
+        variable_type: VariableType,
+        variable_name: &str,
+    ) -> anyhow::Result<()> {
+        // Try every target before returning an error.
+        let mut deferred_error: Option<anyhow::Error> = None;
+
+        for target in targets.iter() {
+            let target_ship_name = match &target.kind {
+                ShipKind::Rat(name) => name.clone(),
+                ShipKind::Wind(name) => name.clone(),
+            };
+
+            let target_mode = target.node_mode;
+            if target_mode.dispatch_is_async() {
+                let (send_budget, is_reliable_mode) =
+                    if target_mode.reliability_mode() == Reliability::TryReliable {
+                        (
+                            Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS)
+                                + Duration::from_secs(1),
+                            true,
+                        )
+                    } else {
+                        (Duration::from_secs(5), false)
+                    };
+
+                let slots = {
+                    let mut in_flight = async_sends_in_flight.lock().unwrap();
+                    in_flight
+                        .entry((target_ship_name.clone(), variable_name.to_string()))
+                        .or_insert_with(SendSlots::new)
+                        .clone()
+                };
+
+                // Registration holds the client lock across I/O, so clone the
+                // session before acquiring a send permit.
+                let (session, domain_id) = {
+                    let c = client.lock().await;
+                    (c.session(), c.domain_id())
+                };
+
+                let ready = Arc::clone(&slots.permits).try_acquire_owned().ok();
+                let queued = match &ready {
+                    Some(_) => None,
+                    None if !is_reliable_mode => {
+                        debug!(
+                            "Dropping {:?} message '{}' for '{}': send already in progress",
+                            target_mode, variable_name, target_ship_name
+                        );
+                        continue;
+                    }
+                    None => {
+                        let waiting = slots
+                            .waiting
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if waiting >= MAX_QUEUED_SENDS_PER_KEY {
+                            slots
+                                .waiting
+                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            remember_failure(&mut deferred_error, || {
+                                anyhow!(
+                                    "{BACKPRESSURE}: too many sends of '{}' already queued for \
+                                     '{}' ({} on the wire, {} waiting)",
+                                    variable_name,
+                                    target_ship_name,
+                                    MAX_CONCURRENT_SENDS_PER_KEY,
+                                    waiting
+                                )
+                            });
+                            continue;
+                        }
+                        Some(QueuedSend(Arc::clone(&slots.waiting)))
+                    }
+                };
+
+                let variable_name_owned = variable_name.to_string();
+                let data_bytes = Arc::clone(&data_bytes);
+                let permits = Arc::clone(&slots.permits);
+                runtime_handle.spawn(async move {
+                    let variable_name = variable_name_owned;
+                    let _permit = match ready {
+                        Some(permit) => permit,
+                        None => {
+                            let _queued = queued;
+                            match tokio::time::timeout(send_budget, permits.acquire_owned()).await {
+                                Ok(Ok(permit)) => permit,
+                                _ => {
+                                    warn!(
+                                        "{:?} send '{}' to '{}' gave up waiting for a send slot",
+                                        target_mode, variable_name, target_ship_name
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    };
+                    let send = async {
+                        if is_reliable_mode {
+                            Client::send_raw_network_bounded(
+                                session,
+                                domain_id,
+                                id,
+                                data_bytes,
+                                variable_type,
+                                variable_name.clone(),
+                                target_ship_name.clone(),
+                            )
+                            .await
+                        } else {
+                            Client::send_raw_network(
+                                session,
+                                domain_id,
+                                id,
+                                data_bytes,
+                                variable_type,
+                                variable_name.clone(),
+                                target_ship_name.clone(),
+                            )
+                            .await
+                        }
+                    };
+                    match tokio::time::timeout(send_budget, send).await {
+                        Ok(Ok(())) => {}
+                        // Peer timeouts are expected after disconnects.
+                        Ok(Err(e)) => {
+                            warn!(
+                                "{:?} send '{}' to '{}' failed",
+                                target_mode, variable_name, target_ship_name
+                            );
+                            debug!(
+                                "{:?} send '{}' to '{}' failed: {e:#}",
+                                target_mode, variable_name, target_ship_name
+                            );
+                        }
+                        Err(_) => warn!(
+                            "{:?} send '{}' to '{}' timed out",
+                            target_mode, variable_name, target_ship_name
+                        ),
+                    }
+                });
+            } else {
+                let client = client.lock().await;
+                if let Err(error) = client
+                    .send_raw_to_other_client(
+                        id,
+                        data_bytes.as_slice(),
+                        variable_type,
+                        variable_name,
+                        &target_ship_name,
+                    )
+                    .await
+                {
+                    remember_failure(&mut deferred_error, || error);
+                }
+            }
+        }
+
+        match deferred_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::Ship for NetworkShipImpl {
     async fn ask_for_action(&self, variable_name: &str) -> anyhow::Result<(crate::Action, bool)> {
@@ -647,6 +684,28 @@ fn extract_peers(action: &crate::Action) -> HashSet<String> {
             std::iter::once(name).collect()
         }
     }
+}
+
+fn newly_added_shoot_targets(
+    previous: Option<&crate::Action>,
+    current: &crate::Action,
+) -> Option<(u32, Vec<crate::NetworkShipAddress>)> {
+    let crate::Action::Shoot { target, id } = current else {
+        return None;
+    };
+    let previous_targets = match previous {
+        Some(crate::Action::Shoot {
+            target,
+            id: previous_id,
+        }) if previous_id == id => target.as_slice(),
+        _ => &[],
+    };
+    let added = target
+        .iter()
+        .filter(|candidate| !previous_targets.contains(candidate))
+        .cloned()
+        .collect::<Vec<_>>();
+    (!added.is_empty()).then_some((*id, added))
 }
 
 /// Send a Zenoh query to a peer's heartbeat key and return Ok if a reply arrives.
@@ -1166,6 +1225,7 @@ impl NetworkShipImpl {
             bypass_cache,
             timing,
             connection,
+            retained_payloads: Arc::new(std::sync::RwLock::new(HashMap::new())),
         };
 
         // Background task: take RatAction packets pushed by the coordinator,
@@ -1186,6 +1246,10 @@ impl NetworkShipImpl {
 
             let route_cache_bg = Arc::clone(&ship.route_cache);
             let peer_monitor_bg = Arc::clone(&ship.peer_monitor);
+            let retained_payloads_bg = Arc::clone(&ship.retained_payloads);
+            let async_sends_bg = Arc::clone(&ship.async_sends_in_flight);
+            let client_bg = Arc::clone(&ship.client);
+            let runtime_handle_bg = ship.runtime_handle.clone();
             let shutdown = ship.disconnect.clone();
 
             // Registration has run, so the sender is set.
@@ -1220,8 +1284,44 @@ impl NetworkShipImpl {
                                             action,
                                             lock_until_ack,
                                         } => {
-                                            route_cache_bg.write().unwrap()
+                                            let previous = route_cache_bg.write().unwrap()
                                                 .insert(variable.clone(), (action.clone(), lock_until_ack));
+
+                                            if let Some((id, targets)) = newly_added_shoot_targets(
+                                                previous.as_ref().map(|(action, _)| action),
+                                                &action,
+                                            ) {
+                                                let retained = retained_payloads_bg
+                                                    .read()
+                                                    .unwrap()
+                                                    .get(&variable)
+                                                    .cloned();
+                                                if let Some(retained) = retained {
+                                                    let sends = Arc::clone(&async_sends_bg);
+                                                    let client = Arc::clone(&client_bg);
+                                                    let runtime_handle = runtime_handle_bg.clone();
+                                                    let replay_variable = variable.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(error) = NetworkShipImpl::shoot_bytes(
+                                                            &sends,
+                                                            &client,
+                                                            &runtime_handle,
+                                                            &targets,
+                                                            id,
+                                                            retained.bytes,
+                                                            retained.variable_type,
+                                                            &replay_variable,
+                                                        )
+                                                        .await
+                                                        {
+                                                            warn!(
+                                                                "Failed to replay retained '{}' sample: {error:#}",
+                                                                replay_variable
+                                                            );
+                                                        }
+                                                    });
+                                                }
+                                            }
 
                                             per_var_peers.insert(variable.clone(), extract_peers(&action));
                                             let required: HashSet<String> = per_var_peers

@@ -139,6 +139,9 @@ where
         where
             E: de::Error,
         {
+            if value.trim().is_empty() {
+                return Ok(Vec::new());
+            }
             serde_yml::from_str(value).map_err(de::Error::custom)
         }
 
@@ -1627,6 +1630,21 @@ rosbag2_bagfile_information:
                 .type_description_hash,
             None
         );
+    }
+
+    #[test]
+    fn empty_qos_profile_string_is_an_empty_list() {
+        let metadata: TopicMetadata = serde_yml::from_str(
+            r#"
+name: /ouster/points
+type: sensor_msgs/msg/PointCloud2
+serialization_format: cdr
+offered_qos_profiles: ""
+"#,
+        )
+        .expect("empty QoS profile string should parse");
+
+        assert!(metadata.offered_qos_profiles.is_empty());
     }
 
     #[test]
