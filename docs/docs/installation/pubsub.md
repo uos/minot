@@ -3,7 +3,7 @@
 The Pub/Sub library uses Tokio for async I/O.
 For using the library in your project, add these lines to your dependencies in `Cargo.toml`.
 
-For using this library in Golang, see the [Go API](../features/go_api.md).
+For using this library in Go, see the [API guide](../features/api.md).
 
 ~~~toml title="Cargo.toml"
 [dependencies]
@@ -21,6 +21,5 @@ ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
 ~~~
 
 Learn more on how to use it in your Code by visiting the [feature page](../features/pubsub.md).
-
 
 

@@ -16,8 +16,7 @@ jobs:
     runs-on: ubuntu-dev-resolute
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install zensical
-      - run: cd docs && zensical build --clean
+      - run: cd docs && uvx zensical build --clean
       - name: Deploy to Codeberg Pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
