@@ -31,14 +31,11 @@ sudo apt install ros-humble-minot
 
 # jazzy
 sudo apt install ros-jazzy-minot
-
-# lyrical
-sudo apt install ros-lyrical-minot
 ~~~
 
 ### From Source
 
-On Lyrical, Jazzy, and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
+On Jazzy, and Humble, you'll need to [install a more modern Rust compiler](https://www.rust-lang.org/tools/install) first. The recommended script will automatically give you a newer version than 1.85, which is all we need.
 
 The Minot CLI integrates seamlessly with typical ROS tooling. Just clone the repository into the src folder of your ROS workspace.
 
