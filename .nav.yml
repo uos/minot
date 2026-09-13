@@ -1,0 +1,14 @@
+nav:
+  - Introduction: index.md
+  - Installation: installation.md
+  - Features:
+    - Bagfile Query: bagquery.md
+    - Variable Sharing: varshare.md
+    - Native Pub/Sub: pubsub.md
+    - Go API: go_api.md
+    - Services: services.md
+    - Actions: actions.md
+  - UI:
+    - Terminal: sync/overview.md
+    - Keybindings: sync/keybindings.md
+  - Lore: lore.md
