@@ -1172,6 +1172,9 @@ jobs:
         run: |
           sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends openssh-client
+          command -v ssh-keyscan
           mkdir -p ~/.ssh
           printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
