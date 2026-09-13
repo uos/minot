@@ -6,13 +6,15 @@ With ROS you can record and play everything published to the ROS network. This e
 
 To get started quickly, we will do a very short Minot *Hello World*.
 
-We require a ROS 2 Jazzy or Humble installation for this demo because we want to see our point clouds in RViz.
+We require a ROS 2 Lyrical, Jazzy, or Humble installation for this demo because we want to see our point clouds in RViz.
 
 ~~~ bash title="ROS Example"
 sudo apt install curl unzip
 
 mkdir minot-bagfile-demo && cd minot-bagfile-demo
-source /opt/ros/jazzy/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash
+source /opt/ros/lyrical/setup.bash 2>/dev/null \
+    || source /opt/ros/jazzy/setup.bash 2>/dev/null \
+    || source /opt/ros/humble/setup.bash
 
 # Get Minot with ROS2 publisher
 curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro $ROS_DISTRO
@@ -51,4 +53,3 @@ cd .. && rm -rf minot-bagfile-demo && minot-uninstall
 ~~~
 
 You just did a very basic **Bagfile Query**. It makes up one of 3 major features in Minot. They can be used standalone but when combined, they enable superpowers.
-

@@ -6,7 +6,13 @@ For most users, the easiest way to install everything Minot offers is using the 
 curl -sSLf https://stelzo.codeberg.page/minot/install | sh
 ~~~
 
-For ROS support, make sure to have your ROS environment sourced before running the script.
+For ROS support, source your ROS environment and pass its distribution to the
+script. Lyrical, Jazzy, and Humble are supported release targets.
+
+~~~bash title="ROS 2 Lyrical"
+source /opt/ros/lyrical/setup.bash
+curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro lyrical
+~~~
 
 You can now run Minot.
 
@@ -24,7 +30,8 @@ If the command could not be found, add your local binary folder to your `$PATH`:
 
 **Script Usage:**
 
-Use the `--ros-distro` option to specify which ROS2 publisher bindings to embed when building from source:
+Use the `--ros-distro` option to select the matching prebuilt ROS 2 release or
+the publisher bindings to embed when building from source:
 
 - `lyrical` - ROS2 publisher (C API, needs sourced ROS2)
 - `jazzy` - ROS2 publisher (C API, needs sourced ROS2)

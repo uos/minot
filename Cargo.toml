@@ -104,7 +104,7 @@ rkyv = { version = "0.8.18" }
 serde = { version = "1.0", features = ["derive"] }
 
 # ROS
-r2r = "0.9.5"
+r2r = "0.9.7"
 hiroz = { version = "0.2.0", git = "https://github.com/ZettaScaleLabs/hiroz.git", tag = "v0.2.0" }
 hiroz-msgs = { version = "0.2.0", git = "https://github.com/ZettaScaleLabs/hiroz.git", tag = "v0.2.0", default-features = false, features = [
   "std_msgs",

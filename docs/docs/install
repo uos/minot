@@ -167,7 +167,7 @@ ${BOLD}OPTIONS:${NC}
     -d, --dir DIR             Installation directory (default: ~/.local/bin)
     -e, --embed COMPONENTS    Embed components (comma-separated: coord, ros1, ros2, ros2-c, mt_pubsub)
     -f, --features FEATURES   Advanced: Raw cargo features (comma-separated)
-    -r, --ros-distro DISTRO   ROS2 C API binding to embed when building (lyrical, jazzy, humble). Requires ROS2 sourced.
+    -r, --ros-distro DISTRO   Select ROS2 release (lyrical, jazzy, humble). Requires matching ROS2 environment.
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
     -n, --no-default-embed    Do not enable the default embedded backend when building
@@ -186,6 +186,10 @@ ${BOLD}EXAMPLES:${NC}
 
     ${CYAN}# Install with ROS2 Jazzy support${NC}
     ./install.sh --ros-distro jazzy
+
+    ${CYAN}# Install with ROS2 Lyrical support${NC}
+    source /opt/ros/lyrical/setup.bash
+    ./install.sh --ros-distro lyrical
 
     ${CYAN}# Build the default non-ROS backend from source${NC}
     ./install.sh --build
@@ -1377,7 +1381,11 @@ parse_args() {
                 ;;
             -r|--ros-distro)
                 if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
-                    ROS_DISTRO="$2"
+                    ROS_DISTRO=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+                    case "$ROS_DISTRO" in
+                        lyrical|jazzy|humble|galactic|foxy|iron|rolling) ;;
+                        *) error "Unsupported ROS distro: $2" ;;
+                    esac
                     shift
                 else
                     error "Missing value for --ros-distro"

@@ -134,7 +134,8 @@ impl TryFrom<mt_net::Qos> for QosR2RMap {
                 let liveliness = match RmwQosLivelinessPolicy::from_str(&q.liveliness)? {
                     RmwQosLivelinessPolicy::SystemDefault => LivelinessPolicy::SystemDefault,
                     RmwQosLivelinessPolicy::Automatic => LivelinessPolicy::Automatic,
-                    RmwQosLivelinessPolicy::ManualByNode => LivelinessPolicy::ManualByNode,
+                    // Manual-by-node was deprecated by ROS 2 and is absent in Lyrical.
+                    RmwQosLivelinessPolicy::ManualByNode => LivelinessPolicy::ManualByTopic,
                     RmwQosLivelinessPolicy::ManualByTopic => LivelinessPolicy::ManualByTopic,
                     RmwQosLivelinessPolicy::Unknown => LivelinessPolicy::Unknown,
                     #[cfg(not(feature = "humble"))]

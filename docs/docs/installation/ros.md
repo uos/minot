@@ -14,7 +14,9 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/uos-a
 sudo apt update
 ~~~
 
-After the setup, you can simply run apt.
+After the setup, you can install the matching package for any of the supported
+ROS 2 releases. Lyrical, Jazzy, and Humble packages are built for amd64 and
+arm64.
 
 ~~~bash
 # humble
@@ -25,6 +27,14 @@ sudo apt install ros-jazzy-minot
 
 # lyrical
 sudo apt install ros-lyrical-minot
+~~~
+
+You can also use the installation script after sourcing ROS. It selects the
+release matching `$ROS_DISTRO` when a prebuilt archive is available and falls
+back to a source build otherwise.
+
+~~~bash
+curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro "$ROS_DISTRO"
 ~~~
 
 ### Source

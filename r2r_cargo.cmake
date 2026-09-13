@@ -1,5 +1,5 @@
 #
-# For r2r 0.9.1
+# For r2r 0.9.7
 #
 # cmake code for simple colcon integration.
 # See https://github.com/m-dahl/r2r_minimal_node/
@@ -97,4 +97,3 @@ function(r2r_cargo)
   unset(CARGO_CLEAN CACHE)
 
 endfunction()
-

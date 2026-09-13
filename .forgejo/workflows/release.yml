@@ -504,38 +504,38 @@ jobs:
           path: |
             *.deb
 
-  #  deb-lyrical:
-  #    runs-on: ${{ matrix.runner }}
-  #    container:
-  #      image: docker.io/stelzo/ubuntu-dev:lyrical
-  #    needs: [rust-stable]
-  #    strategy:
-  #      fail-fast: false
-  #      matrix:
-  #        include:
-  #          - arch: amd64
-  #            runner: ubuntu-latest
-  #          - arch: arm64
-  #            runner: ubuntu-latest-arm
-  #    steps:
-  #      - uses: actions/checkout@v4
-  #      - name: Build
-  #        run: |
-  #          set -euo pipefail
-  #          ulimit -n 65536
-  #          apt-get update
-  #          apt-get install -y openssl
-  #          set +u
-  #          source /opt/ros/lyrical/setup.bash
-  #          set -u
-  #          bash ./scripts/make-deb.bash
-  #
-  #      - name: "Upload deb"
-  #        uses: actions/upload-artifact@v3
-  #        with:
-  #          name: artifacts-deb-lyrical-${{ matrix.arch }}
-  #          path: |
-  #            *.deb
+  deb-lyrical:
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: docker.io/stelzo/ubuntu-dev:lyrical
+    needs: [rust-stable]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-latest-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          apt-get update
+          apt-get install -y openssl
+          set +u
+          source /opt/ros/lyrical/setup.bash
+          set -u
+          bash ./scripts/make-deb.bash
+
+      - name: "Upload deb"
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-deb-lyrical-${{ matrix.arch }}
+          path: |
+            *.deb
 
   deb-humble-amd64:
     runs-on: ubuntu-dev-resolute
@@ -976,7 +976,7 @@ jobs:
         deb-humble-arm64,
         deb-jazzy-amd64,
         deb-jazzy-arm64,
-        # deb-lyrical,
+        deb-lyrical,
         linux-pypi,
         musllinux-pypi,
         macos-pypi,
@@ -1155,45 +1155,45 @@ jobs:
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
           cd ..
 
-  #  lyrical-release-uos-ppa:
-  #    runs-on: ubuntu-dev-resolute
-  #    needs: [create-release, deb-lyrical, jazzy-release-uos-ppa]
-  #    steps:
-  #      - name: Download artifacts
-  #        uses: actions/download-artifact@v3
-  #        with:
-  #          path: artifacts
-  #      - name: Push to PPA
-  #        if: startsWith(github.ref, 'refs/tags/')
-  #        env:
-  #          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-  #          SERIES: "resolute"
-  #          DEB_PATH: "artifacts/artifacts-deb-lyrical-*/*.deb"
-  #        run: |
-  #          sleep 120 # ensure previous PPA pushes are processed before and CI did run
-  #          set -euo pipefail
-  #          mkdir -p ~/.ssh
-  #          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-  #          chmod 600 ~/.ssh/deploy_key
-  #          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-  #          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-  #          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
-  #          cd ppa
-  #          git sparse-checkout init --cone
-  #          for s in $SERIES; do
-  #            git sparse-checkout set "ubuntu/pool/main/$s"
-  #            mkdir -p "ubuntu/pool/main/$s"
-  #            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-  #            git add "ubuntu/pool/main/$s/"*.deb || true
-  #          done
-  #          git config --global user.email $(git log -1 --pretty=format:'%ae')
-  #          git config --global user.name $(git log -1 --pretty=format:'%an')
-  #          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
-  #          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
-  #          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
-  #          git push origin pages
-  #          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-  #          cd ..
+  lyrical-release-uos-ppa:
+    runs-on: ubuntu-dev-resolute
+    needs: [create-release, deb-lyrical, jazzy-release-uos-ppa]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: Push to PPA
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
+          SERIES: "resolute"
+          DEB_PATH: "artifacts/artifacts-deb-lyrical-*/*.deb"
+        run: |
+          sleep 120 # ensure previous PPA pushes are processed before and CI did run
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
+          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
+          cd ppa
+          git sparse-checkout init --cone
+          for s in $SERIES; do
+            git sparse-checkout set "ubuntu/pool/main/$s"
+            mkdir -p "ubuntu/pool/main/$s"
+            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
+            git add "ubuntu/pool/main/$s/"*.deb || true
+          done
+          git config --global user.email $(git log -1 --pretty=format:'%ae')
+          git config --global user.name $(git log -1 --pretty=format:'%an')
+          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
+          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
+          git push origin pages
+          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+          cd ..
 
   aur-publish-src:
     runs-on: ubuntu-dev-resolute
@@ -1333,7 +1333,7 @@ jobs:
 
   minot-rat-release-uos-ppa:
     runs-on: ubuntu-dev-resolute
-    needs: [jazzy-release-uos-ppa, ppa-minot-rat-debs]
+    needs: [lyrical-release-uos-ppa, ppa-minot-rat-debs]
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v3

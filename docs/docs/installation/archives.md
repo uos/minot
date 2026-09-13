@@ -2,7 +2,9 @@
 
 Binaries for common system configurations are available [via Codeberg Releases](https://codeberg.org/stelzo/minot/releases).
 
-The `minot-$ROS_DISTRO-*` archives will only give you ROS specific binaries:
+The `minot-$ROS_DISTRO-*` archives are tied to the named ROS 2 distribution and
+only contain ROS-specific binaries. The installer verifies that the matching
+ROS environment is available before using one:
 
 - `minot` sync + coordinator + ROS2 Publisher (with any-type)
 - `wind-ros2-c` Standalone ROS2 Publisher (with any-type)

@@ -23,7 +23,7 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/uos-a
 sudo apt update
 ~~~
 
-After the setup, you can simply run apt.
+After the setup, you can install the matching package for any of the supported ROS 2 releases. Lyrical, Jazzy, and Humble packages are built for amd64 and arm64.
 
 ~~~bash
 # humble
@@ -31,6 +31,12 @@ sudo apt install ros-humble-minot
 
 # jazzy
 sudo apt install ros-jazzy-minot
+~~~
+
+Alternatively, with the matching ROS environment sourced, the installer can select the corresponding prebuilt release or build it from source:
+
+~~~bash
+curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro "$ROS_DISTRO"
 ~~~
 
 ### From Source
@@ -58,7 +64,7 @@ Now run it like any ROS node.
 ros2 run minot minot tui <file.mt>
 ~~~
 
-Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://stelzo.codeberg.page/minot/installation.html).
+Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://stelzo.codeberg.page/minot/installation/packages.html).
 
 ### VS Code Extension
 
