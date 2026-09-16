@@ -81,7 +81,7 @@ chumsky = { version = "0.13", default-features = false, features = ["std"] }
 ariadne = "0.6"
 mcap = "0.25.0"
 camino = "1.2"
-serde_yml = "0.0.13"
+yaml_serde = "0.10"
 cdr = "0.2.4"
 rand = "0.10"
 fs2 = "0.4"
