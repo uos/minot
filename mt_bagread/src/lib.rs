@@ -81,7 +81,7 @@ pub struct Rosbag2BagfileInformation {
     pub relative_file_paths: Vec<String>,
     pub files: Vec<File>,
     #[serde(default)]
-    pub custom_data: Option<serde_yml::Value>,
+    pub custom_data: Option<yaml_serde::Value>,
     #[serde(default)]
     pub ros_distro: Option<String>,
 }
@@ -142,7 +142,7 @@ where
             if value.trim().is_empty() {
                 return Ok(Vec::new());
             }
-            serde_yml::from_str(value).map_err(de::Error::custom)
+            yaml_serde::from_str(value).map_err(de::Error::custom)
         }
 
         fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
@@ -232,7 +232,7 @@ fn metadata_from_summary(summary: &Summary) -> Metadata {
             let offered_qos_profiles = channel
                 .metadata
                 .get("offered_qos_profiles")
-                .and_then(|s| serde_yml::from_str(s).ok())
+                .and_then(|s| yaml_serde::from_str(s).ok())
                 .unwrap_or_else(default_qos_profiles);
 
             let message_count = stats
@@ -1008,7 +1008,7 @@ impl Bagfile {
                             let (id, name, typ, qos_str) =
                                 row.context("failed to read topic row")?;
                             let qos: Vec<QosProfile> =
-                                serde_yml::from_str(&qos_str).unwrap_or_default();
+                                yaml_serde::from_str(&qos_str).unwrap_or_default();
                             topic_map.insert(id, (name, typ, qos));
                         }
                     }
@@ -1039,13 +1039,13 @@ impl Bagfile {
                 // Check for sqlite3 directory bag before opening any MCAP.
                 let is_sqlite3_bag = meta_contents
                     .as_deref()
-                    .and_then(|c| serde_yml::from_str::<Metadata>(c).ok())
+                    .and_then(|c| yaml_serde::from_str::<Metadata>(c).ok())
                     .map(|m| m.rosbag2_bagfile_information.storage_identifier == "sqlite3")
                     .unwrap_or(false);
 
                 if is_sqlite3_bag {
                     let bag_info: Metadata =
-                        serde_yml::from_str(meta_contents.as_deref().unwrap())?;
+                        yaml_serde::from_str(meta_contents.as_deref().unwrap())?;
                     validate_support(&bag_info)?;
 
                     #[cfg(not(feature = "db3"))]
@@ -1098,7 +1098,7 @@ impl Bagfile {
                                 let (id, name, typ, qos_str) =
                                     row.context("failed to read topic row")?;
                                 let qos: Vec<QosProfile> =
-                                    serde_yml::from_str(&qos_str).unwrap_or_default();
+                                    yaml_serde::from_str(&qos_str).unwrap_or_default();
                                 topic_map.insert(id, (name, typ, qos));
                             }
                         }
@@ -1119,7 +1119,7 @@ impl Bagfile {
                         if is_raw_mcap {
                             (path.clone(), None)
                         } else if let Some(ref contents) = meta_contents {
-                            let bag_info: Metadata = serde_yml::from_str(contents)?;
+                            let bag_info: Metadata = yaml_serde::from_str(contents)?;
                             validate_support(&bag_info)?;
                             let mcap_file = bag_info
                                 .rosbag2_bagfile_information
@@ -1301,7 +1301,7 @@ mod tests {
         let metadata_contents = std::fs::read_to_string("test/metadata-v5.yml")
             .expect("Could not read test/metadata-v5.yml");
         let metadata: Metadata =
-            serde_yml::from_str(&metadata_contents).expect("Failed to parse v5 metadata");
+            yaml_serde::from_str(&metadata_contents).expect("Failed to parse v5 metadata");
 
         // Verify basic fields
         assert_eq!(metadata.rosbag2_bagfile_information.version, 5);
@@ -1354,7 +1354,7 @@ mod tests {
         let metadata_contents = std::fs::read_to_string("test/metadata-v9.yml")
             .expect("Could not read test/metadata-v9.yml");
         let metadata: Metadata =
-            serde_yml::from_str(&metadata_contents).expect("Failed to parse v9 metadata");
+            yaml_serde::from_str(&metadata_contents).expect("Failed to parse v9 metadata");
 
         // Verify basic fields
         assert_eq!(metadata.rosbag2_bagfile_information.version, 9);
@@ -1413,12 +1413,12 @@ mod tests {
         let v5_contents =
             std::fs::read_to_string("test/metadata-v5.yml").expect("Could not read v5 metadata");
         let v5_metadata: Metadata =
-            serde_yml::from_str(&v5_contents).expect("Failed to parse v5 metadata");
+            yaml_serde::from_str(&v5_contents).expect("Failed to parse v5 metadata");
 
         let v9_contents =
             std::fs::read_to_string("test/metadata-v9.yml").expect("Could not read v9 metadata");
         let v9_metadata: Metadata =
-            serde_yml::from_str(&v9_contents).expect("Failed to parse v9 metadata");
+            yaml_serde::from_str(&v9_contents).expect("Failed to parse v9 metadata");
 
         // Both should have normalized /velodyne_points with same QoS values
         let v5_lidar = v5_metadata
@@ -1444,7 +1444,7 @@ mod tests {
         let metadata_contents = std::fs::read_to_string("test/metadata-v5.yml")
             .expect("Could not read test/metadata-v5.yml");
         let metadata: Metadata =
-            serde_yml::from_str(&metadata_contents).expect("Failed to parse v5 metadata");
+            yaml_serde::from_str(&metadata_contents).expect("Failed to parse v5 metadata");
 
         // Verify all topics have their QoS profiles stored
         for topic_with_count in &metadata
@@ -1520,7 +1520,7 @@ mod tests {
         let metadata_contents = std::fs::read_to_string("test/metadata-v9.yml")
             .expect("Could not read test/metadata-v9.yml");
         let metadata: Metadata =
-            serde_yml::from_str(&metadata_contents).expect("Failed to parse v9 metadata");
+            yaml_serde::from_str(&metadata_contents).expect("Failed to parse v9 metadata");
 
         // Verify all topics have their QoS profiles stored
         for topic_with_count in &metadata
@@ -1613,7 +1613,7 @@ rosbag2_bagfile_information:
   files: []
 "#;
         let metadata: Metadata =
-            serde_yml::from_str(metadata_contents).expect("Failed to parse metadata");
+            yaml_serde::from_str(metadata_contents).expect("Failed to parse metadata");
 
         assert_eq!(
             metadata
@@ -1634,7 +1634,7 @@ rosbag2_bagfile_information:
 
     #[test]
     fn empty_qos_profile_string_is_an_empty_list() {
-        let metadata: TopicMetadata = serde_yml::from_str(
+        let metadata: TopicMetadata = yaml_serde::from_str(
             r#"
 name: /ouster/points
 type: sensor_msgs/msg/PointCloud2
@@ -1650,7 +1650,7 @@ offered_qos_profiles: ""
     #[test]
     fn both_formats_parse_without_errors() {
         let v5_result = std::fs::read_to_string("test/metadata-v5.yml").and_then(|contents| {
-            serde_yml::from_str::<Metadata>(&contents)
+            yaml_serde::from_str::<Metadata>(&contents)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
         });
         assert!(
@@ -1660,7 +1660,7 @@ offered_qos_profiles: ""
         );
 
         let v9_result = std::fs::read_to_string("test/metadata-v9.yml").and_then(|contents| {
-            serde_yml::from_str::<Metadata>(&contents)
+            yaml_serde::from_str::<Metadata>(&contents)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
         });
         assert!(
@@ -1694,12 +1694,12 @@ offered_qos_profiles: ""
         let v5_contents =
             std::fs::read_to_string("test/metadata-v5.yml").expect("Could not read v5 metadata");
         let v5_metadata: Metadata =
-            serde_yml::from_str(&v5_contents).expect("Failed to parse v5 metadata");
+            yaml_serde::from_str(&v5_contents).expect("Failed to parse v5 metadata");
 
         let v9_contents =
             std::fs::read_to_string("test/metadata-v9.yml").expect("Could not read v9 metadata");
         let v9_metadata: Metadata =
-            serde_yml::from_str(&v9_contents).expect("Failed to parse v9 metadata");
+            yaml_serde::from_str(&v9_contents).expect("Failed to parse v9 metadata");
 
         // Check V5 QoS profile completeness
         let v5_imu = v5_metadata.get_topic_meta("/imu/data").unwrap();
