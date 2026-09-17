@@ -1348,7 +1348,7 @@ jobs:
           PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
           SERIES: "jammy noble"
         run: |
-          sleep 120 # ensure previous PPA pushes are processed before and CI did run
+          sleep 300 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
           apt-get update && apt-get install -y openssh-client
           mkdir -p ~/.ssh
