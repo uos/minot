@@ -496,6 +496,8 @@ where
 
     let mut breaked_until = false;
     let mut time_iter_before = None;
+    // Log time of the message that stopped this call. It was not consumed, so the next call starts there.
+    let mut break_log_time = None;
     let span_start = last_iter_time.unwrap_or(start_time);
     while let Some(event) = reader.next_event() {
         match event? {
@@ -510,7 +512,7 @@ where
                 let log_time = nanos_to_system_time(header.log_time);
 
                 if time_iter_before.is_none() {
-                    time_iter_before.replace(start_time);
+                    time_iter_before.replace(span_start);
                 } else {
                     time_iter_before = *last_iter_time;
                 }
@@ -522,6 +524,7 @@ where
                         let end_abs = span_start + rel_dur;
                         if log_time > end_abs {
                             breaked_until = true;
+                            break_log_time = Some(header.log_time);
                             reached_end_naturally = false;
                             break;
                         }
@@ -532,6 +535,7 @@ where
                         let end_abs = span_start + rel_dur;
                         if log_time > end_abs {
                             breaked_until = true;
+                            break_log_time = Some(header.log_time);
                             reached_end_naturally = false;
                             break;
                         }
@@ -541,6 +545,7 @@ where
                         let end_abs = span_start + max;
                         if log_time > end_abs {
                             breaked_until = true;
+                            break_log_time = Some(header.log_time);
                             reached_end_naturally = false;
                             break;
                         }
@@ -548,6 +553,7 @@ where
                     Some(PlayCount::Amount(count)) => {
                         if rel_since_begin >= *count {
                             breaked_until = true;
+                            break_log_time = Some(header.log_time);
                             reached_end_naturally = false;
                             break;
                         }
@@ -563,6 +569,7 @@ where
                         pc,
                     )? {
                         breaked_until = true;
+                        break_log_time = Some(header.log_time);
                         reached_end_naturally = false;
                         break;
                     }
@@ -606,10 +613,12 @@ where
         }
     }
 
-    // going back one message
+    // Resume at the message that stopped this call. Seeking to the previous message instead
+    // would replay an already consumed message.
     if breaked_until {
-        let options = IndexedReaderOptions::new()
-            .log_time_on_or_after(system_time_to_nanos(&time_iter_before.unwrap()));
+        let options = IndexedReaderOptions::new().log_time_on_or_after(
+            break_log_time.expect("break_log_time is set whenever breaked_until is set"),
+        );
         *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(summary, options)
             .expect("could not construct reader");
         *last_iter_time = time_iter_before;
