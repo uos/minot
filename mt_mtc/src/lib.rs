@@ -123,6 +123,7 @@ pub enum SensorType {
     Odom,
     Mixed,
     Any,
+    Tf,
 }
 
 impl FromStr for SensorType {
@@ -133,6 +134,7 @@ impl FromStr for SensorType {
             "cloud" => Self::Lidar,
             "imu" => Self::Imu,
             "odom" => Self::Odom,
+            "tf" => Self::Tf,
             "mixed" => Self::Mixed,
             _ => Self::Any,
         })
@@ -142,6 +144,7 @@ impl FromStr for SensorType {
 pub const POINTCLOUD_ROS2_TYPE: &str = "sensor_msgs/msg/PointCloud2";
 pub const IMU_ROS2_TYPE: &str = "sensor_msgs/msg/Imu";
 pub const ODOM_ROS2_TYPE: &str = "nav_msgs/msg/Odometry";
+pub const TF_ROS2_TYPE: &str = "tf2_msgs/msg/TFMessage";
 
 impl SensorType {
     pub fn is(&self, query: &str) -> bool {
@@ -153,6 +156,7 @@ impl SensorType {
             }
             SensorType::Any => true,
             SensorType::Odom => query == ODOM_ROS2_TYPE,
+            SensorType::Tf => query == TF_ROS2_TYPE,
         }
     }
 }

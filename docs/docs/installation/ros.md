@@ -6,11 +6,11 @@ Minot seamlessly works with ROS to integrate into existing robot pipelines.
 
 We precompile the CLI with coordinator and ROS 2 publisher for our PPA. 
 
-~~~bash title="UOS PPA"
-curl -fsSL "https://uos-robotics.codeberg.page/ppa/ubuntu/key.gpg" | gpg --dearmor \
-  | sudo tee /usr/share/keyrings/uos-archive-keyring.gpg >/dev/null
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/uos-archive-keyring.gpg] https://uos-robotics.codeberg.page/ppa/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
-  | sudo tee /etc/apt/sources.list.d/uos.list
+~~~bash title="steado PPA"
+curl -fsSL "https://ppa.steado.tech/ubuntu/key.gpg" | gpg --dearmor \
+  | sudo tee /usr/share/keyrings/steado-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/steado-archive-keyring.gpg] https://ppa.steado.tech/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+  | sudo tee /etc/apt/sources.list.d/steado.list
 sudo apt update
 ~~~
 
@@ -30,7 +30,7 @@ sudo apt install ros-lyrical-minot
 ~~~
 
 You can also use the installation script after sourcing ROS. It selects the
-release matching `$ROS_DISTRO` when a prebuilt archive is available and falls
+release matching `$ROS_DISTRO` when a prebuilt binary is available and falls
 back to a source build otherwise.
 
 ~~~bash

@@ -1,0 +1,6 @@
+target/
+.git/
+docs/
+vscode/
+dlg_cut/
+**/*.md

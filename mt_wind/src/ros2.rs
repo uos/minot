@@ -146,6 +146,7 @@ pub async fn run_dyn_wind(
     let mut imu_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
     let mut clock_publishers = HashMap::new();
+    let mut tf_publishers = HashMap::new();
     let mut any_type_warned = false;
 
     let mut wind_receiver = wind(wind_name).await?;
@@ -226,6 +227,28 @@ pub async fn run_dyn_wind(
                     pubber.async_publish(imu).await?;
                     debug!("published imu");
                 }
+                mt_net::SensorTypeMapped::Tf(tf_msg) => {
+                    let mut existing_pubber = tf_publishers.get(&topic_parse);
+                    if existing_pubber.is_none() {
+                        let pubber = node
+                            .create_publisher::<ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage>(
+                                &node.create_topic(&wanted_topic, pub_type, &qos).unwrap(),
+                                None,
+                            )
+                            .unwrap();
+                        tf_publishers.insert(topic_parse.clone(), pubber);
+                        existing_pubber = Some(
+                            tf_publishers
+                                .get(&topic_parse)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+
+                    pubber.async_publish(tf_message_to_serde(tf_msg)).await?;
+                    debug!("published tf");
+                }
                 mt_net::SensorTypeMapped::Any(_) => {
                     if !any_type_warned {
                         warn!(
@@ -294,6 +317,46 @@ pub async fn run_dyn_wind(
     }
 
     Ok(())
+}
+
+fn tf_message_to_serde(
+    msg: ros2_interfaces_jazzy_rkyv::tf2_msgs::msg::TFMessage,
+) -> ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage {
+    use ros2_interfaces_jazzy_serde::builtin_interfaces::msg::Time;
+    use ros2_interfaces_jazzy_serde::geometry_msgs::msg::{
+        Quaternion, Transform, TransformStamped, Vector3,
+    };
+    use ros2_interfaces_jazzy_serde::std_msgs::msg::Header;
+
+    ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage {
+        transforms: msg
+            .transforms
+            .into_iter()
+            .map(|t| TransformStamped {
+                header: Header {
+                    stamp: Time {
+                        sec: t.header.stamp.sec,
+                        nanosec: t.header.stamp.nanosec,
+                    },
+                    frame_id: t.header.frame_id,
+                },
+                child_frame_id: t.child_frame_id,
+                transform: Transform {
+                    translation: Vector3 {
+                        x: t.transform.translation.x,
+                        y: t.transform.translation.y,
+                        z: t.transform.translation.z,
+                    },
+                    rotation: Quaternion {
+                        x: t.transform.rotation.x,
+                        y: t.transform.rotation.y,
+                        z: t.transform.rotation.z,
+                        w: t.transform.rotation.w,
+                    },
+                },
+            })
+            .collect(),
+    }
 }
 
 // TODO share in module so both submodules can uzse it

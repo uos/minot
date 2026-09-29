@@ -19,7 +19,7 @@ use mt_mtc::{
     AbsTimeRange, AnySensor, IMU_ROS2_TYPE, ODOM_ROS2_TYPE, POINTCLOUD_ROS2_TYPE, PlayCount,
     PlayKindUnitedPass3, SensorIdentification, SensorType,
 };
-use mt_net::{BagMsg, Odometry, Qos, QosProfile, QosTime, SensorTypeMapped};
+use mt_net::{BagMsg, Odometry, Qos, QosProfile, QosTime, SensorTypeMapped, TFMessage};
 use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
 #[cfg(feature = "db3")]
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -410,6 +410,11 @@ fn deserialize_message(
                 cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
             let d: Odometry = unsafe { std::mem::transmute(dec) };
             Ok(SensorTypeMapped::Odometry(d))
+        }
+        SensorType::Tf => {
+            let dec: ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage =
+                cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+            Ok(SensorTypeMapped::Tf(tf_message_to_rkyv(dec)))
         }
     }
 }
@@ -831,6 +836,46 @@ fn collect_until_db3(
         messages: msgs,
         end_of_bag: reached_end_naturally,
     })
+}
+
+fn tf_message_to_rkyv(
+    msg: ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage,
+) -> TFMessage {
+    use ros2_interfaces_jazzy_rkyv::builtin_interfaces::msg::Time;
+    use ros2_interfaces_jazzy_rkyv::geometry_msgs::msg::{
+        Quaternion, Transform, TransformStamped, Vector3,
+    };
+    use ros2_interfaces_jazzy_rkyv::std_msgs::msg::Header;
+
+    TFMessage {
+        transforms: msg
+            .transforms
+            .into_iter()
+            .map(|t| TransformStamped {
+                header: Header {
+                    stamp: Time {
+                        sec: t.header.stamp.sec,
+                        nanosec: t.header.stamp.nanosec,
+                    },
+                    frame_id: t.header.frame_id,
+                },
+                child_frame_id: t.child_frame_id,
+                transform: Transform {
+                    translation: Vector3 {
+                        x: t.transform.translation.x,
+                        y: t.transform.translation.y,
+                        z: t.transform.translation.z,
+                    },
+                    rotation: Quaternion {
+                        x: t.transform.rotation.x,
+                        y: t.transform.rotation.y,
+                        z: t.transform.rotation.z,
+                        w: t.transform.rotation.w,
+                    },
+                },
+            })
+            .collect(),
+    }
 }
 
 impl Bagfile {

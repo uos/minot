@@ -12,6 +12,7 @@ ROS_DISTRO=""
 FORCE_BUILD=0
 YES_TO_ALL=0
 NO_DEFAULT_EMBED=0
+WITH_RAT=0
 
 RED=$(printf '\033[0;31m')
 GREEN=$(printf '\033[0;32m')
@@ -96,6 +97,8 @@ for f in \
   "${LIB_DIR}/libmt_pubsub.a" \
   "${LIB_DIR}/libmt_pubsub.so" \
   "${LIB_DIR}/libmt_pubsub.dylib" \
+  "${LIB_DIR}/pkgconfig/librat.pc" \
+  "${LIB_DIR}/cmake/minot/libratConfig.cmake" \
     "${INCLUDE_DIR}/rat/rat.h"; do
     if [ -f "$f" ]; then
         TO_REMOVE_LIST="${TO_REMOVE_LIST}\n${f}"
@@ -120,7 +123,8 @@ if [ $SKIP_PROMPT -eq 0 ]; then
 fi
 
 set +e
-printf "%b" "$TO_REMOVE_LIST" | while IFS= read -r f; do
+# The trailing newline lets read return the last entry too.
+printf "%b\n" "$TO_REMOVE_LIST" | while IFS= read -r f; do
     [ -z "$f" ] && continue
     rm -f "$f" && success "Removed: $f" || warn "Could not remove: $f"
 done
@@ -171,6 +175,12 @@ ${BOLD}OPTIONS:${NC}
     -b, --build               Force build from source (skip binary download)
     -y, --yes                 Assume yes to all prompts
     -n, --no-default-embed    Do not enable the default embedded backend when building
+        --with-rat            Also install the rat C library (librat, rat.h, pkg-config and CMake files)
+
+${BOLD}PREBUILT BINARIES:${NC}
+    Prebuilt binaries exist for the default build and for ROS Jazzy and Humble
+    (optionally with ros1-native on Humble). Any other combination is built from source.
+    The standalone wind publishers are not shipped, build them with cargo if you need them.
 
 ${BOLD}EMBED COMPONENTS:${NC}
     coord         Embedded coordinator (default)
@@ -183,6 +193,9 @@ ${BOLD}EMBED COMPONENTS:${NC}
 ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Install latest version and use prebuilt binaries if available${NC}
     ./install.sh
+
+    ${CYAN}# Also install the rat C library${NC}
+    ./install.sh --with-rat
 
     ${CYAN}# Install with ROS2 Jazzy support${NC}
     ./install.sh --ros-distro jazzy
@@ -538,131 +551,159 @@ embed_to_features() {
 }
 
 
-check_binary_exists() {
-    TARGET=$1
-    ARCHIVE_NAME=$2
-    VERSION=$3
-    
-    URL="${FORGEJO_RELEASE}/${VERSION}/${ARCHIVE_NAME}.tar.gz"
-    
+url_exists() {
     if command -v curl >/dev/null 2>&1; then
-        if curl -sSfI "$URL" >/dev/null 2>&1; then
-            return 0
-        fi
+        curl -sSfLI "$1" >/dev/null 2>&1 && return 0
     elif command -v wget >/dev/null 2>&1; then
-        if wget -q --spider "$URL" 2>/dev/null; then
-            return 0
-        fi
+        wget -q --spider "$1" 2>/dev/null && return 0
     fi
-    
     return 1
 }
 
-get_release_manifest() {
-    VERSION=$1
-    MANIFEST_URL="${FORGEJO_RELEASE}/${VERSION}/manifest.json"
-    
+download_file() {
+    URL="$1"
+    DEST="$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -sSfL "$MANIFEST_URL" 2>/dev/null || echo ""
+        curl --progress-bar -fL "$URL" -o "$DEST"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$MANIFEST_URL" 2>/dev/null || echo ""
+        wget --progress=bar:force "$URL" -O "$DEST"
     else
-        echo ""
+        warn "Neither curl nor wget found."
+        return 1
     fi
 }
 
-get_manifest_subdirs() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"    
-    echo "$MANIFEST_JSON" | sed -n "/\"${ARCHIVE_NAME}\"/,/}/p" | grep '"subdirs"' | sed -E 's/.*"subdirs":\s*\[([^\]]*)\].*/\1/' | tr -d '"' | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed '/^$/d'
-}
-
-is_feature_subset() {
-    REQUESTED="$1"
-    AVAILABLE="$2"
-    
-    if [ -z "$REQUESTED" ]; then
+# Verify a downloaded file against its published .sha256. Skipped when no hash tool is available.
+verify_sha256() {
+    FILE="$1"
+    URL="$2"
+    if command -v sha256sum >/dev/null 2>&1; then
+        HASH_CMD="sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then
+        HASH_CMD="shasum -a 256"
+    else
+        warn "No sha256 tool found, skipping checksum verification of $(basename "$FILE")."
         return 0
     fi
-    
-    echo "$REQUESTED" | tr ',' '\n' | while IFS= read -r req; do
-        req=$(echo "$req" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        [ -z "$req" ] && continue
-        
-        if ! echo "$AVAILABLE" | grep -qx "$req"; then
-            exit 1
-        fi
-    done
-    
-    return $?
+    SUM_FILE="${FILE}.sha256"
+    if ! download_file "${URL}.sha256" "$SUM_FILE" >/dev/null 2>&1; then
+        warn "No checksum published for $(basename "$FILE"), skipping verification."
+        return 0
+    fi
+    EXPECTED=$(awk '{print $1}' "$SUM_FILE")
+    ACTUAL=$($HASH_CMD "$FILE" | awk '{print $1}')
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+        warn "Checksum mismatch for $(basename "$FILE")."
+        return 1
+    fi
+    return 0
 }
 
-select_best_archive() {
-    MANIFEST_JSON="$1"
+# Map the requested features to one of the published binaries. Prints the asset name, or fails
+# when only a source build can satisfy the request.
+select_prebuilt_asset() {
+    TARGET="$1"
+    REQUESTED="$2"
+    DISTRO=$(printf "%s" "$3" | tr '[:upper:]' '[:lower:]')
+
+    case "$DISTRO" in
+        "") ALLOWED="embed-coord embed-mt-pubsub"; ASSET="minot-${TARGET}" ;;
+        jazzy) ALLOWED="embed-coord embed-ros2-c db3"; ASSET="minot-jazzy-${TARGET}" ;;
+        humble) ALLOWED="embed-coord embed-ros2-c-humble db3"; ASSET="minot-humble-${TARGET}" ;;
+        *) return 1 ;;
+    esac
+
+    OLD_IFS="$IFS"
+    IFS=','
+    for feat in $REQUESTED; do
+        feat=$(printf "%s" "$feat" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        [ -z "$feat" ] && continue
+        case " $ALLOWED " in
+            *" $feat "*) ;;
+            *)
+                if [ "$DISTRO" = "humble" ] && [ "$feat" = "embed-ros1-native" ]; then
+                    ASSET="minot-humble-ros1-${TARGET}"
+                else
+                    IFS="$OLD_IFS"
+                    return 1
+                fi
+                ;;
+        esac
+    done
+    IFS="$OLD_IFS"
+
+    printf "%s" "$ASSET"
+}
+
+install_prebuilt() {
+    ASSET="$1"
+    VERSION="$2"
+    TARGET="$3"
+    BASE_URL="${FORGEJO_RELEASE}/${VERSION}"
+
+    TMP_DIR=$(mktemp -d)
+    trap "rm -rf '$TMP_DIR'" EXIT
+
+    info "Downloading ${ASSET}..."
+    if ! download_file "${BASE_URL}/${ASSET}" "$TMP_DIR/minot"; then
+        warn "Failed to download ${ASSET}."
+        return 1
+    fi
+    if ! verify_sha256 "$TMP_DIR/minot" "${BASE_URL}/${ASSET}"; then
+        return 1
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    info "Installing..."
+    printf "\n"
+    cp "$TMP_DIR/minot" "$INSTALL_DIR/minot"
+    chmod +x "$INSTALL_DIR/minot"
+    success "Binary: minot -> $INSTALL_DIR/minot"
+
+    if [ "$WITH_RAT" -eq 1 ]; then
+        install_prebuilt_rat "$BASE_URL" "$TARGET" "$TMP_DIR" || warn "The rat library could not be installed completely."
+    fi
+
+    write_uninstaller "$INSTALL_DIR"
+    return 0
+}
+
+install_prebuilt_rat() {
+    BASE_URL="$1"
     TARGET="$2"
-    REQUESTED_FEATURES="$3"
-    ROS_DISTRO_REQ="$4"
+    TMP_DIR="$3"
 
-    BEST_ARCH=""
-    BEST_EXTRA_COUNT=999999
+    INSTALL_PREFIX=$(dirname "$INSTALL_DIR")
+    LIB_DIR="${INSTALL_PREFIX}/lib"
+    HEADER_DIR="${INSTALL_PREFIX}/include/rat"
+    mkdir -p "$LIB_DIR/pkgconfig" "$LIB_DIR/cmake/minot" "$HEADER_DIR"
 
-    # info "DEBUG: Looking for target '$TARGET' with features '$REQUESTED_FEATURES' and distro '$ROS_DISTRO_REQ'"
-
-    for arch in $(get_manifest_archives_for_target "$MANIFEST_JSON" "$TARGET"); do
-        # info "DEBUG: Checking archive candidate: $arch"
-        
-        AVAIL_FEATS=$(get_manifest_features "$MANIFEST_JSON" "$arch")
-        # info "DEBUG:   Available features: $(echo "$AVAIL_FEATS" | tr '\n' ',')"
-
-        # feature subset check
-        if ! is_feature_subset "$REQUESTED_FEATURES" "$AVAIL_FEATS"; then
-            # info "DEBUG:   -> Rejected: Missing required features"
-            continue
-        fi
-
-        # ros distro match
-        ARCH_DISTRO=$(get_manifest_ros_distro "$MANIFEST_JSON" "$arch")
-        # info "DEBUG:   Archive Distro: '$ARCH_DISTRO'"
-
-        if [ -n "$ROS_DISTRO_REQ" ]; then
-            if [ -z "$ARCH_DISTRO" ]; then
-                 # info "DEBUG:   -> Rejected: Requesting ROS '$ROS_DISTRO_REQ' but archive has none"
-                 continue
-            fi
-            
-            # Case-insensitive comparison
-            REQ_LOWER=$(echo "$ROS_DISTRO_REQ" | tr '[:upper:]' '[:lower:]')
-            ARCH_LOWER=$(echo "$ARCH_DISTRO" | tr '[:upper:]' '[:lower:]')
-            
-            if [ "$REQ_LOWER" != "$ARCH_LOWER" ]; then
-                # info "DEBUG:   -> Rejected: Distro mismatch ($REQ_LOWER vs $ARCH_LOWER)"
-                continue
-            fi
-        fi
-        
-        # Calculate "Exactness" score
-        AVAIL_COUNT=$(printf "%s\n" "$AVAIL_FEATS" | sed '/^$/d' | wc -l | tr -d ' ')
-        REQ_COUNT=$(printf "%s" "$REQUESTED_FEATURES" | tr ',' '\n' | sed '/^$/d' | wc -l | tr -d ' ')
-        EXTRA_COUNT=$((AVAIL_COUNT - REQ_COUNT))
-
-        # info "DEBUG:   -> Candidate Valid. Extra features: $EXTRA_COUNT"
-
-        # prefer archives without ros_distro when not requested
-        if [ -z "$ROS_DISTRO_REQ" ] && [ -n "$ARCH_DISTRO" ]; then
-            EXTRA_COUNT=$((EXTRA_COUNT + 1000))
-        fi
-        
-        if [ "$EXTRA_COUNT" -lt "$BEST_EXTRA_COUNT" ]; then
-            BEST_EXTRA_COUNT="$EXTRA_COUNT"
-            BEST_ARCH="$arch"
+    # musl only has the static library, macOS ships a .dylib instead of a .so.
+    INSTALLED_LIB=0
+    for ext in a so dylib; do
+        URL="${BASE_URL}/librat-${TARGET}.${ext}"
+        if url_exists "$URL" && download_file "$URL" "$TMP_DIR/librat.${ext}" && verify_sha256 "$TMP_DIR/librat.${ext}" "$URL"; then
+            cp "$TMP_DIR/librat.${ext}" "$LIB_DIR/librat.${ext}"
+            success "Library: librat.${ext} -> $LIB_DIR/librat.${ext}"
+            INSTALLED_LIB=1
         fi
     done
-
-    if [ -n "$BEST_ARCH" ]; then
-        printf "%s" "$BEST_ARCH"
-        return 0
+    if [ "$INSTALLED_LIB" -eq 0 ]; then
+        warn "No prebuilt rat library found for ${TARGET}."
+        return 1
     fi
-    return 1
+
+    download_file "${BASE_URL}/rat.h" "$HEADER_DIR/rat.h" || return 1
+    success "Header: rat.h -> $HEADER_DIR/rat.h"
+
+    if download_file "${BASE_URL}/librat.pc" "$TMP_DIR/librat.pc"; then
+        sed "s|prefix=/usr|prefix=${INSTALL_PREFIX}|" "$TMP_DIR/librat.pc" > "$LIB_DIR/pkgconfig/librat.pc"
+        success "pkg-config: librat.pc -> $LIB_DIR/pkgconfig/librat.pc"
+    fi
+    if download_file "${BASE_URL}/libratConfig.cmake" "$LIB_DIR/cmake/minot/libratConfig.cmake"; then
+        success "CMake: libratConfig.cmake -> $LIB_DIR/cmake/minot/libratConfig.cmake"
+    fi
+    return 0
 }
 
 check_ros_distro_available() {
@@ -677,219 +718,6 @@ check_ros_distro_available() {
     fi
     
     return 1
-}
-
-check_feature_compatibility() {
-    REQUESTED_FEATURES="$1"  # comma-separated
-    AVAILABLE_FEATURES="$2"  # newline-separated from get_manifest_features
-    
-    if [ -z "$REQUESTED_FEATURES" ]; then
-        return 0
-    fi
-    
-    echo "$REQUESTED_FEATURES" | tr ',' '\n' | while IFS= read -r req_feat; do
-        req_feat=$(echo "$req_feat" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        [ -z "$req_feat" ] && continue
-        
-        # Check if this feature is in available features
-        if ! echo "$AVAILABLE_FEATURES" | grep -qx "$req_feat"; then
-            # Feature not found
-            return 1
-        fi
-    done
-    
-    # All features found
-    return 0
-}
-
-download_and_extract() {
-    URL="$1"
-    DEST_DIR="$2"
-    ARCHIVE_FILE="$3"
-
-    info "Downloading $ARCHIVE_FILE..."
-    
-    if command -v curl >/dev/null 2>&1; then
-        if ! curl --progress-bar -fL "$URL" -o "$ARCHIVE_FILE"; then
-            return 1
-        fi
-    elif command -v wget >/dev/null 2>&1; then
-        if ! wget --progress=bar:force "$URL" -O "$ARCHIVE_FILE"; then
-            return 1
-        fi
-    else
-        warn "Neither curl nor wget found."
-        return 1
-    fi
-
-    EXTRACT_TMP=$(mktemp -d)
-    tar xzf "$ARCHIVE_FILE" -C "$EXTRACT_TMP"
-    
-    CREATED_DIR=$(find "$EXTRACT_TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)
-    
-    if [ -n "$CREATED_DIR" ]; then
-        cp -R "$CREATED_DIR"/* "$DEST_DIR/"
-    else
-        cp -R "$EXTRACT_TMP"/* "$DEST_DIR/"
-    fi
-    
-    rm -rf "$EXTRACT_TMP"
-    return 0
-}
-
-download_and_install() {
-    TARGET=$1
-    PRIMARY_ARCH_NAME=$2
-    BASE_ARCH_NAME=$3
-    VERSION=$4
-    REQUESTED_FEATURES="$5"
-
-    TMP_DIR=$(mktemp -d)
-    trap "rm -rf '$TMP_DIR'" EXIT
-    
-    STAGE_DIR="$TMP_DIR/stage"
-    mkdir -p "$STAGE_DIR"
-
-    cd "$TMP_DIR" || return 1
-
-    # Download and Extract BASE Archive first (if it exists)
-    # This ensures libraries and standard tools are present
-    if [ -n "$BASE_ARCH_NAME" ] && [ "$BASE_ARCH_NAME" != "$PRIMARY_ARCH_NAME" ]; then
-        BASE_URL="${FORGEJO_RELEASE}/${VERSION}/${BASE_ARCH_NAME}.tar.gz"
-        info "Fetching base artifacts from ${BASE_ARCH_NAME}..."
-        if ! download_and_extract "$BASE_URL" "$STAGE_DIR" "${BASE_ARCH_NAME}.tar.gz"; then
-            warn "Failed to download base archive. Setup might be incomplete."
-            return 1
-        fi
-    fi
-
-    # Download and Extract PRIMARY Archive (Overlay)
-    PRIMARY_URL="${FORGEJO_RELEASE}/${VERSION}/${PRIMARY_ARCH_NAME}.tar.gz"
-    if [ -n "$BASE_ARCH_NAME" ]; then
-        info "Fetching overlay artifacts from ${PRIMARY_ARCH_NAME}..."
-    else
-        info "Fetching artifacts..."
-    fi
-
-    if ! download_and_extract "$PRIMARY_URL" "$STAGE_DIR" "${PRIMARY_ARCH_NAME}.tar.gz"; then
-        warn "Failed to download primary archive."
-        return 1
-    fi
-    
-    mkdir -p "$INSTALL_DIR"
-    INSTALL_PREFIX=$(dirname "$INSTALL_DIR")
-    INSTALL_LIB_DIR="${INSTALL_PREFIX}/lib"
-    INSTALL_INCLUDE_DIR="${INSTALL_PREFIX}/include"
-    mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_INCLUDE_DIR"
-
-    info "Installing..."
-    printf "\n"
-
-    should_install_binary() {
-        binname="$1"
-        req="$2"
-        case "$binname" in
-            minot) return 0 ;;
-            wind-mt-pubsub*|wind-ratpub*) echo "$req" | grep -Eq '\bembed-mt-pubsub\b' && return 0 || return 1 ;;
-            wind-ros1*)   echo "$req" | grep -Eq '(\bembed-ros1-native\b|\bembed-ros\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
-            wind-ros2-native*) echo "$req" | grep -Eq '(\bembed-ros2-native\b|\bembed-ros-native\b)' && return 0 || return 1 ;;
-            wind-ros2-c*) echo "$req" | grep -Eq '(\bembed-ros2-c\b|\bembed-ros2-c-[a-z]+\b|\bembed-ros\b)' && return 0 || return 1 ;;
-            *) [ -z "$req" ] && return 0 || return 1 ;;
-        esac
-    }
-
-    choose_minot_path() {
-        root="$1"
-        req="$2"
-        best_path=""
-        
-        case ",$req," in
-            *,embed-ros2-c,*|*,embed-ros2-c-humble,*|*,embed-ros2-c-jazzy,*|*,embed-ros,*)
-                if echo ",$req," | grep -q ",embed-ros1-native,"; then
-                    [ -x "$root/ros2_1/minot" ] && best_path="$root/ros2_1/minot"
-                fi
-                [ -z "$best_path" ] && [ -x "$root/ros2/minot" ] && best_path="$root/ros2/minot"
-                ;;
-        esac
-        
-        if [ -z "$best_path" ]; then
-            case ",$req," in
-                *,embed-mt-pubsub,*|*,embed-ratpub,*)
-                    [ -x "$root/min/minot" ] && best_path="$root/min/minot"
-                    [ -z "$best_path" ] && [ -x "$root/rat/minot" ] && best_path="$root/rat/minot"
-                    ;;
-                *,embed-coord,*)  [ -x "$root/co/minot" ] && best_path="$root/co/minot" ;;
-            esac
-        fi
-        
-        if [ -z "$best_path" ] && [ -x "$root/min/minot" ]; then
-            best_path="$root/min/minot"
-        fi
-        
-        printf "%s" "$best_path"
-    }
-
-    CHOSEN_MINOT=$(choose_minot_path "$STAGE_DIR" "$REQUESTED_FEATURES")
-
-    INSTALLED_ANY=0
-    
-    if [ -n "$CHOSEN_MINOT" ] && [ -x "$CHOSEN_MINOT" ]; then
-        VARIANT_NAME=$(basename "$(dirname "$CHOSEN_MINOT")")
-        
-    cp "$CHOSEN_MINOT" "$INSTALL_DIR/minot"
-    chmod +x "$INSTALL_DIR/minot"
-    success "Binary: minot -> $INSTALL_DIR/minot"
-        INSTALLED_ANY=1
-    else
-        warn "No suitable 'minot' binary found in the downloaded artifacts."
-    fi
-
-    for binary in "$STAGE_DIR"/*; do
-        if [ -f "$binary" ] && [ -x "$binary" ]; then
-            BINARY_NAME=$(basename "$binary")
-            case "$BINARY_NAME" in
-                minot) continue ;; # Skip loose minot if any
-                *.a|*.so|*.dylib|*.dll|*.h|*.d|*.sha256) continue ;;
-            esac
-            
-            if should_install_binary "$BINARY_NAME" "$REQUESTED_FEATURES"; then
-                cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
-                chmod +x "$INSTALL_DIR/$BINARY_NAME"
-                success "Binary: $BINARY_NAME -> $INSTALL_DIR/$BINARY_NAME"
-                INSTALLED_ANY=1
-            fi
-        fi
-    done
-
-    for lib_file in "$STAGE_DIR"/*.a "$STAGE_DIR"/*.so "$STAGE_DIR"/*.dylib; do
-        if [ -f "$lib_file" ]; then
-            FILENAME=$(basename "$lib_file")
-            cp "$lib_file" "$INSTALL_LIB_DIR/$FILENAME"
-            success "Library: $FILENAME -> $INSTALL_LIB_DIR/$FILENAME"
-            INSTALLED_ANY=1
-        fi
-    done
-
-    HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
-    mkdir -p "$HEADER_SUBDIR"
-    for header_file in "$STAGE_DIR"/*.h; do
-        if [ -f "$header_file" ]; then
-            FILENAME=$(basename "$header_file")
-            cp "$header_file" "$HEADER_SUBDIR/$FILENAME"
-            success "Header: $FILENAME -> $HEADER_SUBDIR/$FILENAME"
-            INSTALLED_ANY=1
-        fi
-    done
-
-    write_uninstaller "$INSTALL_DIR"
-
-    if [ $INSTALLED_ANY -eq 0 ]; then
-        warn "Artifacts were empty or incompatible; falling back to build."
-        return 1
-    fi
-
-    cd - >/dev/null || true
-    return 0
 }
 
 check_rust() {
@@ -1116,7 +944,7 @@ build_from_source() {
 
     cd "$TMP_BUILD_DIR" || error "Failed to enter build directory"
 
-    BUILD_CMD="cargo build --release --locked"
+    BUILD_CMD="cargo build --release --locked --package minot"
     if [ "$DISABLE_CARGO_DEFAULTS" -eq 1 ]; then
         BUILD_CMD="$BUILD_CMD --no-default-features"
     fi
@@ -1124,9 +952,14 @@ build_from_source() {
         BUILD_CMD="$BUILD_CMD --features $BUILD_FEATURES"
     fi
 
+    if [ "$WITH_RAT" -eq 1 ]; then
+        # Only the C artifacts with full LTO, which keeps the static library small.
+        BUILD_CMD="$BUILD_CMD && cargo rustc --profile full-release --locked --package mt_rat --lib --crate-type staticlib,cdylib"
+    fi
+
     printf "\n${BOLD}Build command:${NC} ${CYAN}%s${NC}\n\n" "$BUILD_CMD"
 
-    info "Building binaries and libraries..."
+    info "Building..."
     if [ "$USE_BASH_SOURCE" -eq 1 ]; then
         if [ -n "$ROS_SETUP" ]; then
             if command -v bash >/dev/null 2>&1; then
@@ -1153,34 +986,22 @@ build_from_source() {
     printf "\n"
 
     ART_DIR="target/release"
-    for binary in "$ART_DIR"/minot "$ART_DIR"/wind-*; do
-        if [ -f "$binary" ]; then
-            BINARY_NAME=$(basename "$binary")
-            # Skip .d files (dependency files from Rust build)
-            case "$BINARY_NAME" in
-                *.d)
-                    continue
-                    ;;
-            esac
-            cp "$binary" "$INSTALL_DIR/$BINARY_NAME"
-            chmod +x "$INSTALL_DIR/$BINARY_NAME"
-            success "Installed: $BINARY_NAME -> $INSTALL_DIR/$BINARY_NAME"
-        fi
-    done
+    cp "$ART_DIR/minot" "$INSTALL_DIR/minot"
+    chmod +x "$INSTALL_DIR/minot"
+    success "Installed: minot -> $INSTALL_DIR/minot"
 
-    # Install libraries if present
-    for lib_file in "$ART_DIR"/lib*.a "$ART_DIR"/lib*.so "$ART_DIR"/lib*.dylib; do
-        if [ -f "$lib_file" ]; then
-            FILENAME=$(basename "$lib_file")
-            cp "$lib_file" "$INSTALL_LIB_DIR/$FILENAME"
-            success "Installed library: $FILENAME -> $INSTALL_LIB_DIR"
-        fi
-    done
+    if [ "$WITH_RAT" -eq 1 ]; then
+        for lib_file in target/full-release/librat.a target/full-release/librat.so target/full-release/librat.dylib; do
+            if [ -f "$lib_file" ]; then
+                FILENAME=$(basename "$lib_file")
+                cp "$lib_file" "$INSTALL_LIB_DIR/$FILENAME"
+                success "Installed library: $FILENAME -> $INSTALL_LIB_DIR"
+            fi
+        done
 
-    HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
-    mkdir -p "$HEADER_SUBDIR"
-    if [ -f "rat/rat.h" ]; then
-        cp "rat/rat.h" "$HEADER_SUBDIR/rat.h"
+        HEADER_SUBDIR="$INSTALL_INCLUDE_DIR/rat"
+        mkdir -p "$HEADER_SUBDIR"
+        cp "mt_rat/rat.h" "$HEADER_SUBDIR/rat.h"
         success "Installed header: rat.h -> $HEADER_SUBDIR"
     fi
 
@@ -1400,6 +1221,9 @@ parse_args() {
             -n|--no-default-embed)
                 NO_DEFAULT_EMBED=1
                 ;;
+            --with-rat)
+                WITH_RAT=1
+                ;;
             --)
                 shift
                 break
@@ -1414,95 +1238,6 @@ parse_args() {
         shift
     done
 }
-get_manifest_archives_for_target() {
-    MANIFEST_JSON="$1"
-    TARGET="$2"
-    
-    echo "$MANIFEST_JSON" | awk -v tgt="$TARGET" '
-    BEGIN { count=0; found_targets=0 }
-    
-    # Start tracking when we hit "targets": {
-    /"targets"[[:space:]]*:/ { found_targets=1 }
-    
-    found_targets {
-        # 1. Update Brace Count
-        # We perform substitions on a copy of the line to count braces
-        line=$0
-        n_open = gsub(/{/, "", line)
-        line=$0
-        n_close = gsub(/}/, "", line)
-        count += n_open - n_close
-
-        # 2. Check for Archive Keys
-        # We look for lines like: "minot-target": {
-        # We exclude the "targets" line itself
-        if ($0 ~ /^[[:space:]]*"[^"]+":[[:space:]]*{/ && $0 !~ /"targets"/) {
-             split($0, parts, "\"")
-             key = parts[2]
-             # Print if the key contains our target string
-             if (index(key, tgt) > 0) print key
-        }
-
-        # 3. Exit if block is closed
-        # If count drops to 0 (and we have started), we are done.
-        if (count <= 0) exit
-    }'
-}
-
-get_manifest_features() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-
-    echo "$MANIFEST_JSON" | awk -v arch="$ARCHIVE_NAME" '
-    # Find the start of the specific archive block
-    $0 ~ "\"" arch "\":" { in_block=1; next }
-    # If we hit the closing brace of the block, stop
-    in_block && /^[[:space:]]*},?/ { exit }
-    
-    in_block && /"features":/ {
-        # Line looks like: "features": ["embed-coord", "embed-ros2-c"],
-        # Strip the key
-        sub(/"features":/, "")
-        # Replace brackets, quotes, and commas with spaces
-        gsub(/[\[\]",]/, " ")
-        # Print each word on a new line
-        for(i=1; i<=NF; i++) if($i!="") print $i
-        exit
-    }'
-}
-
-get_manifest_ros_distro() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-
-    echo "$MANIFEST_JSON" | awk -v arch="$ARCHIVE_NAME" '
-    $0 ~ "\"" arch "\":" { in_block=1; next }
-    in_block && /^[[:space:]]*},?/ { exit }
-    
-    in_block && /"ros_distro":/ {
-        # Line looks like: "ros_distro": "jazzy",
-        split($0, parts, "\"")
-        # parts[1]=spaces, parts[2]=key, parts[3]=Colon, parts[4]=Value
-        print parts[4]
-        exit
-    }'
-}
-
-get_manifest_base_target() {
-    MANIFEST_JSON="$1"
-    ARCHIVE_NAME="$2"
-    
-    echo "$MANIFEST_JSON" | awk -v arch="$ARCHIVE_NAME" '
-    $0 ~ "\"" arch "\":" { in_block=1; next }
-    in_block && /^[[:space:]]*},?/ { exit }
-    
-    in_block && /"requires_base_target":/ {
-        split($0, parts, "\"")
-        print parts[4]
-        exit
-    }'
-}
-
 main() {
     parse_args "$@"
     
@@ -1550,7 +1285,6 @@ main() {
             esac
         fi
         
-        MANIFEST_JSON=""
         REQUESTED_FEATURES=""
 
         if [ -n "$EMBED_COMPONENTS" ]; then
@@ -1611,44 +1345,18 @@ main() {
             esac
         fi
 
-        MANIFEST_JSON=$(get_release_manifest "$VERSION_WITH_V")
-        if [ -z "$MANIFEST_JSON" ]; then
-            if [ -n "$ROS_DISTRO" ]; then
-                ARCHIVE_NAME="minot-${ROS_DISTRO}-${TARGET}"
-            else
-                ARCHIVE_NAME="minot-${TARGET}"
-            fi
-        else
-            SELECTED=$(select_best_archive "$MANIFEST_JSON" "$TARGET" "$REQUESTED_FEATURES" "$ROS_DISTRO") || true
-            if [ -n "$SELECTED" ]; then
-                ARCHIVE_NAME="$SELECTED"
-            else
-                # Enable this temporarily to debug
-                # info "DEBUG: Failed to select archive. Target=$TARGET ReqFeatures=$REQUESTED_FEATURES Ros=$ROS_DISTRO"
-                info "Falling back to building from source; no suitable prebuilt binary found."
-                FORCE_BUILD=1
-            fi
+        ASSET_NAME=$(select_prebuilt_asset "$TARGET" "$REQUESTED_FEATURES" "$ROS_DISTRO") || true
+        if [ -z "$ASSET_NAME" ]; then
+            info "No prebuilt binary matches the requested features; building from source."
+            FORCE_BUILD=1
+        elif [ -n "$ROS_DISTRO" ] && ! check_ros_distro_available "$ROS_DISTRO"; then
+            warn "ROS ${ROS_DISTRO} not found"
+            error "Cannot use the prebuilt ${ASSET_NAME} without ROS ${ROS_DISTRO}."
         fi
-        
-        if [ -n "$MANIFEST_JSON" ]; then
-            BINARY_ROS_DISTRO=$(get_manifest_ros_distro "$MANIFEST_JSON" "$ARCHIVE_NAME")
-            if [ -n "$BINARY_ROS_DISTRO" ]; then
-                if ! check_ros_distro_available "$BINARY_ROS_DISTRO"; then
-                    warn "ROS ${BINARY_ROS_DISTRO} not found"
-                    error "Cannot use prebuilt binary without ROS ${BINARY_ROS_DISTRO}."
-                fi
-            fi
-        fi
-        
-        if [ $FORCE_BUILD -eq 0 ] && check_binary_exists "$TARGET" "$ARCHIVE_NAME" "$VERSION_WITH_V"; then
-            success "Found prebuilt binary: ${CYAN}${ARCHIVE_NAME}${NC}"
-            
-            BASE_ARCH_NAME=""
-            if [ -n "$MANIFEST_JSON" ]; then
-                BASE_ARCH_NAME=$(get_manifest_base_target "$MANIFEST_JSON" "$ARCHIVE_NAME" || true)
-            fi
 
-            if ! download_and_install "$TARGET" "$ARCHIVE_NAME" "$BASE_ARCH_NAME" "$VERSION_WITH_V" "$REQUESTED_FEATURES"; then
+        if [ $FORCE_BUILD -eq 0 ] && url_exists "${FORGEJO_RELEASE}/${VERSION_WITH_V}/${ASSET_NAME}"; then
+            success "Found prebuilt binary: ${CYAN}${ASSET_NAME}${NC}"
+            if ! install_prebuilt "$ASSET_NAME" "$VERSION_WITH_V" "$TARGET"; then
                 warn "Installing prebuilt binary failed — will fall back to building from source"
                 FORCE_BUILD=1
             fi

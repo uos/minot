@@ -24,7 +24,7 @@ jobs:
 
   # -------------------------------------------------------------------------
   # STANDARD LINUX TARGETS (Musl, GNU x86/ARM)
-  # Builds: default Minot (coord + mt-pubsub) and sidecars
+  # Builds: default Minot (coord + mt-pubsub) and the rat library
   # -------------------------------------------------------------------------
 
   linux-x86_64-musl:
@@ -34,41 +34,27 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: apt-get update && apt-get install -y musl-tools pkg-config libssl-dev
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: x86_64-unknown-linux-musl
         run: |
           rustup target add $RUST_TARGET
-          # Helper alias for static linking
-          CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
           export RUSTFLAGS="-C target-feature=+crt-static"
+          cargo build --target $RUST_TARGET --profile full-release --package minot --bin minot
+          # Build only the C artifacts. Without the rlib the staticlib gets real LTO and no embedded bitcode.
+          cargo rustc --target $RUST_TARGET --profile full-release --package mt_rat --lib --crate-type staticlib
 
-          $CARGO_CMD --package minot --bin minot
-          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
+          # Release assets are the raw files, suffixed with the target so they stay unique.
+          mkdir -p out
+          cp target/$RUST_TARGET/full-release/minot "out/minot-$RUST_TARGET"
+          cp target/$RUST_TARGET/full-release/librat.a "out/librat-$RUST_TARGET.a"
+          (cd out && for f in minot-* librat-*; do if [ -f "$f" ]; then shasum -a 256 "$f" > "$f.sha256"; fi; done)
 
-          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub,shm
-          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package mt_rat --lib 
-
-          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
-          cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/full-release/librat.a dist/
-          cp mt_rat/rat.h dist/
-
-      - name: "Archive binary"
-        run: |
-          TARGET=x86_64-unknown-linux-musl
-          mv dist minot-$TARGET
-          tar czvf minot-$TARGET.tar.gz minot-$TARGET
-          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-x86_64-unknown-linux-musl
-          path: |
-            *.tar.gz
-            *.sha256
+          path: out/*
 
   linux-x86_64-gnu:
     runs-on: ubuntu-dev-resolute
@@ -77,55 +63,40 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: apt-get update && apt-get install -y pkg-config libssl-dev
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
           rustup target add $RUST_TARGET
-          CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          cargo build --target $RUST_TARGET --profile full-release --package minot --bin minot
+          # Build only the C artifacts. Without the rlib the staticlib gets real LTO and no embedded bitcode.
+          cargo rustc --target $RUST_TARGET --profile full-release --package mt_rat --lib --crate-type staticlib,cdylib
 
-          $CARGO_CMD --package minot --bin minot
-          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
-
-          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub,shm
-          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package mt_rat --lib 
-
-          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
-          cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/full-release/librat.a dist/
-          cp target/$RUST_TARGET/full-release/librat.so dist/
-          cp mt_rat/rat.h dist/
-
-          # Prepare pkg-config and cmake files
           VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
           VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
+          # Release assets are the raw files, suffixed with the target so they stay unique.
+          mkdir -p out
+          cp target/$RUST_TARGET/full-release/minot "out/minot-$RUST_TARGET"
+          cp target/$RUST_TARGET/full-release/librat.a "out/librat-$RUST_TARGET.a"
+          cp target/$RUST_TARGET/full-release/librat.so "out/librat-$RUST_TARGET.so"
+          (cd out && for f in minot-* librat-*; do if [ -f "$f" ]; then shasum -a 256 "$f" > "$f.sha256"; fi; done)
+
+          # Target independent librat files, uploaded once.
+          cp mt_rat/rat.h mt_rat/librat.pc mt_rat/libratConfig.cmake out/
+
           # Create Debian Package
           cargo deb --package mt_rat --target $RUST_TARGET --no-build --profile full-release
           cargo deb --package minot --target $RUST_TARGET --no-build --profile full-release
-          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} dist/ \;
-          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} . \;
+          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} out/ \;
 
-      - name: "Archive binary"
-        run: |
-          TARGET=x86_64-unknown-linux-gnu
-          mv dist minot-$TARGET
-          tar czvf minot-$TARGET.tar.gz minot-$TARGET
-          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-x86_64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
-            *.deb
+          path: out/*
 
   linux-aarch64-gnu:
     runs-on: ubuntu-dev-resolute
@@ -133,53 +104,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: |
-          apt-get update && apt-get install -y gcc-aarch64-linux-gnu pkg-config libssl-dev
-      - name: Build Variants
+        run: apt-get update && apt-get install -y gcc-aarch64-linux-gnu pkg-config libssl-dev
+      - name: Build
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
         run: |
           rustup target add $RUST_TARGET
-          CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          cargo build --target $RUST_TARGET --profile full-release --package minot --bin minot
+          # Build only the C artifacts. Without the rlib the staticlib gets real LTO and no embedded bitcode.
+          cargo rustc --target $RUST_TARGET --profile full-release --package mt_rat --lib --crate-type staticlib,cdylib
 
-          # Default variant
-          $CARGO_CMD --package minot --bin minot
-          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
-
-          # Sidecars
-          $CARGO_CMD --package mt_rat --lib 
-
-          cp target/$RUST_TARGET/full-release/librat.a dist/
-          cp target/$RUST_TARGET/full-release/librat.so dist/
-          cp mt_rat/rat.h dist/
-
-          # Prepare pkg-config and cmake files
           VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
           VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
+          # Release assets are the raw files, suffixed with the target so they stay unique.
+          mkdir -p out
+          cp target/$RUST_TARGET/full-release/minot "out/minot-$RUST_TARGET"
+          cp target/$RUST_TARGET/full-release/librat.a "out/librat-$RUST_TARGET.a"
+          cp target/$RUST_TARGET/full-release/librat.so "out/librat-$RUST_TARGET.so"
+          (cd out && for f in minot-* librat-*; do if [ -f "$f" ]; then shasum -a 256 "$f" > "$f.sha256"; fi; done)
+
           # Create Debian Package
           cargo deb --package mt_rat --target $RUST_TARGET --no-build --profile full-release
           cargo deb --package minot --target $RUST_TARGET --no-build --profile full-release
-          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} dist/ \;
-          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} . \;
+          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} out/ \;
 
-      - name: "Archive binary"
-        run: |
-          TARGET=aarch64-unknown-linux-gnu
-          mv dist minot-$TARGET
-          tar czvf minot-$TARGET.tar.gz minot-$TARGET
-          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-aarch64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
-            *.deb
+          path: out/*
 
   linux-armv7-gnu:
     runs-on: ubuntu-dev-resolute
@@ -187,55 +143,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: |
-          apt-get update && apt-get install -y gcc-arm-linux-gnueabihf pkg-config libssl-dev
-      - name: Build Variants
+        run: apt-get update && apt-get install -y gcc-arm-linux-gnueabihf pkg-config libssl-dev
+      - name: Build
         env:
           RUST_TARGET: armv7-unknown-linux-gnueabihf
         run: |
           rustup target add $RUST_TARGET
-          CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          cargo build --target $RUST_TARGET --profile full-release --package minot --bin minot
+          # Build only the C artifacts. Without the rlib the staticlib gets real LTO and no embedded bitcode.
+          cargo rustc --target $RUST_TARGET --profile full-release --package mt_rat --lib --crate-type staticlib,cdylib
 
-          # Default variant
-          $CARGO_CMD --package minot --bin minot
-          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
-
-          # Sidecars
-          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub,shm
-          $CARGO_CMD --package mt_rat --lib 
-
-          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
-          cp target/$RUST_TARGET/full-release/librat.a dist/
-          cp target/$RUST_TARGET/full-release/librat.so dist/
-          cp mt_rat/rat.h dist/
-
-          # Prepare pkg-config and cmake files
           VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
           VERSION="${VERSION#v}"
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > mt_rat/librat.pc.tmp && mv mt_rat/librat.pc.tmp mt_rat/librat.pc
           sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > mt_rat/libratConfig.cmake.tmp && mv mt_rat/libratConfig.cmake.tmp mt_rat/libratConfig.cmake
 
+          # Release assets are the raw files, suffixed with the target so they stay unique.
+          mkdir -p out
+          cp target/$RUST_TARGET/full-release/minot "out/minot-$RUST_TARGET"
+          cp target/$RUST_TARGET/full-release/librat.a "out/librat-$RUST_TARGET.a"
+          cp target/$RUST_TARGET/full-release/librat.so "out/librat-$RUST_TARGET.so"
+          (cd out && for f in minot-* librat-*; do if [ -f "$f" ]; then shasum -a 256 "$f" > "$f.sha256"; fi; done)
+
           # Create Debian Package
           cargo deb --package mt_rat --target $RUST_TARGET --no-build --profile full-release
           cargo deb --package minot --target $RUST_TARGET --no-build --profile full-release
-          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} dist/ \;
-          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} . \;
+          find target/$RUST_TARGET/debian -name "*.deb" -exec cp {} out/ \;
 
-      - name: "Archive binary"
-        run: |
-          TARGET=armv7-unknown-linux-gnueabihf
-          mv dist minot-$TARGET
-          tar czvf minot-$TARGET.tar.gz minot-$TARGET
-          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-armv7-unknown-linux-gnueabihf
-          path: |
-            *.tar.gz
-            *.sha256
-            *.deb
+          path: out/*
 
   ppa-minot-rat-debs:
     runs-on: ubuntu-dev-resolute
@@ -297,7 +236,7 @@ jobs:
 
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
           $CARGO_CMD --package minot --bin minot --features embed-coord,embed-mt-pubsub,shm
-          $CARGO_CMD --package mt_rat --lib
+          cargo rustc --target "$RUST_TARGET" --profile full-release --package mt_rat --lib --crate-type staticlib,cdylib
 
           VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
           VERSION="${VERSION#v}"
@@ -318,7 +257,7 @@ jobs:
 
   # -------------------------------------------------------------------------
   # MACOS TARGETS
-  # Builds: default Minot (coord + mt-pubsub) and sidecars
+  # Builds: default Minot (coord + mt-pubsub) and the rat library
   # -------------------------------------------------------------------------
 
   macos-aarch64:
@@ -326,52 +265,31 @@ jobs:
     needs: [rust-stable]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: aarch64-apple-darwin
         run: |
           rustup target add $RUST_TARGET
-          CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          cargo build --target $RUST_TARGET --profile full-release --package minot --bin minot
+          # Build only the C artifacts. Without the rlib the staticlib gets real LTO and no embedded bitcode.
+          cargo rustc --target $RUST_TARGET --profile full-release --package mt_rat --lib --crate-type staticlib,cdylib
 
-          $CARGO_CMD --package minot --bin minot
-          mkdir -p dist/min && cp target/$RUST_TARGET/full-release/minot dist/min/
+          # Release assets are the raw files, suffixed with the target so they stay unique.
+          mkdir -p out
+          cp target/$RUST_TARGET/full-release/minot "out/minot-$RUST_TARGET"
+          cp target/$RUST_TARGET/full-release/librat.a "out/librat-$RUST_TARGET.a"
+          cp target/$RUST_TARGET/full-release/librat.dylib "out/librat-$RUST_TARGET.dylib"
+          (cd out && for f in minot-* librat-*; do if [ -f "$f" ]; then shasum -a 256 "$f" > "$f.sha256"; fi; done)
 
-          $CARGO_CMD --package mt_wind --bin wind-mt-pubsub --features mt_pubsub,shm
-          $CARGO_CMD --package mt_wind --bin wind-ros2-native --features ros2-native
-          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
-          $CARGO_CMD --package mt_rat --lib 
-
-          cp target/$RUST_TARGET/full-release/wind-mt-pubsub dist/
-          cp target/$RUST_TARGET/full-release/wind-ros2-native dist/
-          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
-          cp target/$RUST_TARGET/full-release/librat.a dist/
-          cp target/$RUST_TARGET/full-release/librat.dylib dist/
-          cp mt_rat/rat.h dist/
-
-          # Prepare pkg-config and cmake files
-          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
-          VERSION="${VERSION#v}"
-          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/librat.pc > dist/librat.pc
-          sed "s/VERSION_PLACEHOLDER/${VERSION}/g" mt_rat/libratConfig.cmake > dist/libratConfig.cmake
-
-      - name: "Archive binary"
-        run: |
-          TARGET=aarch64-apple-darwin
-          mv dist minot-$TARGET
-          tar czvf minot-$TARGET.tar.gz minot-$TARGET
-          shasum -a 256 minot-$TARGET.tar.gz > minot-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-aarch64-apple-darwin
-          path: |
-            *.tar.gz
-            *.sha256
+          path: out/*
 
   # -------------------------------------------------------------------------
-  # ROS TARGETS (Lyrical / Jazzy / Humble)
-  # Builds: default Minot (coord + mt-pubsub) and ROS-specific Minot variants
+  # ROS TARGETS (Jazzy / Humble)
+  # Builds: ROS-specific Minot variants. The winds are not shipped, build them from source.
   # -------------------------------------------------------------------------
 
   jazzy-linux-x86_64-gnu:
@@ -395,7 +313,7 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
           apt-get update --assume-yes && apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
 
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
@@ -403,30 +321,18 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          mkdir -p out
 
-          # Feature: embed-ros2-c
           $CARGO_CMD --package minot --bin minot --no-default-features --features embed-coord,embed-ros2-c,db3
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
+          cp target/$RUST_TARGET/full-release/minot "out/minot-jazzy-$RUST_TARGET"
 
-          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
+          (cd out && for f in minot-*; do shasum -a 256 "$f" > "$f.sha256"; done)
 
-          # Copy root artifacts
-          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
-
-      - name: "Archive binary"
-        run: |
-          TARGET=x86_64-unknown-linux-gnu
-          mv dist minot-jazzy-$TARGET
-          tar czvf minot-jazzy-$TARGET.tar.gz minot-jazzy-$TARGET
-          shasum -a 256 minot-jazzy-$TARGET.tar.gz > minot-jazzy-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-jazzy-x86_64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
+          path: out/*
 
   deb-jazzy-amd64:
     runs-on: ubuntu-dev-resolute
@@ -634,7 +540,7 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
           apt-get update --assume-yes && apt-get install ros-dev-tools ros-jazzy-ros-base --assume-yes
 
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
           CARGO_PROFILE_FULL_RELEASE_LTO: thin
@@ -644,28 +550,18 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          mkdir -p out
 
           $CARGO_CMD --package minot --bin minot --no-default-features --features embed-coord,embed-ros2-c,db3
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
+          cp target/$RUST_TARGET/full-release/minot "out/minot-jazzy-$RUST_TARGET"
 
-          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c
+          (cd out && for f in minot-*; do shasum -a 256 "$f" > "$f.sha256"; done)
 
-          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
-
-      - name: "Archive binary"
-        run: |
-          TARGET=aarch64-unknown-linux-gnu
-          mv dist minot-jazzy-$TARGET
-          tar czvf minot-jazzy-$TARGET.tar.gz minot-jazzy-$TARGET
-          shasum -a 256 minot-jazzy-$TARGET.tar.gz > minot-jazzy-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-jazzy-aarch64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
+          path: out/*
 
   humble-linux-x86_64-gnu:
     runs-on: ubuntu-dev-resolute
@@ -688,7 +584,7 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
           apt-get update --assume-yes && apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
 
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: x86_64-unknown-linux-gnu
         run: |
@@ -696,36 +592,21 @@ jobs:
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          mkdir -p out
 
           $CARGO_CMD --package minot --bin minot --no-default-features --features embed-coord,embed-ros2-c-humble,db3
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
+          cp target/$RUST_TARGET/full-release/minot "out/minot-humble-$RUST_TARGET"
 
-          # 3. ROS2 + ROS1 Combined (ros2_1)
-          # Feature: embed-ros2-c-humble,embed-ros1-native
           $CARGO_CMD --package minot --bin minot --no-default-features --features embed-coord,embed-ros2-c-humble,embed-ros1-native,db3
-          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/full-release/minot dist/ros2_1/
+          cp target/$RUST_TARGET/full-release/minot "out/minot-humble-ros1-$RUST_TARGET"
 
-          # 4. Sidecars (wind-ros2-c, wind-ros1-native)
-          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
-          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
+          (cd out && for f in minot-*; do shasum -a 256 "$f" > "$f.sha256"; done)
 
-          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
-          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
-
-      - name: "Archive binary"
-        run: |
-          TARGET=x86_64-unknown-linux-gnu
-          mv dist minot-humble-$TARGET
-          tar czvf minot-humble-$TARGET.tar.gz minot-humble-$TARGET
-          shasum -a 256 minot-humble-$TARGET.tar.gz > minot-humble-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-humble-x86_64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
+          path: out/*
 
   humble-linux-aarch64-gnu:
     runs-on: ubuntu-latest-arm
@@ -748,7 +629,7 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
           apt-get update --assume-yes && apt-get install ros-dev-tools ros-humble-ros-base --assume-yes
 
-      - name: Build Variants
+      - name: Build
         env:
           RUST_TARGET: aarch64-unknown-linux-gnu
           CARGO_PROFILE_FULL_RELEASE_LTO: thin
@@ -758,122 +639,21 @@ jobs:
           source /opt/ros/humble/setup.bash
           rustup target add $RUST_TARGET
           CARGO_CMD="cargo build --target $RUST_TARGET --profile full-release"
+          mkdir -p out
 
           $CARGO_CMD --package minot --bin minot --no-default-features --features embed-coord,embed-ros2-c-humble,db3
-          mkdir -p dist/ros2 && cp target/$RUST_TARGET/full-release/minot dist/ros2/
+          cp target/$RUST_TARGET/full-release/minot "out/minot-humble-$RUST_TARGET"
 
           $CARGO_CMD --package minot --bin minot --no-default-features --features embed-coord,embed-ros2-c-humble,embed-ros1-native,db3
-          mkdir -p dist/ros2_1 && cp target/$RUST_TARGET/full-release/minot dist/ros2_1/
+          cp target/$RUST_TARGET/full-release/minot "out/minot-humble-ros1-$RUST_TARGET"
 
-          $CARGO_CMD --package mt_wind --bin wind-ros2-c --features ros2-c,humble
-          $CARGO_CMD --package mt_wind --bin wind-ros1-native --features ros1-native
+          (cd out && for f in minot-*; do shasum -a 256 "$f" > "$f.sha256"; done)
 
-          cp target/$RUST_TARGET/full-release/wind-ros2-c dist/
-          cp target/$RUST_TARGET/full-release/wind-ros1-native dist/
-
-      - name: "Archive binary"
-        run: |
-          TARGET=aarch64-unknown-linux-gnu
-          mv dist minot-humble-$TARGET
-          tar czvf minot-humble-$TARGET.tar.gz minot-humble-$TARGET
-          shasum -a 256 minot-humble-$TARGET.tar.gz > minot-humble-$TARGET.tar.gz.sha256
-
-      - name: "Upload binary"
+      - name: "Upload binaries"
         uses: actions/upload-artifact@v3
         with:
           name: artifacts-humble-aarch64-unknown-linux-gnu
-          path: |
-            *.tar.gz
-            *.sha256
-
-  generate-manifest:
-    runs-on: ubuntu-dev-resolute
-    needs:
-      [
-        macos-aarch64,
-        linux-x86_64-musl,
-        linux-aarch64-gnu,
-        linux-armv7-gnu,
-        linux-x86_64-gnu,
-        jazzy-linux-x86_64-gnu,
-        humble-linux-x86_64-gnu,
-        humble-linux-aarch64-gnu,
-        jazzy-linux-aarch64-gnu,
-      ]
-    steps:
-      - name: Generate feature manifest
-        run: |
-          cat > manifest.json <<'EOF'
-          {
-            "description": "Feature manifest for Minot releases. Each archive contains minot variants in subdirectories and shared artifacts in root.",
-            "subdirs": {
-              "min": "Default Minot (embed-coord, embed-mt-pubsub)",
-              "ros2": "Coord + ROS2-C (embed-coord, embed-ros2-c or embed-ros2-c-humble)",
-              "ros2_1": "Coord + ROS2-C + ROS1 (embed-coord, embed-ros2-c-humble, embed-ros1-native)"
-            },
-            "targets": {
-              "minot-x86_64-unknown-linux-musl": {
-                "subdirs": ["min"],
-                "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["wind-mt-pubsub", "wind-ros2-native", "librat.a", "rat.h"]
-              },
-              "minot-x86_64-unknown-linux-gnu": {
-                "subdirs": ["min"],
-                "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["wind-mt-pubsub", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
-              },
-              "minot-aarch64-unknown-linux-gnu": {
-                "subdirs": ["min"],
-                "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["wind-mt-pubsub", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.so", "rat.h"]
-              },
-              "minot-armv7-unknown-linux-gnueabihf": {
-                "subdirs": ["min"],
-                "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["wind-mt-pubsub", "librat.a", "librat.so", "rat.h"]
-              },
-              "minot-aarch64-apple-darwin": {
-                "subdirs": ["min"],
-                "features": ["embed-coord", "embed-mt-pubsub"],
-                "root_artifacts": ["wind-mt-pubsub", "wind-ros2-native", "wind-ros1-native", "librat.a", "librat.dylib", "rat.h"]
-              },
-              "minot-jazzy-x86_64-unknown-linux-gnu": {
-                "subdirs": ["ros2"],
-                "features": ["embed-coord", "embed-ros2-c"],
-                "ros_distro": "jazzy",
-                "root_artifacts": ["wind-ros2-c"],
-                "requires_base_target": "minot-x86_64-unknown-linux-gnu"
-              },
-              "minot-jazzy-aarch64-unknown-linux-gnu": {
-                "subdirs": ["ros2"],
-                "features": ["embed-coord", "embed-ros2-c"],
-                "ros_distro": "jazzy",
-                "root_artifacts": ["wind-ros2-c"],
-                "requires_base_target": "minot-aarch64-unknown-linux-gnu"
-              },
-              "minot-humble-x86_64-unknown-linux-gnu": {
-                "subdirs": ["ros2", "ros2_1"],
-                "features": ["embed-coord", "embed-ros2-c-humble", "embed-ros1-native"],
-                "ros_distro": "humble",
-                "root_artifacts": ["wind-ros2-c", "wind-ros1-native"],
-                "requires_base_target": "minot-x86_64-unknown-linux-gnu"
-              },
-              "minot-humble-aarch64-unknown-linux-gnu": {
-                "subdirs": ["ros2", "ros2_1"],
-                "features": ["embed-coord", "embed-ros2-c-humble", "embed-ros1-native"],
-                "ros_distro": "humble",
-                "root_artifacts": ["wind-ros2-c", "wind-ros1-native"],
-                "requires_base_target": "minot-aarch64-unknown-linux-gnu"
-              }
-            }
-          }
-          EOF
-          cat manifest.json
-      - name: Upload manifest
-        uses: actions/upload-artifact@v3
-        with:
-          name: manifest
-          path: manifest.json
+          path: out/*
 
   linux-pypi:
     runs-on: ubuntu-dev-resolute
@@ -971,7 +751,15 @@ jobs:
   create-release:
     runs-on: ubuntu-dev-resolute
     needs: [
-        generate-manifest,
+        linux-x86_64-musl,
+        linux-x86_64-gnu,
+        linux-aarch64-gnu,
+        linux-armv7-gnu,
+        macos-aarch64,
+        jazzy-linux-x86_64-gnu,
+        jazzy-linux-aarch64-gnu,
+        humble-linux-x86_64-gnu,
+        humble-linux-aarch64-gnu,
         deb-humble-amd64,
         deb-humble-arm64,
         deb-jazzy-amd64,
@@ -1018,8 +806,9 @@ jobs:
             --note "Release ${TAG}
 
           ### Artifacts
-          - Binary archives for Linux and macOS
-          - Debian packages published to the UOS PPA
+          - \`minot-<target>\` binaries for Linux and macOS, plus ROS variants (\`minot-jazzy-*\`, \`minot-humble-*\`, \`minot-humble-ros1-*\`)
+          - The rat library as \`librat-<target>.{a,so,dylib}\` with \`rat.h\`, \`librat.pc\` and \`libratConfig.cmake\`
+          - Debian packages published to the steado PPA
           - Python wheels published to PyPI" \
             ${ASSET_FLAGS}
 
@@ -1055,68 +844,18 @@ jobs:
 
           echo "Published to PyPI."
 
-  humble-release-uos-ppa:
-    runs-on: ubuntu-dev-resolute
-    needs: [create-release, deb-humble-arm64, deb-humble-amd64]
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: artifacts
-      - name: Push to PPA
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "jammy"
-          DEB_PATH: "artifacts/artifacts-deb-humble-*/*.deb"
-        run: |
-          set -euo pipefail
-          apt-get update && apt-get install -y openssh-client
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s" bin
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-
-          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
-          VERSION="${VERSION#v}"
-          mkdir -p bin
-          for target in \
-            x86_64-unknown-linux-gnu \
-            x86_64-unknown-linux-musl \
-            aarch64-unknown-linux-gnu \
-            armv7-unknown-linux-gnueabihf \
-            aarch64-apple-darwin; do
-            archive=$(find ../artifacts -type f -name "minot-${target}.tar.gz" -print -quit)
-            if [ -z "$archive" ]; then
-              echo "Missing default binary archive for ${target}" >&2
-              exit 1
-            fi
-            cp "$archive" "bin/minot-${VERSION}-${target}.tar.gz"
-          done
-          git add bin/
-          git config --global user.email $(git log -1 --pretty=format:'%ae')
-          git config --global user.name $(git log -1 --pretty=format:'%an')
-          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
-          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
-          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
-          git push origin pages
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
-
-  jazzy-release-uos-ppa:
+  release-ppa:
     runs-on: ubuntu-dev-resolute
     needs:
-      [create-release, deb-jazzy-arm64, deb-jazzy-amd64, humble-release-uos-ppa]
+      [
+        create-release,
+        deb-humble-amd64,
+        deb-humble-arm64,
+        deb-jazzy-amd64,
+        deb-jazzy-arm64,
+        deb-lyrical,
+        ppa-minot-rat-debs,
+      ]
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v3
@@ -1126,77 +865,40 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "noble"
-          DEB_PATH: "artifacts/artifacts-deb-jazzy-*/*.deb"
         run: |
-          sleep 120 # ensure previous PPA pushes are processed before and CI did run
-          set -euo pipefail
-          apt-get update && apt-get install -y openssh-client
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git config --global user.email $(git log -1 --pretty=format:'%ae')
-          git config --global user.name $(git log -1 --pretty=format:'%an')
-          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
-          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
-          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
-          git push origin pages
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
-
-  lyrical-release-uos-ppa:
-    runs-on: ubuntu-dev-resolute
-    needs: [create-release, deb-lyrical, jazzy-release-uos-ppa]
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: artifacts
-      - name: Push to PPA
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "resolute"
-          DEB_PATH: "artifacts/artifacts-deb-lyrical-*/*.deb"
-        run: |
-          sleep 120 # ensure previous PPA pushes are processed before and CI did run
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends openssh-client
-          command -v ssh-keyscan
+          apt-get install -y --no-install-recommends openssh-client rsync
+
+          # Humble builds target jammy, Jazzy noble and Lyrical resolute. The minot-rat debs exist
+          # for jammy and noble.
+          add_debs() {
+            local series="$1"
+            shift
+            local debs=()
+            for pattern in "$@"; do
+              mapfile -t -O "${#debs[@]}" debs < <(find artifacts -path "artifacts/${pattern}" -type f)
+            done
+            if [ "${#debs[@]}" -eq 0 ]; then
+              echo "No debs found for ${series}" >&2
+              exit 1
+            fi
+            mkdir -p "upload/ubuntu/pool/main/${series}"
+            cp "${debs[@]}" "upload/ubuntu/pool/main/${series}/"
+          }
+          add_debs jammy "artifacts-deb-humble-*/*.deb" "artifacts-ppa-minot-rat-jammy-*/*.deb"
+          add_debs noble "artifacts-deb-jazzy-*/*.deb" "artifacts-ppa-minot-rat-noble-*/*.deb"
+          add_debs resolute "artifacts-deb-lyrical-*/*.deb"
+
+          # The server prunes old versions and signs the apt metadata.
           mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          for s in $SERIES; do
-            git sparse-checkout set "ubuntu/pool/main/$s"
-            mkdir -p "ubuntu/pool/main/$s"
-            cp ../$DEB_PATH "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git config --global user.email $(git log -1 --pretty=format:'%ae')
-          git config --global user.name $(git log -1 --pretty=format:'%an')
-          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
-          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
-          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
-          git push origin pages
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/ppa_key
+          chmod 600 ~/.ssh/ppa_key
+          echo "[ppa.steado.tech]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvqpiJdvk+zuDXcjOgNdA3p98+6L7MAnhOEOLrw4phX" > ~/.ssh/ppa_known_hosts
+          PPA_SSH="ssh -i $HOME/.ssh/ppa_key -p 2222 -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/ppa_known_hosts -o StrictHostKeyChecking=yes"
+          rsync -rt --chmod=F644,D755 -e "$PPA_SSH" upload/ ppa@ppa.steado.tech:
+          $PPA_SSH ppa@ppa.steado.tech publish
+          shred -u ~/.ssh/ppa_key || rm -f ~/.ssh/ppa_key
 
   aur-publish-src:
     runs-on: ubuntu-dev-resolute
@@ -1287,14 +989,31 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: artifacts-aarch64-apple-darwin
-      - name: Compute checksum and update formula
+          path: macos
+      # rat.h, librat.pc and libratConfig.cmake are uploaded once, by the x86_64 GNU build.
+      - name: Download shared rat files
+        uses: actions/download-artifact@v3
+        with:
+          name: artifacts-x86_64-unknown-linux-gnu
+          path: shared
+      - name: Compute checksums and update formula
         run: |
+          set -euo pipefail
           VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
           VERSION="${VERSION#v}"
-          ARM_SHA=$(sha256sum minot-aarch64-apple-darwin.tar.gz | awk '{print $1}')
-          sed "s/VERSION_PLACEHOLDER/${VERSION}/g; \
-               s/ARM_SHA256_PLACEHOLDER/${ARM_SHA}/g" \
+          sha() { sha256sum "$1" | awk '{print $1}'; }
+          sed -e "s/VERSION_PLACEHOLDER/${VERSION}/g" \
+              -e "s/MINOT_SHA256_PLACEHOLDER/$(sha macos/minot-aarch64-apple-darwin)/g" \
+              -e "s/LIBRAT_A_SHA256_PLACEHOLDER/$(sha macos/librat-aarch64-apple-darwin.a)/g" \
+              -e "s/LIBRAT_DYLIB_SHA256_PLACEHOLDER/$(sha macos/librat-aarch64-apple-darwin.dylib)/g" \
+              -e "s/RAT_H_SHA256_PLACEHOLDER/$(sha shared/rat.h)/g" \
+              -e "s/LIBRAT_PC_SHA256_PLACEHOLDER/$(sha shared/librat.pc)/g" \
+              -e "s/LIBRAT_CMAKE_SHA256_PLACEHOLDER/$(sha shared/libratConfig.cmake)/g" \
             packaging/homebrew/minot.rb > minot.rb
+          if grep -q "_PLACEHOLDER" minot.rb; then
+            echo "Unreplaced placeholder in minot.rb" >&2
+            exit 1
+          fi
       - name: Push to Homebrew tap
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -1333,48 +1052,3 @@ jobs:
         run: |
           set -euo pipefail
           bash ./scripts/cargo-publish.sh
-
-  minot-rat-release-uos-ppa:
-    runs-on: ubuntu-dev-resolute
-    needs: [lyrical-release-uos-ppa, ppa-minot-rat-debs]
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: ppa-debs
-      - name: Push to PPA
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
-          SERIES: "jammy noble"
-        run: |
-          sleep 300 # ensure previous PPA pushes are processed before and CI did run
-          set -euo pipefail
-          apt-get update && apt-get install -y openssh-client
-          mkdir -p ~/.ssh
-          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
-          git clone --depth 1 --filter=blob:none --sparse ssh://git@codeberg.org/uos-robotics/ppa.git ppa
-          cd ppa
-          git sparse-checkout init --cone
-          git sparse-checkout set ubuntu/pool/main/jammy ubuntu/pool/main/noble
-          for s in $SERIES; do
-            mkdir -p "ubuntu/pool/main/$s"
-            mapfile -t debs < <(find ../ppa-debs -path "../ppa-debs/artifacts-ppa-minot-rat-$s-*/*.deb" -type f)
-            if [ "${#debs[@]}" -eq 0 ]; then
-              echo "No PPA debs found for $s"
-              exit 1
-            fi
-            cp "${debs[@]}" "ubuntu/pool/main/$s/"
-            git add "ubuntu/pool/main/$s/"*.deb || true
-          done
-          git config --global user.email $(git log -1 --pretty=format:'%ae')
-          git config --global user.name $(git log -1 --pretty=format:'%an')
-          REPO_NAME="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
-          COMMIT_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}"
-          git commit -m "ci: add deb(s) from $REPO_NAME@$COMMIT_SHA" || echo "No changes"
-          git push origin pages
-          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
-          cd ..

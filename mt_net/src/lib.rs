@@ -1,6 +1,7 @@
 pub use ros2_interfaces_jazzy_rkyv::nav_msgs::msg::Odometry;
 pub use ros2_interfaces_jazzy_rkyv::rosgraph_msgs::msg::Clock;
 pub use ros2_interfaces_jazzy_rkyv::sensor_msgs::msg::{Imu, PointCloud2};
+pub use ros2_interfaces_jazzy_rkyv::tf2_msgs::msg::TFMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -160,6 +161,8 @@ pub enum SensorTypeMapped {
     Odometry(Odometry),
     Clock(Clock),
     Any(Vec<u8>),
+    // Appended last so older peers still decode every other variant.
+    Tf(TFMessage),
 }
 
 #[derive(Clone, Debug, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]

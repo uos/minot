@@ -1,23 +1,25 @@
-# Raw Archives
+# Release Binaries
 
-Binaries for common system configurations are available [via Codeberg Releases](https://codeberg.org/stelzo/minot/releases).
+Every [Codeberg Release](https://codeberg.org/stelzo/minot/releases) contains the following files, each with a matching `.sha256` next to it.
 
-The `minot-$ROS_DISTRO-*` archives are tied to the named ROS 2 distribution and
-only contain ROS-specific binaries. The installer verifies that the matching
-ROS environment is available before using one:
+**Minot** as a single binary per target:
 
-- `minot` sync + coordinator + ROS2 Publisher (with any-type)
-- `wind-ros2-c` Standalone ROS2 Publisher (with any-type)
+- `minot-<target>` sync + coordinator (`minot coord`) + MtPubSub publisher, for `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf` and `aarch64-apple-darwin`
+- `minot-jazzy-<target>` and `minot-humble-<target>` sync + coordinator + ROS2 publisher (with any-type), for `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`
+- `minot-humble-ros1-<target>` the same as `minot-humble-<target>` plus a ROS1 publisher
+
+The ROS builds are tied to the named ROS 2 distribution. The installer checks that the matching ROS environment is available before using one.
 
 !!! note "Publishing custom and any-type messages"
 
     Publishing any-type messages from a Bagfile (like `ros2 bag play`) needs the ROS2 C implementation to be linked to the message. When building the Rust bindings, it will link with every message in your `$PATH`. So if you use custom messages, you want to build Minot after you sourced your new message.
 
-Archives not specific to a ROS distribution contain builds that can be used independently.
+**The rat library** for [Variable Sharing](librat.md) in C and C++:
 
-- `minot` sync + coordinator (`minot coord`) + MtPubSub publisher
-- `wind-mt-pubsub` Standalone MtPubSub publisher
-- `librat.*, rat.h` C libraries for Variable Sharing
-- `wind-ros*-native` ROS Publisher using [roslibrust](https://crates.io/crates/roslibrust) for ROS1 and [ros2-client](https://crates.io/crates/ros2-client) for ROS2
+- `librat-<target>.a` static library, for every target above that is not ROS specific
+- `librat-<target>.so` (Linux GNU) or `librat-<target>.dylib` (macOS) shared library
+- `rat.h`, `librat.pc` and `libratConfig.cmake`, the same for every target
 
-While the prebuilt binaries cover many common use cases, you may need to build Minot from source to tailor it to your specific needs. Building from source requires the [Rust toolchain](https://www.rust-lang.org/tools/install) to be installed on your system.
+The [installation script](script.md) installs these files with `--with-rat`.
+
+The standalone bagfile publishers are not part of the releases. [Build them from source](publisher.md) if you need them. For anything the prebuilt binaries do not cover, build Minot from source, which requires the [Rust toolchain](https://www.rust-lang.org/tools/install).

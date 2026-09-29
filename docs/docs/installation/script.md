@@ -30,6 +30,8 @@ If the command could not be found, add your local binary folder to your `$PATH`:
 
 **Script Usage:**
 
+Prebuilt binaries exist for the default build and for ROS 2 Jazzy and Humble (see [Release Binaries](archives.md)). Everything else is built from source.
+
 Use the `--ros-distro` option to select the matching prebuilt ROS 2 release or
 the publisher bindings to embed when building from source:
 
@@ -43,6 +45,8 @@ Use the `--embed` option to specify which components to embed when building from
 - `mt_pubsub` - MtPubSub publisher (default non-ROS backend)
 - `ros1-native` - ROS1 publisher (native, no system dependencies)
 - `ros2-native` - ROS2 publisher with RustDDS (native, no system dependencies)
+
+Use `--with-rat` to also install the [rat library](librat.md) (`librat`, `rat.h`, pkg-config and CMake files) next to the binary.
 
 ~~~bash title="Script arguments"
 curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --help

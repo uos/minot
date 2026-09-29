@@ -55,6 +55,7 @@ pub async fn run_dyn_wind(
     let mut cloud_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
+    let mut tf_publishers = HashMap::new();
     let mut any_type_warned = false;
     let mut clock_warned = false;
     if ready.send(()).is_err() {
@@ -98,6 +99,32 @@ pub async fn run_dyn_wind(
                         existing_pubber.expect("Should be inserted manually if not exists.");
                     pubber.publish(&imu_msg).await?;
                     debug!("published imu");
+                }
+                SensorTypeMapped::Tf(tf_msg) => {
+                    let mut existing_pubber = tf_publishers.get(&data.topic);
+                    if existing_pubber.is_none() {
+                        // Keep latched topics like /tf_static latched for late subscribers.
+                        let transient_local = matches!(
+                            &data.qos,
+                            Some(mt_net::Qos::Custom(profile)) if profile.durability == "transient_local"
+                        );
+                        let qos = if transient_local {
+                            Qos::Reliable.transient_local()
+                        } else {
+                            Qos::Reliable
+                        };
+                        let pubber = node.create_publisher(data.topic.clone(), qos).await?;
+                        tf_publishers.insert(data.topic.clone(), pubber);
+                        existing_pubber = Some(
+                            tf_publishers
+                                .get(&data.topic)
+                                .expect("Just inserted the line before"),
+                        );
+                    }
+                    let pubber =
+                        existing_pubber.expect("Should be inserted manually if not exists.");
+                    pubber.publish(&tf_msg).await?;
+                    debug!("published tf");
                 }
                 SensorTypeMapped::Any(_) => {
                     if !any_type_warned {

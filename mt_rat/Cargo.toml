@@ -31,10 +31,10 @@ rand.workspace = true
 [lib]
 name = "rat"
 crate-type = [
-  "dylib",
-  "rlib",      # needed when building the example
+  "cdylib",    # C shared library (librat.so / librat.dylib)
+  "rlib",      # needed when building the example and for Rust users
   "staticlib",
-] # use as crate on rust and as static library on C++
+] # use as crate on rust and as static or shared library on C/C++
 
 [package.metadata.deb]
 name = "librat-dev"

@@ -9,7 +9,8 @@ use r2r::{
     WrappedTypesupport,
     builtin_interfaces::msg::Time,
     geometry_msgs::msg::{
-        Point, Pose, PoseWithCovariance, Quaternion, Twist, TwistWithCovariance, Vector3,
+        Point, Pose, PoseWithCovariance, Quaternion, Transform, TransformStamped, Twist,
+        TwistWithCovariance, Vector3,
     },
     qos::{DurabilityPolicy, HistoryPolicy, LivelinessPolicy, ReliabilityPolicy},
     sensor_msgs::msg::PointField,
@@ -24,6 +25,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use r2r::nav_msgs::msg::Odometry;
 use r2r::rosgraph_msgs::msg::Clock;
 use r2r::sensor_msgs::msg::{Imu, PointCloud2};
+use r2r::tf2_msgs::msg::TFMessage;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
     let kind = ShipKind::Wind(name.to_string());
@@ -289,6 +291,43 @@ pub async fn run_dyn_wind(
 
                     pubber.publish_raw(&raw)?;
                     debug!("published imu");
+                }
+                mt_net::SensorTypeMapped::Tf(tf_msg) => {
+                    let native_t = TFMessage {
+                        transforms: tf_msg
+                            .transforms
+                            .into_iter()
+                            .map(|t| TransformStamped {
+                                header: Header {
+                                    stamp: Time {
+                                        sec: t.header.stamp.sec,
+                                        nanosec: t.header.stamp.nanosec,
+                                    },
+                                    frame_id: t.header.frame_id,
+                                },
+                                child_frame_id: t.child_frame_id,
+                                transform: Transform {
+                                    translation: Vector3 {
+                                        x: t.transform.translation.x,
+                                        y: t.transform.translation.y,
+                                        z: t.transform.translation.z,
+                                    },
+                                    rotation: Quaternion {
+                                        x: t.transform.rotation.x,
+                                        y: t.transform.rotation.y,
+                                        z: t.transform.rotation.z,
+                                        w: t.transform.rotation.w,
+                                    },
+                                },
+                            })
+                            .collect(),
+                    };
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding CDR")?;
+
+                    pubber.publish_raw(&raw)?;
+                    debug!("published tf");
                 }
                 mt_net::SensorTypeMapped::Any(raw_data) => {
                     pubber.publish_raw(&raw_data)?;

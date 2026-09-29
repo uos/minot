@@ -15,12 +15,14 @@ use hiroz::{
 use hiroz_msgs::{
     builtin_interfaces::Time,
     geometry_msgs::{
-        Point, Pose, PoseWithCovariance, Quaternion, Twist, TwistWithCovariance, Vector3,
+        Point, Pose, PoseWithCovariance, Quaternion, Transform, TransformStamped, Twist,
+        TwistWithCovariance, Vector3,
     },
     nav_msgs::Odometry,
     rosgraph_msgs::Clock,
     sensor_msgs::{Imu, PointCloud2, PointField},
     std_msgs::Header,
+    tf2_msgs::TFMessage,
 };
 use log::{error, info, warn};
 use mt_bagread::qos::{
@@ -289,6 +291,7 @@ pub async fn run_dyn_wind(
     let mut imu_publishers: HashMap<(String, String), HirozPub<Imu>> = HashMap::new();
     let mut odom_publishers: HashMap<(String, String), HirozPub<Odometry>> = HashMap::new();
     let mut clock_publishers: HashMap<(String, String), HirozPub<Clock>> = HashMap::new();
+    let mut tf_publishers: HashMap<(String, String), HirozPub<TFMessage>> = HashMap::new();
     let mut any_publishers: HashMap<(String, String, Option<String>), hiroz::dynamic::DynPub> =
         HashMap::new();
     let mut missing_qos_warned: HashSet<(String, String)> = HashSet::new();
@@ -394,6 +397,26 @@ pub async fn run_dyn_wind(
 
                     pubber
                         .async_publish(&clock_msg(clock))
+                        .await
+                        .map_err(|e| anyhow!("{e}"))?;
+                }
+                mt_net::SensorTypeMapped::Tf(tf) => {
+                    if !tf_publishers.contains_key(&publisher_key) {
+                        let mut builder = node.create_pub::<TFMessage>(&data.topic);
+                        if let Some(qos) = qos {
+                            builder = builder.with_qos(qos);
+                        }
+                        tf_publishers.insert(
+                            publisher_key.clone(),
+                            builder.build().map_err(|e| anyhow!("{e}"))?,
+                        );
+                    }
+                    let pubber = tf_publishers
+                        .get(&publisher_key)
+                        .expect("Publisher exists or was just inserted");
+
+                    pubber
+                        .async_publish(&tf_message_msg(tf))
                         .await
                         .map_err(|e| anyhow!("{e}"))?;
                 }
@@ -529,6 +552,23 @@ fn odometry_msg(msg: ros2_interfaces_jazzy_rkyv::nav_msgs::msg::Odometry) -> Odo
             },
             covariance: msg.twist.covariance,
         },
+    }
+}
+
+fn tf_message_msg(msg: ros2_interfaces_jazzy_rkyv::tf2_msgs::msg::TFMessage) -> TFMessage {
+    TFMessage {
+        transforms: msg
+            .transforms
+            .into_iter()
+            .map(|t| TransformStamped {
+                header: header_msg(t.header),
+                child_frame_id: t.child_frame_id,
+                transform: Transform {
+                    translation: vector3_msg(t.transform.translation),
+                    rotation: quaternion_msg(t.transform.rotation),
+                },
+            })
+            .collect(),
     }
 }
 
