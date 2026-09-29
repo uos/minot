@@ -21,6 +21,7 @@
   <build_depend>sensor_msgs</build_depend>
   <build_depend>nav_msgs</build_depend>
   <build_depend>rosgraph_msgs</build_depend>
+  <build_depend>tf2_msgs</build_depend>
 
   <exec_depend>rcl</exec_depend>
   <exec_depend>rcl_action</exec_depend>
@@ -30,6 +31,7 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
