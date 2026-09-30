@@ -46,22 +46,82 @@ fn catalog_path() -> Result<PathBuf> {
 }
 
 pub fn load_catalog() -> Result<Catalog> {
+    load_catalog_at(&catalog_path()?)
+}
+
+/// Replaces the whole catalog on disk.
+///
+/// This overwrites entries that another process added since `catalog` was
+/// loaded. Use [`update_catalog`] to add or remove entries.
+pub fn save_catalog(catalog: &Catalog) -> Result<()> {
     let path = catalog_path()?;
+    let _lock = lock_catalog(&path)?;
+    write_catalog_at(&path, catalog)
+}
+
+/// Applies `change` to the current catalog on disk and returns the result.
+///
+/// The catalog is re-read under an exclusive lock, so a change never drops
+/// entries that another process or task wrote after this one loaded its copy.
+/// Several pulls can therefore finish in any order. The new catalog is written
+/// to a temporary file and renamed into place, so a reader never sees a
+/// partially written file.
+pub fn update_catalog<T>(change: impl FnOnce(&mut Catalog) -> T) -> Result<(Catalog, T)> {
+    update_catalog_at(&catalog_path()?, change)
+}
+
+fn load_catalog_at(path: &Path) -> Result<Catalog> {
     if !path.exists() {
         return Ok(Catalog::default());
     }
 
     let content =
-        fs::read_to_string(&path).with_context(|| format!("failed reading {}", path.display()))?;
+        fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
     let parsed = serde_json::from_str(&content)
         .with_context(|| format!("failed parsing {}", path.display()))?;
     Ok(parsed)
 }
 
-pub fn save_catalog(catalog: &Catalog) -> Result<()> {
-    let path = catalog_path()?;
+fn update_catalog_at<T>(
+    path: &Path,
+    change: impl FnOnce(&mut Catalog) -> T,
+) -> Result<(Catalog, T)> {
+    let _lock = lock_catalog(path)?;
+    let mut catalog = load_catalog_at(path)?;
+    let result = change(&mut catalog);
+    write_catalog_at(path, &catalog)?;
+    Ok((catalog, result))
+}
+
+/// Takes the exclusive catalog lock, released when the returned file is dropped.
+fn lock_catalog(path: &Path) -> Result<fs::File> {
+    let lock_path = path.with_extension("json.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed opening {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("failed locking {}", lock_path.display()))?;
+    Ok(file)
+}
+
+fn write_catalog_at(path: &Path, catalog: &Catalog) -> Result<()> {
+    let dir = path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", path.display()))?;
     let text = serde_json::to_string_pretty(catalog)?;
-    fs::write(&path, text).with_context(|| format!("failed writing {}", path.display()))?;
+    let mut temp = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("failed creating a temporary file in {}", dir.display()))?;
+    // The temporary file removes itself when dropped. The guard also removes it
+    // on Ctrl-C or application exit, which skip that drop.
+    let temp_cleanup = crate::cleanup::register(temp.path().to_path_buf());
+    std::io::Write::write_all(&mut temp, text.as_bytes())?;
+    temp.as_file().sync_all()?;
+    temp.persist(path)
+        .with_context(|| format!("failed writing {}", path.display()))?;
+    temp_cleanup.keep();
     Ok(())
 }
 
@@ -125,17 +185,13 @@ pub fn commit_mirror_receive(bag: &BagRef) -> Result<PathBuf> {
         return Err(err).context("failed installing mirrored dataset");
     }
 
-    let mut catalog = load_catalog()?;
-    catalog.entries.insert(
-        bag.to_string(),
-        CacheEntry {
-            bag,
-            local_dir: ready_dir.clone(),
-            packed_bytes: 0,
-            bundle_hash: None,
-        },
-    );
-    if let Err(err) = save_catalog(&catalog) {
+    let entry = CacheEntry {
+        bag: bag.clone(),
+        local_dir: ready_dir.clone(),
+        packed_bytes: 0,
+        bundle_hash: None,
+    };
+    if let Err(err) = update_catalog(|catalog| catalog.entries.insert(bag.to_string(), entry)) {
         let _ = fs::remove_dir_all(&ready_dir);
         if backup_dir.exists() {
             let _ = fs::rename(&backup_dir, &ready_dir);
@@ -257,6 +313,48 @@ fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_updates_keep_every_entry() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("catalog.json");
+        // Every thread holds a stale copy, like a job that loaded the catalog
+        // before the others finished, and still must not drop their entries.
+        let stale = load_catalog_at(&path)?;
+        let threads: Vec<_> = (0..16)
+            .map(|index| {
+                let path = path.clone();
+                let mut stale = stale.clone();
+                std::thread::spawn(move || -> Result<()> {
+                    let bag: BagRef = format!("test/bag_{index}").parse()?;
+                    let entry = CacheEntry {
+                        bag: bag.clone(),
+                        local_dir: PathBuf::from(format!("/cache/{index}")),
+                        packed_bytes: index,
+                        bundle_hash: None,
+                    };
+                    stale.entries.insert(bag.to_string(), entry.clone());
+                    update_catalog_at(&path, |catalog| {
+                        catalog.entries.insert(bag.to_string(), entry)
+                    })?;
+                    Ok(())
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("update thread panicked")?;
+        }
+
+        let catalog = load_catalog_at(&path)?;
+        assert_eq!(catalog.entries.len(), 16);
+        let leftovers: Vec<_> = fs::read_dir(dir.path())?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "catalog.json" && name != "catalog.json.lock")
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
+        Ok(())
+    }
 
     #[test]
     fn mirror_manifest_is_sorted_and_hashes_contents() -> Result<()> {

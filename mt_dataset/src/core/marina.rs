@@ -565,16 +565,18 @@ impl Marina {
             }
         }
 
-        self.catalog.entries.insert(
-            bag.without_attachment().to_string(),
-            CacheEntry {
-                bag: bag.without_attachment(),
-                local_dir: ready_dir,
-                packed_bytes: packed_meta.packed_bytes,
-                bundle_hash: Some(push_meta.bundle_hash.clone()),
-            },
-        );
-        cache::save_catalog(&self.catalog)?;
+        let entry = CacheEntry {
+            bag: bag.without_attachment(),
+            local_dir: ready_dir,
+            packed_bytes: packed_meta.packed_bytes,
+            bundle_hash: Some(push_meta.bundle_hash.clone()),
+        };
+        self.catalog = cache::update_catalog(|catalog| {
+            catalog
+                .entries
+                .insert(bag.without_attachment().to_string(), entry)
+        })?
+        .0;
         progress.emit("push", "push complete");
         Ok(())
     }
@@ -704,9 +706,6 @@ impl Marina {
         let packed_file = cache_dir.join("bundle.remote.tar.gz");
         let ready_dir = cache_dir.join("ready");
 
-        // Keep partially downloaded bundles on interruption so future pulls can resume.
-        crate::cleanup::register(ready_dir.clone());
-
         let descriptor = driver.pull(&bag.without_attachment(), &packed_file).await?;
         let downloaded_bytes = fs::metadata(&packed_file)
             .with_context(|| format!("failed to stat {}", packed_file.display()))?
@@ -723,10 +722,13 @@ impl Marina {
         // Compute hash from the downloaded bundle so the catalog is always up to date.
         let remote_hash = compute_bundle_hash(&packed_file).ok();
 
+        // The downloaded bundle stays on interruption so a later pull can resume.
+        // Only the directory being unpacked is removed if the pull does not finish.
         if ready_dir.exists() {
             fs::remove_dir_all(&ready_dir)?;
         }
         fs::create_dir_all(&ready_dir)?;
+        let unpacking = crate::cleanup::register(ready_dir.clone());
         pack::unpack_bag_with_progress_and_options(
             &packed_file,
             &ready_dir,
@@ -738,17 +740,19 @@ impl Marina {
             progress,
         )?;
 
-        self.catalog.entries.insert(
-            bag.without_attachment().to_string(),
-            CacheEntry {
-                bag: bag.without_attachment(),
-                local_dir: ready_dir.clone(),
-                packed_bytes: descriptor.packed_bytes,
-                bundle_hash: remote_hash,
-            },
-        );
-        cache::save_catalog(&self.catalog)?;
-        crate::cleanup::commit();
+        let entry = CacheEntry {
+            bag: bag.without_attachment(),
+            local_dir: ready_dir.clone(),
+            packed_bytes: descriptor.packed_bytes,
+            bundle_hash: remote_hash,
+        };
+        self.catalog = cache::update_catalog(|catalog| {
+            catalog
+                .entries
+                .insert(bag.without_attachment().to_string(), entry)
+        })?
+        .0;
+        unpacking.keep();
         progress.emit("pull", "pull complete");
 
         Ok(ready_dir)
@@ -1195,7 +1199,9 @@ impl Marina {
     /// Removes one bag from local cache and catalog.
     pub fn remove_local(&mut self, bag: &BagRef) -> Result<()> {
         let key = bag.without_attachment().to_string();
-        if let Some(entry) = self.catalog.entries.remove(&key) {
+        let (catalog, removed) = cache::update_catalog(|catalog| catalog.entries.remove(&key))?;
+        self.catalog = catalog;
+        if let Some(entry) = removed {
             let root = cache::bag_cache_dir(&bag.without_attachment())?;
             // Delete local_dir only when it lives inside the Marina cache. Pushed bags
             // point at the original source directory and must not be deleted.
@@ -1205,7 +1211,6 @@ impl Marina {
             if root.exists() {
                 fs::remove_dir_all(root)?;
             }
-            cache::save_catalog(&self.catalog)?;
         }
         Ok(())
     }
@@ -1280,16 +1285,13 @@ impl Marina {
             }
         }
 
-        self.catalog.entries.insert(
-            key,
-            cache::CacheEntry {
-                bag,
-                local_dir: ready_dir.clone(),
-                packed_bytes: 0,
-                bundle_hash: None,
-            },
-        );
-        cache::save_catalog(&self.catalog)?;
+        let entry = cache::CacheEntry {
+            bag,
+            local_dir: ready_dir.clone(),
+            packed_bytes: 0,
+            bundle_hash: None,
+        };
+        self.catalog = cache::update_catalog(|catalog| catalog.entries.insert(key, entry))?.0;
         Ok(ready_dir)
     }
 
@@ -1297,8 +1299,7 @@ impl Marina {
     ///
     /// With `all = true`, also removes local registry configuration files.
     pub fn clean(&mut self, all: bool) -> Result<()> {
-        self.catalog.entries.clear();
-        cache::save_catalog(&self.catalog)?;
+        self.catalog = cache::update_catalog(|catalog| catalog.entries.clear())?.0;
         config::remove_local_state(all)?;
         Ok(())
     }
@@ -1546,6 +1547,9 @@ impl Marina {
             }
 
             let tmp_dir = mirror_tempdir().context("failed to create temp dir for mirror")?;
+            // The temporary directory removes itself when dropped. The guard also
+            // removes it on Ctrl-C or application exit, which skip that drop.
+            let _tmp_cleanup = crate::cleanup::register(tmp_dir.path().to_path_buf());
             let tmp_bundle = tmp_dir.path().join("bundle.marina");
             let mut bundle_path = tmp_bundle.clone();
 

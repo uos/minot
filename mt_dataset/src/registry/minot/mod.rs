@@ -822,6 +822,7 @@ impl RemoteDataset {
             std::fs::remove_dir_all(&staging)?;
         }
         std::fs::create_dir_all(&staging)?;
+        let staging_cleanup = crate::cleanup::register(staging.clone());
 
         for file in &self.files {
             let complete = block_store::completed_file(
@@ -857,18 +858,17 @@ impl RemoteDataset {
         }
         std::fs::rename(&staging, &ready)
             .with_context(|| format!("failed installing '{}'", self.bag))?;
+        staging_cleanup.keep();
 
-        let mut catalog = crate::storage::cache::load_catalog()?;
-        catalog.entries.insert(
-            self.bag.to_string(),
-            crate::storage::cache::CacheEntry {
-                bag: self.bag.clone(),
-                local_dir: ready.clone(),
-                packed_bytes: 0,
-                bundle_hash: Some(validity.to_string()),
-            },
-        );
-        crate::storage::cache::save_catalog(&catalog)?;
+        let entry = crate::storage::cache::CacheEntry {
+            bag: self.bag.clone(),
+            local_dir: ready.clone(),
+            packed_bytes: 0,
+            bundle_hash: Some(validity.to_string()),
+        };
+        crate::storage::cache::update_catalog(|catalog| {
+            catalog.entries.insert(self.bag.to_string(), entry)
+        })?;
 
         progress.emit("stream", format!("{} is now available locally", self.bag));
         Ok(ready)
