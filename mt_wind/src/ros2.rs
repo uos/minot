@@ -165,6 +165,7 @@ pub async fn run_dyn_wind(
                     Qos::default().into()
                 }
             };
+            let qos = ros2_client::QosProfile::from(&qos);
             let topic_parse = split_path(&data.topic);
             let wanted_topic = ros2_client::Name::new(&topic_parse.0, &topic_parse.1).unwrap();
             let (package_name, type_name) = split_package_type(&data.msg_type);

@@ -40,7 +40,7 @@ once_cell.workspace = true
 rust_decimal.workspace = true
 bytesize.workspace = true
 mt_coord = { workspace = true, features = ["embed-scope"] }
-syn = { version = "3.0.3", features = ["full", "extra-traits"] }
+syn = { version = "3.0.6", features = ["full", "extra-traits"] }
 heck = "0.5.0"
 
 [[bin]]

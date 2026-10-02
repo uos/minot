@@ -75,7 +75,7 @@ chrono = "0.4.45"
 tui-logger = "0.18.3"
 regex = "1.13"
 once_cell = "1.21"
-rust_decimal = "1.42.1"
+rust_decimal = "1.43.0"
 logos = "0.16.1"
 chumsky = { version = "0.13", default-features = false, features = ["std"] }
 ariadne = "0.6"
@@ -114,7 +114,7 @@ hiroz-msgs = { version = "0.2.0", default-features = false, features = [
   "rosgraph_msgs",
   "tf2_msgs",
 ] }
-ros2-client = { version = "0.10.0" }
+ros2-client = { version = "0.11.0" }
 ros2-interfaces-jazzy-serde = { version = "0.0.5", features = [
   "std_msgs",
   "geometry_msgs",
@@ -133,7 +133,7 @@ ros2-interfaces-jazzy-rkyv = { version = "0.0.5", features = [
   "builtin_interfaces",
   "tf2_msgs",
 ] }
-roslibrust = { version = "0.21", features = ["ros1", "macro"] }
+roslibrust = { version = "0.26", features = ["ros1", "macro"] }
 
 [profile.release]
 strip = "symbols" # Significantly reduce binary size

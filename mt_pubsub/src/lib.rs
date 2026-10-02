@@ -364,6 +364,19 @@ impl Node {
         queue_size: usize,
         mode: Qos,
     ) -> anyhow::Result<Subscriber<T>> {
+        // The receive buffer belongs to the node, not to a subscription.
+        // Samples that were still in flight when an earlier subscription to
+        // this topic went away are parked there, and a new subscription would
+        // otherwise start by delivering them, arbitrarily stale.
+        {
+            let client = self.ship.client.lock().await;
+            let mut buf = client.raw_recv_buff.write().unwrap();
+            buf.retain(|_, entries| {
+                entries.retain(|(_, _, name)| *name != topic);
+                !entries.is_empty()
+            });
+        }
+
         register_at_var(
             &self.ship,
             &self.name,
@@ -480,6 +493,11 @@ impl Node {
 
                     _ = shutdown.cancelled() => {
                         return; // drop tx → closes channel → subber.next() returns None
+                    }
+
+                    // The `Subscriber` was dropped (or unsubscribed).
+                    _ = tx.closed() => {
+                        return;
                     }
 
                     _ = be_error_token.cancelled() => {
