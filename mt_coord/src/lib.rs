@@ -70,6 +70,12 @@ enum MinotTask {
         var_name: String,
         data: ActionPlan,
     },
+    /// Answer a client's routing question when the loop reaches it, so the
+    /// answer reflects all earlier (un)registrations.
+    AnswerVariableTask {
+        asker: String,
+        var: String,
+    },
     WindDynamicVarReq(String),
     Unlock,
     RegisterShipAtVar {
@@ -297,6 +303,7 @@ fn run_coordinator_with_ready(
         let tasks_minot_connect = std::sync::Arc::clone(&minot_client_connected);
         let rules_change_for_disconnect = std::sync::Arc::clone(&rules_changer);
         let sub_overrides_for_disconnect = std::sync::Arc::clone(&coordinator.sub_qos_overrides);
+        let be_publishers_for_disconnect = std::sync::Arc::clone(&coordinator.be_publisher_vars);
         let cc_for_spawn = std::sync::Arc::clone(&connected_clients);
         let qos_for_spawn = std::sync::Arc::clone(&client_qos);
         let wind_clients_for_spawn = std::sync::Arc::clone(&wind_clients);
@@ -338,20 +345,20 @@ fn run_coordinator_with_ready(
                                     client.disconnect_timeout_ms,
                                 );
                                 let inner_name = name.clone();
-                                let rat_rules = std::sync::Arc::clone(&rules);
                                 let rat_coord_tx = coord_tx_new_client.clone();
                                 let winds_inner = std::sync::Arc::clone(&winds_changer);
                                 let rules_change_for_disconnect_inner =
                                     std::sync::Arc::clone(&rules_change_for_disconnect);
                                 let sub_overrides_for_disconnect_inner =
                                     std::sync::Arc::clone(&sub_overrides_for_disconnect);
+                                let be_publishers_for_disconnect_inner =
+                                    std::sync::Arc::clone(&be_publishers_for_disconnect);
                                 let connected_clients_inner = std::sync::Arc::clone(&cc_for_spawn);
                                 let client_qos_inner = std::sync::Arc::clone(&qos_for_spawn);
                                 let handlers_for_task = std::sync::Arc::clone(&client_handlers);
                                 let name_for_task = name.clone();
                                 // spawn task to handle variable requests for this rat
                                 let handle = tokio::spawn(async move {
-                                    let minot_compare_name = COMPARE_NODE_NAME.to_string();
                                     match inner_name.as_str() {
                                         COMPARE_NODE_NAME => loop {
                                             match recv_before_idle_timeout(
@@ -528,61 +535,12 @@ fn run_coordinator_with_ready(
                                                             PacketKind::VariableTaskRequest(
                                                                 variable,
                                                             ) => {
-                                                                let (minot_actions, mut my_actions) = {
-                                                                    let rat_rules_ref =
-                                                                        rat_rules.read().unwrap();
-
-                                                                    (
-                                                                        mt_sea::get_strategies(
-                                                                            &rat_rules_ref,
-                                                                            &minot_compare_name,
-                                                                            variable.clone(),
-                                                                            Some(&inner_name),
-                                                                        ),
-                                                                        mt_sea::get_strategies(
-                                                                            &rat_rules_ref,
-                                                                            &inner_name,
-                                                                            variable.clone(),
-                                                                            None,
-                                                                        ),
-                                                                    )
-                                                                };
-                                                                for action in minot_actions {
-                                                                    if !matches!(
-                                                                        action,
-                                                                        ActionPlan::Sail
-                                                                    ) {
-                                                                        rat_coord_tx.send(
-                                                                    MinotTask::SendRatAction {
-                                                                        ship_name: minot_compare_name
-                                                                            .clone(),
-                                                                        var_name: variable.clone(),
-                                                                        data: action,
-                                                                    },
-                                                                )
-                                                                .unwrap();
-                                                                    }
-                                                                }
-
-                                                                if my_actions.is_empty() {
-                                                                    my_actions
-                                                                        .push(ActionPlan::Sail);
-                                                                }
-
-                                                                debug!(
-                                                                    "sending actions: {:?}",
-                                                                    my_actions
-                                                                );
-
-                                                                // answer the client that asked
-                                                                for action in my_actions {
-                                                                    rat_coord_tx.send(MinotTask::SendRatAction {
-                                                                        ship_name: inner_name.clone(),
-                                                                        var_name: variable.clone(),
-                                                                        data: action,
+                                                                rat_coord_tx
+                                                                    .send(MinotTask::AnswerVariableTask {
+                                                                        asker: inner_name.clone(),
+                                                                        var: variable.clone(),
                                                                     })
                                                                     .unwrap();
-                                                                }
 
                                                                 let mut pending_fixed =
                                                                     Vec::<Vec<WindData>>::new();
@@ -797,6 +755,13 @@ fn run_coordinator_with_ready(
                                                                 .write()
                                                                 .unwrap()
                                                                 .remove_client(&inner_name);
+                                                            mt_sea::coordinator::remove_be_publisher(
+                                                                &mut be_publishers_for_disconnect_inner
+                                                                    .write()
+                                                                    .unwrap(),
+                                                                None,
+                                                                &inner_name,
+                                                            );
                                                         }
                                                         take_subscription_override_vars(
                                                             &mut sub_overrides_for_disconnect_inner
@@ -911,8 +876,52 @@ fn run_coordinator_with_ready(
         clients_collected_rx.recv().await;
 
         let mut lock_next = locked_start;
-        while let Some(task) = coord_rx.recv().await {
+        // Replies from `AnswerVariableTask`, sent before further queued tasks.
+        let mut immediate = std::collections::VecDeque::<MinotTask>::new();
+        loop {
+            let task = match immediate.pop_front() {
+                Some(task) => task,
+                None => match coord_rx.recv().await {
+                    Some(task) => task,
+                    None => break,
+                },
+            };
             match task {
+                MinotTask::AnswerVariableTask { asker, var } => {
+                    let (minot_actions, mut my_actions) = {
+                        let rules = rules_changer.read().unwrap();
+                        (
+                            mt_sea::get_strategies(
+                                &rules,
+                                COMPARE_NODE_NAME,
+                                var.clone(),
+                                Some(&asker),
+                            ),
+                            mt_sea::get_strategies(&rules, &asker, var.clone(), None),
+                        )
+                    };
+                    for action in minot_actions {
+                        if !matches!(action, ActionPlan::Sail) {
+                            immediate.push_back(MinotTask::SendRatAction {
+                                ship_name: COMPARE_NODE_NAME.to_owned(),
+                                var_name: var.clone(),
+                                data: action,
+                            });
+                        }
+                    }
+                    if my_actions.is_empty() {
+                        my_actions.push(ActionPlan::Sail);
+                    }
+                    debug!("sending actions: {:?}", my_actions);
+                    // answer the client that asked
+                    for action in my_actions {
+                        immediate.push_back(MinotTask::SendRatAction {
+                            ship_name: asker.clone(),
+                            var_name: var.clone(),
+                            data: action,
+                        });
+                    }
+                }
                 MinotTask::WindDynamicVarReq(var) => {
                     {
                         let minot_tui_connected = minot_client_connected.read().unwrap();
@@ -940,6 +949,7 @@ fn run_coordinator_with_ready(
                 MinotTask::RulesClear => {
                     let mut current_rules = rules_changer.write().unwrap();
                     current_rules.clear();
+                    coordinator.be_publisher_vars.write().unwrap().clear();
                     info!("cleared all rules");
                 }
                 MinotTask::LockNext { unlock_first } => {
@@ -1057,9 +1067,10 @@ fn run_coordinator_with_ready(
                             RatPubRegisterKind::Subscribe
                         }
                     };
-                    let removed = {
+                    let (removed, before) = {
                         let mut current_rules = rules_changer.write().unwrap();
-                        current_rules.unregister(&var, &ship, mt_net_kind.clone())
+                        let before = mt_sea::plan_routes_for_var(&current_rules, &var);
+                        (current_rules.unregister(&var, &ship, mt_net_kind.clone()), before)
                     };
                     if !removed {
                         debug!("Ship {ship} was not registered for var {var}, nothing to remove");
@@ -1076,12 +1087,20 @@ fn run_coordinator_with_ready(
                         .write()
                         .unwrap()
                         .remove(&(ship.clone(), var.clone()));
+                    if mt_net_kind == RatPubRegisterKind::Publish {
+                        mt_sea::coordinator::remove_be_publisher(
+                            &mut coordinator.be_publisher_vars.write().unwrap(),
+                            Some(&var),
+                            &ship,
+                        );
+                    }
                     info!(
                         "Unregistering from topics ({:?}, {:?}, {:?})",
                         &ship, &var, &mt_net_kind
                     );
-                    let rules_snapshot = rules_changer.read().unwrap().clone();
-                    if let Err(e) = coordinator.push_routes_for_var(&var, &rules_snapshot).await {
+                    let after = mt_sea::plan_routes_for_var(&rules_changer.read().unwrap(), &var);
+                    let plans = mt_sea::changed_routes(&before, after, None);
+                    if let Err(e) = coordinator.push_planned_routes(&var, plans).await {
                         error!("Failed to push routes after unregistering {var}: {e}");
                     }
                     let _ = coordinator
@@ -1098,11 +1117,11 @@ fn run_coordinator_with_ready(
                     if kind == net::RatPubRegisterKind::Publish
                         && node_mode.reliability_mode() == Reliability::BestEffort
                     {
-                        coordinator
-                            .be_publisher_vars
-                            .write()
-                            .unwrap()
-                            .insert(var.clone());
+                        mt_sea::coordinator::add_be_publisher(
+                            &mut coordinator.be_publisher_vars.write().unwrap(),
+                            &var,
+                            &ship,
+                        );
 
                         // Notify any existing reliable subscribers that this var now has a BE publisher.
                         let reliable_subs: Vec<String> = {
@@ -1143,7 +1162,11 @@ fn run_coordinator_with_ready(
                     if (kind == net::RatPubRegisterKind::Subscribe
                         || kind == net::RatPubRegisterKind::Scope)
                         && node_mode.expects_reliable_delivery()
-                        && coordinator.be_publisher_vars.read().unwrap().contains(&var)
+                        && mt_sea::coordinator::has_connected_be_publisher(
+                            &coordinator.be_publisher_vars.read().unwrap(),
+                            &var,
+                            &connected_clients.read().unwrap(),
+                        )
                     {
                         let msg = format!(
                             "Topic '{}' has a best-effort publisher. A reliable subscriber cannot connect to a best-effort publisher. \
@@ -1200,26 +1223,26 @@ fn run_coordinator_with_ready(
                         "Registering for topics ({:?}, {:?}, {:?})",
                         &ship, &var, &mt_net_kind
                     );
-                    {
+                    let before = {
                         let mut current_rules = rules_changer.write().unwrap();
+                        let before = mt_sea::plan_routes_for_var(&current_rules, &var);
                         current_rules.register(var.clone(), ship.clone(), mt_net_kind);
-                    }
+                        before
+                    };
                     // The ship must be in rat_qs before routes are pushed, so
                     // convert_action can resolve its address.
                     coordinator.wait_for_client(&ship).await;
-                    // Push updated routes to all affected ships after registration.
-                    let rules_snapshot = rules_changer.read().unwrap().clone();
-                    coordinator
-                        .push_routes_for_var(&var, &rules_snapshot)
-                        .await
-                        .ok();
+                    // The registering ship may be reconnecting with an empty route cache.
+                    let after = mt_sea::plan_routes_for_var(&rules_changer.read().unwrap(), &var);
+                    let plans = mt_sea::changed_routes(&before, after, Some(&ship));
+                    coordinator.push_planned_routes(&var, plans).await.ok();
                     let _ = coordinator
                         .rat_send(ship, net::PacketKind::Acknowledge)
                         .await;
                 }
                 MinotTask::PushRoutesForVar { var } => {
-                    let rules_snapshot = rules_changer.read().unwrap().clone();
-                    if let Err(e) = coordinator.push_routes_for_var(&var, &rules_snapshot).await {
+                    let plans = mt_sea::plan_routes_for_var(&rules_changer.read().unwrap(), &var);
+                    if let Err(e) = coordinator.push_planned_routes(&var, plans).await {
                         debug!("PushRoutesForVar for {}: {}", var, e);
                     }
                 }
@@ -1255,18 +1278,38 @@ fn run_coordinator_with_ready(
                     info!("PeerDead: {}", ship);
                     let is_reliable =
                         peer_dead_fires_torpedo(client_qos.read().unwrap().get(&ship).copied());
-                    let affected_vars = rules_changer.read().unwrap().all_vars_for_ship(&ship);
-                    rules_changer.write().unwrap().remove_client(&ship);
+                    let (affected_vars, before): (Vec<String>, Vec<_>) = {
+                        let mut rules = rules_changer.write().unwrap();
+                        let affected_vars = rules.all_vars_for_ship(&ship);
+                        let before = affected_vars
+                            .iter()
+                            .map(|var| mt_sea::plan_routes_for_var(&rules, var))
+                            .collect();
+                        rules.remove_client(&ship);
+                        mt_sea::coordinator::remove_be_publisher(
+                            &mut coordinator.be_publisher_vars.write().unwrap(),
+                            None,
+                            &ship,
+                        );
+                        (affected_vars, before)
+                    };
                     take_subscription_override_vars(
                         &mut coordinator.sub_qos_overrides.write().unwrap(),
                         &ship,
                     );
-                    let rules_snapshot = rules_changer.read().unwrap().clone();
-                    for var in &affected_vars {
-                        coordinator
-                            .push_routes_for_var(var, &rules_snapshot)
-                            .await
-                            .ok();
+                    let plans: Vec<_> = {
+                        let rules = rules_changer.read().unwrap();
+                        affected_vars
+                            .iter()
+                            .zip(&before)
+                            .map(|(var, before)| {
+                                let after = mt_sea::plan_routes_for_var(&rules, var);
+                                (var, mt_sea::changed_routes(before, after, None))
+                            })
+                            .collect()
+                    };
+                    for (var, plan) in plans {
+                        coordinator.push_planned_routes(var, plan).await.ok();
                     }
                     connected_clients.write().unwrap().remove(&ship);
                     client_qos.write().unwrap().remove(&ship);

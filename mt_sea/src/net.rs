@@ -131,6 +131,8 @@ impl Qos {
         }
     }
 
+    /// For control traffic and `BestEffort`/`Reliable` data. `TryReliable` data
+    /// uses `Block`.
     pub fn congestion_control(self) -> zenoh::qos::CongestionControl {
         match self.reliability {
             Reliability::Reliable => zenoh::qos::CongestionControl::Block,
@@ -153,10 +155,6 @@ impl Qos {
 
     pub fn expects_reliable_delivery(self) -> bool {
         self.reliability != Reliability::BestEffort
-    }
-
-    pub fn dispatch_is_async(self) -> bool {
-        self.reliability != Reliability::Reliable
     }
 
     pub const fn transient_local(mut self) -> Self {

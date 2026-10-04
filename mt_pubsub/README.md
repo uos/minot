@@ -53,9 +53,9 @@ handling and congestion behavior.
 
 | | Wire | Congestion | Peer monitoring | On loss | Send dispatch | Durability |
 |---|---|---|---|---|---|---|
-| `Reliable` | reliable | `Block` | yes | torpedoes the run | inline, unbounded retry | volatile |
-| `TryReliable` | reliable | `BlockFirst` | no | rest keeps running | spawned, retry within budget | volatile |
-| `BestEffort` | best-effort | `Drop` | no | rest keeps running | spawned, single attempt | volatile |
+| `Reliable` | reliable, acknowledged per sample | `Block` | yes | torpedoes the run | inline, unbounded retry | volatile |
+| `TryReliable` | reliable, not acknowledged | `Block` | no | rest keeps running | spawned, bounded by budget | volatile |
+| `BestEffort` | best-effort | `Drop` | no | rest keeps running | inline, single attempt | volatile |
 | `.transient_local()` | preserves base mode | preserves base mode | preserves base mode | preserves base mode | preserves base mode | replay latest sample to late subscribers |
 
 `Reliable` is the default and the strict one: peers heartbeat-monitor each other, and a
@@ -66,7 +66,8 @@ deterministic replay where a missing participant invalidates the result.
 like a ROS 2 DDS `RELIABLE` subscriber: a write that cannot land within its deadline
 reports its own deadline failure while peers stay connected. Sends
 are dispatched off the caller's thread, so a slow or roaming link cannot wedge a
-publisher's loop.
+publisher's loop. There is no end-to-end acknowledgement; a congested link blocks
+the send up to the budget instead of dropping it.
 
 `BestEffort` tries once and moves on.
 
@@ -104,8 +105,7 @@ A best-effort publisher drops samples, so a subscriber that expects delivery
 Pair a best-effort publisher with best-effort subscribers.
 
 The `TryReliable` budget is tunable in `mt_sea`: `TRY_RELIABLE_SEND_BUDGET_MS`
-(default 3000) bounds one delivery, `TRY_RELIABLE_ATTEMPT_TIMEOUT_MS` (500) bounds a
-single attempt inside it, and `TRY_RELIABLE_RETRY_BACKOFF_MS` (50) spaces the retries.
+(default 3000) bounds how long one sample may wait for a congested link.
 
 ## Shared memory
 

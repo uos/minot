@@ -175,8 +175,21 @@ async fn register_at_var(
     }
 }
 
+/// Shuts the node down when the last `Node`, `Publisher` or `Subscriber` is dropped.
+#[derive(Debug)]
+struct NodeGuard {
+    ship: Arc<NetworkShipImpl>,
+}
+
+impl Drop for NodeGuard {
+    fn drop(&mut self) {
+        self.ship.shutdown();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Publisher<T: Sendable> {
+    _node: Arc<NodeGuard>,
     topic: String,
     qos: Qos,
     ship: Arc<NetworkShipImpl>,
@@ -254,6 +267,7 @@ impl<T: Sendable> Publisher<T> {
 
 #[derive(Debug)]
 pub struct Subscriber<T: Sendable> {
+    _node: Arc<NodeGuard>,
     chan: tokio::sync::mpsc::Receiver<ArchivedMessage<T>>,
     /// What it takes to tell the coordinator to stop sending. Held so a
     /// subscriber can be given up without keeping the node around.
@@ -325,6 +339,7 @@ pub struct Node {
     ship: Arc<NetworkShipImpl>,
     /// Cancelled when the coordinator connection is lost.
     shutdown: CancellationToken,
+    guard: Arc<NodeGuard>,
 }
 
 impl Node {
@@ -347,6 +362,7 @@ impl Node {
         // re-registration would cost a task per publisher for something that
         // only matters at the next send.
         Ok(Publisher {
+            _node: Arc::clone(&self.guard),
             topic,
             qos,
             ship: Arc::clone(&self.ship),
@@ -586,14 +602,29 @@ impl Node {
                     } => {
                         match result {
                             Ok(Some(recv_data)) => {
-                                let sender = tx.clone();
-                                tokio::spawn(async move {
-                                    for rd in recv_data {
-                                        if sender.send(rd).await.is_err() {
+                                // Spawn only when the queue is full.
+                                let mut samples = recv_data.into_iter();
+                                while let Some(rd) = samples.next() {
+                                    match tx.try_send(rd) {
+                                        Ok(()) => {}
+                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                                             return;
                                         }
+                                        Err(tokio::sync::mpsc::error::TrySendError::Full(rd)) => {
+                                            let sender = tx.clone();
+                                            let pending: Vec<_> =
+                                                std::iter::once(rd).chain(samples).collect();
+                                            tokio::spawn(async move {
+                                                for rd in pending {
+                                                    if sender.send(rd).await.is_err() {
+                                                        return;
+                                                    }
+                                                }
+                                            });
+                                            break;
+                                        }
                                     }
-                                });
+                                }
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -615,6 +646,7 @@ impl Node {
         });
 
         Ok(Subscriber {
+            _node: Arc::clone(&self.guard),
             chan: rx,
             ship: self.name.to_owned(),
             topic: subscriber_topic,
@@ -673,11 +705,15 @@ impl Node {
         let shutdown = ship.disconnect.clone();
         let ship = Arc::new(ship);
         ship.spawn_heartbeat();
+        let guard = Arc::new(NodeGuard {
+            ship: Arc::clone(&ship),
+        });
         Ok(Self {
             name,
             mode,
             ship,
             shutdown,
+            guard,
         })
     }
 
@@ -721,6 +757,31 @@ mod tests {
 
         assert!(!mt_sea::network::is_local_only());
         assert_eq!(config.name(), "node");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn node_disconnects_when_last_handle_is_dropped() {
+        let config = |name: &str| {
+            NodeConfig::new(name)
+                .mode(Qos::BestEffort)
+                .coord_mode(CoordMode::Start)
+                .local_only(true)
+        };
+        let _owner = Node::create(config("drop_test_owner")).await.unwrap();
+        let node = Node::create(config("drop_test_node")).await.unwrap();
+        let token = node.shutdown_token();
+        let clone = node.clone();
+        let publisher = node
+            .create_publisher::<String>("/drop_test".to_owned(), Qos::BestEffort)
+            .await
+            .unwrap();
+
+        drop(node);
+        assert!(!token.is_cancelled(), "a clone is still alive");
+        drop(clone);
+        assert!(!token.is_cancelled(), "a publisher is still alive");
+        drop(publisher);
+        assert!(token.is_cancelled(), "last handle gone: node must disconnect");
     }
 
     #[test]

@@ -347,17 +347,9 @@ impl Timing {
 }
 
 /// [try-reliable] Total budget for one `Qos::TryReliable` delivery.
-/// Generous enough to ride out a WiFi roam or a retry burst, bounded so a
-/// send can never wedge the caller's loop the way `Qos::Reliable` can.
+/// Generous enough to ride out a WiFi roam, bounded so a send can never wedge
+/// the caller's loop the way `Qos::Reliable` can.
 pub const TRY_RELIABLE_SEND_BUDGET_MS: u64 = 3000;
-
-/// [try-reliable] Per-attempt query timeout inside that budget. Must be well
-/// below TRY_RELIABLE_SEND_BUDGET_MS so a stalled attempt leaves room to retry.
-pub const TRY_RELIABLE_ATTEMPT_TIMEOUT_MS: u64 = 500;
-
-/// [try-reliable] Pause between failed attempts, so a dead target is not
-/// hammered for the whole budget.
-pub const TRY_RELIABLE_RETRY_BACKOFF_MS: u64 = 50;
 
 /// [coordinator] Last-resort timeout for coordinator-side per-client handler.
 /// This fires for
@@ -701,7 +693,76 @@ pub trait Coordinator: Send + Sync + 'static {
         best_effort: bool,
     ) -> anyhow::Result<()>;
 
-    /// Push updated routes for `variable` to all ships currently involved in it.
-    /// Called after topology changes (register / disconnect / PeerDead).
-    async fn push_routes_for_var(&self, variable: &str, rules: &Rules) -> anyhow::Result<()>;
+    /// Push routes from [`plan_routes_for_var`] or [`changed_routes`].
+    async fn push_planned_routes(
+        &self,
+        variable: &str,
+        plans: Vec<(String, Vec<ActionPlan>)>,
+    ) -> anyhow::Result<()>;
+}
+
+pub fn plan_routes_for_var(rules: &Rules, variable: &str) -> Vec<(String, Vec<ActionPlan>)> {
+    rules
+        .all_ships_for_var(variable)
+        .into_iter()
+        .map(|ship| {
+            let actions = get_strategies(rules, &ship, variable.to_string(), None);
+            (ship, actions)
+        })
+        .collect()
+}
+
+/// Ships in `after` whose actions differ from `before`, plus `always`.
+pub fn changed_routes(
+    before: &[(String, Vec<ActionPlan>)],
+    after: Vec<(String, Vec<ActionPlan>)>,
+    always: Option<&str>,
+) -> Vec<(String, Vec<ActionPlan>)> {
+    after
+        .into_iter()
+        .filter(|(ship, actions)| {
+            Some(ship.as_str()) == always
+                || before
+                    .iter()
+                    .find(|(b, _)| b == ship)
+                    .is_none_or(|(_, prev)| prev != actions)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod route_push_tests {
+    use super::{changed_routes, plan_routes_for_var};
+    use mt_net::{RatPubRegisterKind::*, Rules};
+
+    fn ships(plans: &[(String, Vec<mt_net::ActionPlan>)]) -> Vec<&str> {
+        let mut v: Vec<&str> = plans.iter().map(|(s, _)| s.as_str()).collect();
+        v.sort();
+        v
+    }
+
+    fn reg(rules: &mut Rules, ship: &str, kind: mt_net::RatPubRegisterKind) -> Vec<String> {
+        let before = plan_routes_for_var(rules, "/t");
+        rules.register("/t".into(), ship.into(), kind);
+        let after = plan_routes_for_var(rules, "/t");
+        ships(&changed_routes(&before, after, Some(ship))).into_iter().map(String::from).collect()
+    }
+
+    fn unreg(rules: &mut Rules, ship: &str, kind: mt_net::RatPubRegisterKind) -> Vec<String> {
+        let before = plan_routes_for_var(rules, "/t");
+        rules.unregister("/t", ship, kind);
+        let after = plan_routes_for_var(rules, "/t");
+        ships(&changed_routes(&before, after, None)).into_iter().map(String::from).collect()
+    }
+
+    #[test]
+    fn targeted_pushes_reach_exactly_the_changed_ships() {
+        let mut r = Rules::new();
+        assert_eq!(reg(&mut r, "pub", Publish), ["pub"]);
+        assert_eq!(reg(&mut r, "a", Subscribe), ["a", "pub"]);
+        assert_eq!(reg(&mut r, "b", Subscribe), ["b", "pub"]);
+        assert_eq!(reg(&mut r, "c", Subscribe), ["c", "pub"]);
+        assert_eq!(unreg(&mut r, "b", Subscribe), ["pub"]);
+        assert_eq!(reg(&mut r, "a", Subscribe), ["a"]);
+    }
 }

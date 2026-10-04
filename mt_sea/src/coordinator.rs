@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
 use log::{debug, error};
-use mt_net::{ActionPlan, COMPARE_NODE_NAME, Rules};
+use mt_net::{ActionPlan, COMPARE_NODE_NAME};
 
 use crate::{
     NetworkShipAddress, ShipName,
@@ -27,8 +27,35 @@ pub struct CoordinatorImpl {
     /// `BestEffort` or `TryReliable`. The override applies to that topic only.
     pub sub_qos_overrides:
         std::sync::Arc<std::sync::RwLock<HashMap<(String, String), crate::net::Qos>>>,
-    /// Variable names that have at least one best-effort publisher
-    pub be_publisher_vars: std::sync::Arc<std::sync::RwLock<HashSet<String>>>,
+    /// Best-effort publishers per variable.
+    pub be_publisher_vars: std::sync::Arc<std::sync::RwLock<BePublishers>>,
+}
+
+pub type BePublishers = HashMap<String, HashSet<String>>;
+
+pub fn add_be_publisher(map: &mut BePublishers, var: &str, ship: &str) {
+    map.entry(var.to_owned()).or_default().insert(ship.to_owned());
+}
+
+/// Forget `ship` as a best-effort publisher of `var`, or of every variable if `None`.
+pub fn remove_be_publisher(map: &mut BePublishers, var: Option<&str>, ship: &str) {
+    map.retain(|v, ships| {
+        if var.is_none_or(|var| var == v) {
+            ships.remove(ship);
+        }
+        !ships.is_empty()
+    });
+}
+
+/// Whether `var` has a connected best-effort publisher. Disconnected ones keep
+/// their registration for a reconnect but no longer block reliable subscribers.
+pub fn has_connected_be_publisher(
+    map: &BePublishers,
+    var: &str,
+    connected: &HashSet<String>,
+) -> bool {
+    map.get(var)
+        .is_some_and(|ships| ships.iter().any(|ship| connected.contains(ship)))
 }
 
 #[async_trait::async_trait]
@@ -97,17 +124,11 @@ impl crate::Coordinator for CoordinatorImpl {
         }
     }
 
-    async fn push_routes_for_var(&self, variable: &str, rules: &Rules) -> anyhow::Result<()> {
-        let ships = rules.all_ships_for_var(variable);
-        // Pre-compute all ship→actions before any .await so we don't hold a lock across awaits.
-        let ship_actions: Vec<(String, Vec<ActionPlan>)> = ships
-            .into_iter()
-            .map(|ship| {
-                let actions = crate::get_strategies(rules, &ship, variable.to_string(), None);
-                (ship, actions)
-            })
-            .collect();
-
+    async fn push_planned_routes(
+        &self,
+        variable: &str,
+        ship_actions: Vec<(String, Vec<ActionPlan>)>,
+    ) -> anyhow::Result<()> {
         for (ship, actions) in ship_actions {
             if ship == COMPARE_NODE_NAME {
                 continue; // #minot gets its Catch route via VariableTaskRequest → SendRatAction
@@ -130,7 +151,7 @@ impl crate::Coordinator for CoordinatorImpl {
                     }
                     Err(e) => {
                         debug!(
-                            "push_routes_for_var: cannot convert action for {}: {}",
+                            "push_planned_routes: cannot convert action for {}: {}",
                             ship, e
                         );
                     }
@@ -415,7 +436,30 @@ impl CoordinatorImpl {
             new_rat_note,
             new_client_notify,
             sub_qos_overrides: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
-            be_publisher_vars: std::sync::Arc::new(std::sync::RwLock::new(HashSet::new())),
+            be_publisher_vars: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
         })
+    }
+}
+
+#[cfg(test)]
+mod be_publisher_tests {
+    use super::*;
+
+    #[test]
+    fn be_publisher_marks() {
+        let mut m = BePublishers::new();
+        let mut connected: HashSet<String> = ["a".to_owned(), "b".to_owned()].into();
+        add_be_publisher(&mut m, "/tf", "a");
+        add_be_publisher(&mut m, "/tf", "b");
+        add_be_publisher(&mut m, "/map", "a");
+        remove_be_publisher(&mut m, Some("/tf"), "a");
+        assert!(has_connected_be_publisher(&m, "/tf", &connected));
+        connected.remove("b");
+        assert!(!has_connected_be_publisher(&m, "/tf", &connected));
+        connected.insert("b".to_owned());
+        assert!(has_connected_be_publisher(&m, "/tf", &connected));
+        remove_be_publisher(&mut m, None, "b");
+        assert!(!has_connected_be_publisher(&m, "/tf", &connected));
+        assert!(has_connected_be_publisher(&m, "/map", &connected));
     }
 }

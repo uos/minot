@@ -15,11 +15,16 @@ use zenoh::shm::{
 
 use crate::{
     ShipKind, ShipName, VariableType,
-    net::{CONTROLLER_CLIENT_ID, Packet, PacketKind, Qos, Sea, get_domain_id, sanitize_key},
+    net::{CONTROLLER_CLIENT_ID, Packet, PacketKind, Qos, Reliability, Sea, get_domain_id, sanitize_key},
 };
 
 pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>;
 pub type RecvBuffer = HashMap<u32, Vec<(AlignedVec, VariableType, String)>>;
+
+/// Per-variable wake-ups for `catch_for_variable`, so an arrival only wakes its
+/// own variable's waiter.
+pub type VariableNotify =
+    std::sync::Arc<std::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Notify>>>>;
 
 #[cfg(feature = "shm")]
 /// Large enough for common image payloads while remaining conservative for 64 MiB containers.
@@ -195,6 +200,7 @@ fn accept_data_payload(
     payload_bytes: &[u8],
     raw_recv_buff: &std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
     updated_raw_recv: &tokio::sync::broadcast::Sender<u32>,
+    variable_notify: &VariableNotify,
 ) -> Result<u32, &'static str> {
     // id (4 bytes) + variable_type (1 byte) + name (64 bytes) + data
     if payload_bytes.len() < 69 {
@@ -217,6 +223,7 @@ fn accept_data_payload(
     // Copy only the archived data into its final, rkyv-aligned receive buffer.
     let data = align_bytes(&payload_bytes[69..]);
 
+    let notify = variable_notify.lock().unwrap().get(&var_name).cloned();
     {
         let mut lock = raw_recv_buff.write().unwrap();
         lock.entry(msg_id)
@@ -224,8 +231,11 @@ fn accept_data_payload(
             .push((data, variable_type, var_name));
     }
 
-    if updated_raw_recv.send(msg_id).is_err() {
-        debug!("Data for id {} ready, but no consumers listening", msg_id);
+    if let Some(notify) = notify {
+        notify.notify_waiters();
+    }
+    if updated_raw_recv.receiver_count() > 0 {
+        let _ = updated_raw_recv.send(msg_id);
     }
 
     Ok(msg_id)
@@ -254,6 +264,7 @@ pub struct Client {
     connection: std::sync::Arc<crate::ConnectionState>,
     pub updated_raw_recv: tokio::sync::broadcast::Sender<u32>,
     pub raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>>,
+    pub variable_notify: VariableNotify,
     pub wind_receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Packet>>>,
     wind_sender: tokio::sync::mpsc::Sender<Packet>,
     session: std::sync::Arc<zenoh::Session>,
@@ -620,6 +631,7 @@ impl Client {
         let (updated_raw_recv, _) = tokio::sync::broadcast::channel(100);
         let raw_recv_buff: std::sync::Arc<std::sync::RwLock<RecvBuffer>> =
             std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let variable_notify: VariableNotify = Default::default();
 
         // MPSC so wind packets are buffered rather than raced over.
         let (wind_sender, wind_receiver) = tokio::sync::mpsc::channel::<Packet>(100);
@@ -639,6 +651,7 @@ impl Client {
         let data_key = format!("minot/{}/data/{}", domain_id, ship_name_key);
         let updated_raw_recv_clone = updated_raw_recv.clone();
         let raw_recv_buff_clone = std::sync::Arc::clone(&raw_recv_buff);
+        let variable_notify_clone = std::sync::Arc::clone(&variable_notify);
 
         let queryable = session
             .declare_queryable(&data_key)
@@ -699,6 +712,7 @@ impl Client {
                             &payload_bytes,
                             &raw_recv_buff_clone,
                             &updated_raw_recv_clone,
+                            &variable_notify_clone,
                         ) {
                             error!("Data payload rejected: {reason}");
                             if let Err(e) = query.reply_err(reason).wait() {
@@ -734,6 +748,7 @@ impl Client {
         // query that was given up on long ago.
         let push_recv_buff = std::sync::Arc::clone(&raw_recv_buff);
         let push_updated = updated_raw_recv.clone();
+        let push_notify = std::sync::Arc::clone(&variable_notify);
         let push_subscriber = session
             .declare_subscriber(&data_key)
             .wait()
@@ -757,7 +772,7 @@ impl Client {
                     );
                 }
                 if let Err(reason) =
-                    accept_data_payload(&payload_bytes, &push_recv_buff, &push_updated)
+                    accept_data_payload(&payload_bytes, &push_recv_buff, &push_updated, &push_notify)
                 {
                     // Nobody is waiting on an answer, and one dropped
                     // best-effort sample is not an error.
@@ -795,6 +810,7 @@ impl Client {
             connection,
             updated_raw_recv,
             raw_recv_buff,
+            variable_notify,
             wind_receiver,
             wind_sender,
             session,
@@ -1182,38 +1198,6 @@ impl Client {
     /// vanished target then fills its queue with undroppable messages and Zenoh
     /// tears down the whole transport ("Unable to push non droppable network
     /// message. Closing transport!"), coordinator link included.
-    async fn try_send_network_once(
-        session: &zenoh::Session,
-        data_key: &str,
-        payload: zenoh::bytes::ZBytes,
-        priority: zenoh::qos::Priority,
-        congestion_control: zenoh::qos::CongestionControl,
-        timeout: std::time::Duration,
-    ) -> anyhow::Result<()> {
-        let replies = session
-            .get(data_key)
-            .payload(payload)
-            .priority(priority)
-            .congestion_control(congestion_control)
-            .timeout(timeout)
-            .wait()
-            .map_err(|e| anyhow::anyhow!("Failed to send data query: {}", e))?;
-
-        let reply = replies
-            .recv_async()
-            .await
-            .map_err(|e| anyhow::anyhow!("data query completed without a reply: {e}"))?;
-        reply.result().map(|_| ()).map_err(|e| {
-            // The reason is the reply's text payload; the wrapper's debug form
-            // buries it in a byte dump.
-            let payload = e.payload().to_bytes();
-            anyhow::anyhow!(
-                "receiver rejected data: {}",
-                String::from_utf8_lossy(&payload)
-            )
-        })
-    }
-
     /// Network-only send (no SHM) for `Qos::BestEffort`: one push, no reply.
     ///
     /// A query would leave a reply channel the sender waits on and abandons once
@@ -1240,23 +1224,15 @@ impl Client {
         );
         let payload = Self::build_data_payload(id, variable_type, &variable_name, &data);
 
-        session
-            .put(&data_key, payload)
-            .priority(zenoh::qos::Priority::Background)
-            .congestion_control(Qos::BestEffort.congestion_control())
+        cached_publisher(&session, data_key, Reliability::BestEffort)?
+            .put(payload)
             .wait()
             .map_err(|e| anyhow::anyhow!("Failed to push best-effort data: {e}"))
     }
 
-    /// Network-only send (no SHM) for `Qos::TryReliable`: retry until the
-    /// sample lands or the budget is spent.
-    ///
-    /// This is the bounded counterpart to [`Self::send_raw_to_other_client`],
-    /// which retries without any deadline and so can spin forever against a
-    /// target that never answers. Here a delivery that cannot land within
-    /// `TRY_RELIABLE_SEND_BUDGET_MS` fails on its own and the caller carries
-    /// on. This is the same trade a ROS 2 DDS reliable writer makes when it exhausts
-    /// `max_blocking_time`.
+    /// `Qos::TryReliable` send: a reliable push without end-to-end
+    /// acknowledgement. Blocks on congestion instead of dropping, for at most
+    /// `TRY_RELIABLE_SEND_BUDGET_MS`, on a blocking thread.
     pub async fn send_raw_network_bounded(
         session: std::sync::Arc<zenoh::Session>,
         domain_id: u16,
@@ -1272,52 +1248,21 @@ impl Client {
             sanitize_key(&target_ship_name)
         );
         let payload = Self::build_data_payload(id, variable_type, &variable_name, &data);
-
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS);
-        let attempt_timeout =
-            std::time::Duration::from_millis(crate::TRY_RELIABLE_ATTEMPT_TIMEOUT_MS);
-        let backoff = std::time::Duration::from_millis(crate::TRY_RELIABLE_RETRY_BACKOFF_MS);
-
-        let mut attempts = 0u32;
-        let mut last_err;
-        loop {
-            attempts += 1;
-            // Never let one attempt outlive the overall budget.
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            match Self::try_send_network_once(
-                &session,
-                &data_key,
-                payload.clone(),
-                zenoh::qos::Priority::Data,
-                Qos::TryReliable.congestion_control(),
-                attempt_timeout.min(remaining),
-            )
-            .await
-            {
-                Ok(()) => {
-                    if attempts > 1 {
-                        debug!(
-                            "Try-reliable send '{}' to '{}' landed on attempt {}",
-                            variable_name, target_ship_name, attempts
-                        );
-                    }
-                    return Ok(());
-                }
-                Err(e) => last_err = e,
-            }
-
-            if tokio::time::Instant::now() + backoff >= deadline {
-                return Err(anyhow!(
-                    "Try-reliable send '{}' to '{}' gave up after {} attempts \
-                     ({} ms budget): {last_err}",
-                    variable_name,
-                    target_ship_name,
-                    attempts,
-                    crate::TRY_RELIABLE_SEND_BUDGET_MS
-                ));
-            }
-            tokio::time::sleep(backoff).await;
+        let publisher = cached_publisher(&session, data_key, Reliability::TryReliable)?;
+        let put = tokio::task::spawn_blocking(move || publisher.put(payload).wait());
+        let budget = std::time::Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS);
+        match tokio::time::timeout(budget, put).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(e))) => Err(anyhow!(
+                "Try-reliable send '{variable_name}' to '{target_ship_name}' failed: {e}"
+            )),
+            Ok(Err(e)) => Err(anyhow!("Try-reliable send task failed: {e}")),
+            Err(_) => Err(anyhow!(
+                "Try-reliable send '{}' to '{}' did not get through within the {} ms budget",
+                variable_name,
+                target_ship_name,
+                crate::TRY_RELIABLE_SEND_BUDGET_MS
+            )),
         }
     }
 
@@ -1379,11 +1324,9 @@ impl Client {
             // `Block`: that implicit default is what hid the same setting on
             // the best-effort path, and `Reliable` is the one mode that wants
             // it.
-            let replies = self
-                .session
-                .get(&data_key)
+            let replies = cached_querier(&self.session, &data_key)?
+                .get()
                 .payload(payload.clone())
-                .congestion_control(Qos::Reliable.congestion_control())
                 .wait()
                 .map_err(|e| anyhow!("Failed to send data query: {}", e))?;
 
@@ -1414,4 +1357,94 @@ impl Client {
             }
         }
     }
+}
+
+/// Declared senders per (session, target key). Declaring caches the route and
+/// lets Zenoh skip links without a match.
+type SenderKey = (zenoh::session::ZenohId, String);
+type PublisherCache = std::sync::Mutex<
+    // true: best-effort publisher
+    HashMap<(SenderKey, bool), std::sync::Arc<zenoh::pubsub::Publisher<'static>>>,
+>;
+type QuerierCache =
+    std::sync::Mutex<HashMap<SenderKey, std::sync::Arc<zenoh::query::Querier<'static>>>>;
+
+static PUBLISHERS: std::sync::LazyLock<PublisherCache> = std::sync::LazyLock::new(Default::default);
+static QUERIERS: std::sync::LazyLock<QuerierCache> = std::sync::LazyLock::new(Default::default);
+
+/// Declare the sender for `target_ship_name` before its first sample: right
+/// after a declaration, Zenoh still sends to links without a match.
+pub(crate) fn predeclare_sender(
+    session: &zenoh::Session,
+    domain_id: u16,
+    target_ship_name: &str,
+    mode: Reliability,
+) {
+    let data_key = format!("minot/{}/data/{}", domain_id, sanitize_key(target_ship_name));
+    let result = match mode {
+        Reliability::Reliable => cached_querier(session, &data_key).map(|_| ()),
+        other => cached_publisher(session, data_key, other).map(|_| ()),
+    };
+    if let Err(e) = result {
+        debug!("Could not pre-declare sender for '{target_ship_name}': {e}");
+    }
+}
+
+pub(crate) fn forget_session_senders(zid: zenoh::session::ZenohId) {
+    PUBLISHERS.lock().unwrap().retain(|((id, _), _), _| *id != zid);
+    QUERIERS.lock().unwrap().retain(|(id, _), _| *id != zid);
+}
+
+/// Publisher for best-effort (`Drop`, background priority) or try-reliable
+/// (`Block`, data priority) pushes to `data_key`.
+fn cached_publisher(
+    session: &zenoh::Session,
+    data_key: String,
+    mode: Reliability,
+) -> anyhow::Result<std::sync::Arc<zenoh::pubsub::Publisher<'static>>> {
+    let best_effort = mode == Reliability::BestEffort;
+    let cache_key = ((session.zid(), data_key), best_effort);
+    if let Some(p) = PUBLISHERS.lock().unwrap().get(&cache_key) {
+        return Ok(p.clone());
+    }
+    let builder = session.declare_publisher(cache_key.0.1.clone());
+    let builder = match best_effort {
+        true => builder
+            .priority(zenoh::qos::Priority::Background)
+            .congestion_control(Qos::BestEffort.congestion_control()),
+        false => builder
+            .priority(zenoh::qos::Priority::Data)
+            .congestion_control(zenoh::qos::CongestionControl::Block)
+            .reliability(Qos::TryReliable.reliability()),
+    };
+    let publisher = builder
+        .wait()
+        .map_err(|e| anyhow::anyhow!("Failed to declare publisher: {e}"))?;
+    Ok(PUBLISHERS
+        .lock()
+        .unwrap()
+        .entry(cache_key)
+        .or_insert_with(|| std::sync::Arc::new(publisher))
+        .clone())
+}
+
+fn cached_querier(
+    session: &zenoh::Session,
+    data_key: &str,
+) -> anyhow::Result<std::sync::Arc<zenoh::query::Querier<'static>>> {
+    let cache_key = (session.zid(), data_key.to_owned());
+    if let Some(q) = QUERIERS.lock().unwrap().get(&cache_key) {
+        return Ok(q.clone());
+    }
+    let querier = session
+        .declare_querier(data_key.to_owned())
+        .congestion_control(Qos::Reliable.congestion_control())
+        .wait()
+        .map_err(|e| anyhow::anyhow!("Failed to declare querier: {e}"))?;
+    Ok(QUERIERS
+        .lock()
+        .unwrap()
+        .entry(cache_key)
+        .or_insert_with(|| std::sync::Arc::new(querier))
+        .clone())
 }

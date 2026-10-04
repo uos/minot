@@ -16,18 +16,18 @@ use crate::{
     net::{PacketKind, Qos, Reliability, sanitize_key},
 };
 
-/// Send budget key for asynchronously dispatched sends, so every mode where
-/// `Qos::dispatch_is_async` holds. Keyed by target *and* variable: one budget
-/// per target would let two variables published in the same frame starve each
-/// other, which is invisible on loopback and reproducible over WiFi.
+/// Send budget key for `Qos::TryReliable` sends. Keyed by target *and*
+/// variable: one budget per target would let two variables published in the
+/// same frame starve each other, which is invisible on loopback and
+/// reproducible over WiFi.
 type AsyncSendKey = (String, String);
 
 /// How many sends of one variable may be on the wire to one ship at once.
 ///
 /// Bounded for fairness between variables. Overlapping sends are safe: each is
-/// an independent Zenoh query carrying its own reply channel, and the receiver
-/// appends to a per-id buffer. On a request/response topic every request shares
-/// one variable name, so a bound of 1 would serialize the whole topic.
+/// an independent reliable push, and the receiver appends to a per-id buffer.
+/// On a request/response topic every request shares one variable name, so a
+/// bound of 1 would serialize the whole topic.
 const MAX_CONCURRENT_SENDS_PER_KEY: usize = 8;
 
 /// How many further sends may wait for a slot before a caller is refused.
@@ -193,14 +193,26 @@ impl crate::Cannon for NetworkShipImpl {
         variable_name: &str,
         drop_stale: bool,
     ) -> anyhow::Result<Vec<ArchivedMessage<T>>> {
-        let (buf, mut update_chan) = {
+        let (buf, notify) = {
             let client = self.client.lock().await;
             let buf = std::sync::Arc::clone(&client.raw_recv_buff);
-            let update_chan = client.updated_raw_recv.subscribe();
-            (buf, update_chan)
+            let notify = std::sync::Arc::clone(
+                client
+                    .variable_notify
+                    .lock()
+                    .unwrap()
+                    .entry(variable_name.to_owned())
+                    .or_default(),
+            );
+            (buf, notify)
         };
 
         loop {
+            // Register before checking the buffer so no arrival is missed.
+            let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
             // The route id is only a preference. A coordinator restart derives
             // a new one while publishers still shoot under the old, so entries
             // buffered under any id are taken; requiring `id` would wait out
@@ -217,17 +229,7 @@ impl crate::Cannon for NetworkShipImpl {
                     .collect();
             }
 
-            match update_chan.recv().await {
-                // Any arrival may be this variable, whatever id it came under.
-                Ok(_) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    debug!("catch_for_variable receiver lagged by {n} messages, checking buffer");
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err(anyhow!("Update channel closed while waiting for data"));
-                }
-            }
+            notified.await;
         }
     }
 
@@ -370,17 +372,35 @@ impl NetworkShipImpl {
             };
 
             let target_mode = target.node_mode;
-            if target_mode.dispatch_is_async() {
-                let (send_budget, is_reliable_mode) =
-                    if target_mode.reliability_mode() == Reliability::TryReliable {
-                        (
-                            Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS)
-                                + Duration::from_secs(1),
-                            true,
-                        )
-                    } else {
-                        (Duration::from_secs(5), false)
-                    };
+
+            // Best-effort puts never block (`Drop`), so send inline.
+            if target_mode.reliability_mode() == Reliability::BestEffort {
+                let (session, domain_id) = {
+                    let c = client.lock().await;
+                    (c.session(), c.domain_id())
+                };
+                if let Err(e) = Client::send_raw_network(
+                    session,
+                    domain_id,
+                    id,
+                    Arc::clone(&data_bytes),
+                    variable_type,
+                    variable_name.to_string(),
+                    target_ship_name.clone(),
+                )
+                .await
+                {
+                    debug!(
+                        "{:?} send '{}' to '{}' failed: {e:#}",
+                        target_mode, variable_name, target_ship_name
+                    );
+                }
+                continue;
+            }
+
+            // Off the caller's thread so a slow link cannot wedge the publisher.
+            if target_mode.reliability_mode() == Reliability::TryReliable {
+                let slot_budget = Duration::from_millis(crate::TRY_RELIABLE_SEND_BUDGET_MS);
 
                 let slots = {
                     let mut in_flight = async_sends_in_flight.lock().unwrap();
@@ -400,13 +420,6 @@ impl NetworkShipImpl {
                 let ready = Arc::clone(&slots.permits).try_acquire_owned().ok();
                 let queued = match &ready {
                     Some(_) => None,
-                    None if !is_reliable_mode => {
-                        debug!(
-                            "Dropping {:?} message '{}' for '{}': send already in progress",
-                            target_mode, variable_name, target_ship_name
-                        );
-                        continue;
-                    }
                     None => {
                         let waiting = slots
                             .waiting
@@ -440,60 +453,32 @@ impl NetworkShipImpl {
                         Some(permit) => permit,
                         None => {
                             let _queued = queued;
-                            match tokio::time::timeout(send_budget, permits.acquire_owned()).await {
+                            match tokio::time::timeout(slot_budget, permits.acquire_owned()).await {
                                 Ok(Ok(permit)) => permit,
                                 _ => {
                                     warn!(
-                                        "{:?} send '{}' to '{}' gave up waiting for a send slot",
-                                        target_mode, variable_name, target_ship_name
+                                        "TryReliable send '{}' to '{}' gave up waiting for a send slot",
+                                        variable_name, target_ship_name
                                     );
                                     return;
                                 }
                             }
                         }
                     };
-                    let send = async {
-                        if is_reliable_mode {
-                            Client::send_raw_network_bounded(
-                                session,
-                                domain_id,
-                                id,
-                                data_bytes,
-                                variable_type,
-                                variable_name.clone(),
-                                target_ship_name.clone(),
-                            )
-                            .await
-                        } else {
-                            Client::send_raw_network(
-                                session,
-                                domain_id,
-                                id,
-                                data_bytes,
-                                variable_type,
-                                variable_name.clone(),
-                                target_ship_name.clone(),
-                            )
-                            .await
-                        }
-                    };
-                    match tokio::time::timeout(send_budget, send).await {
-                        Ok(Ok(())) => {}
+                    if let Err(e) = Client::send_raw_network_bounded(
+                        session,
+                        domain_id,
+                        id,
+                        data_bytes,
+                        variable_type,
+                        variable_name.clone(),
+                        target_ship_name.clone(),
+                    )
+                    .await
+                    {
                         // Peer timeouts are expected after disconnects.
-                        Ok(Err(e)) => {
-                            warn!(
-                                "{:?} send '{}' to '{}' failed",
-                                target_mode, variable_name, target_ship_name
-                            );
-                            debug!(
-                                "{:?} send '{}' to '{}' failed: {e:#}",
-                                target_mode, variable_name, target_ship_name
-                            );
-                        }
-                        Err(_) => warn!(
-                            "{:?} send '{}' to '{}' timed out",
-                            target_mode, variable_name, target_ship_name
-                        ),
+                        warn!("TryReliable send '{variable_name}' to '{target_ship_name}' failed");
+                        debug!("{e:#}");
                     }
                 });
             } else {
@@ -576,12 +561,9 @@ impl crate::Ship for NetworkShipImpl {
                                     action,
                                     lock_until_ack,
                                 } => {
-                                    // Also cached by the background task; this
-                                    // covers the first-call slow path.
-                                    self.route_cache
-                                        .write()
-                                        .unwrap()
-                                        .insert(variable.clone(), (action.clone(), lock_until_ack));
+                                    // The cache is written only by the background
+                                    // task, in order; writing here could reapply
+                                    // stale updates.
                                     if variable == variable_name {
                                         return Ok((action, lock_until_ack));
                                     }
@@ -958,6 +940,23 @@ impl NetworkShipImpl {
     /// Costs one control message per `HEARTBEAT_INTERVAL_MS`, sent through its
     /// own real-time-priority publisher and bounded channel, so application
     /// traffic cannot queue ahead of it.
+    /// Stop the node's background tasks and close its Zenoh session. Callable
+    /// from `Drop`.
+    pub fn shutdown(&self) {
+        if self.disconnect.is_cancelled() {
+            return;
+        }
+        self.disconnect.cancel();
+        let client = Arc::clone(&self.client);
+        self.runtime_handle.spawn(async move {
+            let session = client.lock().await.session();
+            crate::client::forget_session_senders(session.zid());
+            if let Err(e) = session.close().await {
+                debug!("Closing session on shutdown failed: {e}");
+            }
+        });
+    }
+
     pub fn spawn_heartbeat(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
         // Silence from the coordinator now means something, since this node
         // asks for a reply.
@@ -1286,6 +1285,24 @@ impl NetworkShipImpl {
                                         } => {
                                             let previous = route_cache_bg.write().unwrap()
                                                 .insert(variable.clone(), (action.clone(), lock_until_ack));
+
+                                            // Declare senders for new targets before their first sample.
+                                            if let Some((_, targets)) = newly_added_shoot_targets(
+                                                previous.as_ref().map(|(action, _)| action),
+                                                &action,
+                                            ) {
+                                                for target in &targets {
+                                                    let name = match &target.kind {
+                                                        ShipKind::Rat(name) | ShipKind::Wind(name) => name,
+                                                    };
+                                                    crate::client::predeclare_sender(
+                                                        &session,
+                                                        domain_id,
+                                                        name,
+                                                        target.node_mode.reliability_mode(),
+                                                    );
+                                                }
+                                            }
 
                                             if let Some((id, targets)) = newly_added_shoot_targets(
                                                 previous.as_ref().map(|(action, _)| action),

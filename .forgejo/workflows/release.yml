@@ -1052,3 +1052,18 @@ jobs:
         run: |
           set -euo pipefail
           bash ./scripts/cargo-publish.sh
+
+  clean:
+    if: always()
+    needs:
+      - deb-jazzy-arm64
+      - deb-lyrical
+      - deb-humble-arm64
+      - jazzy-linux-aarch64-gnu
+      - humble-linux-aarch64-gnu
+    runs-on: macos-latest
+    steps:
+      - name: Docker clean
+        run: |
+          docker system prune -af --volumes
+          docker builder prune -af
