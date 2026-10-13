@@ -1351,7 +1351,8 @@ fn run_coordinator_with_ready(
 
 /// Attempt to start a coordinator with the given configuration.
 ///
-/// Acquires an exclusive lock file at `/tmp/minot-coord.lock`.
+/// Acquires an exclusive lock file scoped to the current user and coordinator
+/// port. The default port retains the legacy lock filename.
 /// Returns `true` if the coordinator was started, `false` if one was already running.
 /// Idempotent: safe to call concurrently, as only one will win the lock.
 pub fn try_start_with_rules(
@@ -1371,7 +1372,7 @@ fn try_start_with_rules_and_ready(
     ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> bool {
     let lock_file_path =
-        std::env::temp_dir().join(format!("minot-coord_{}.lock", current_user_id()));
+        coordinator_lock_path(current_user_id(), mt_sea::network::coordinator_port());
     let lock_file = match std::fs::File::create(&lock_file_path) {
         Ok(f) => f,
         Err(e) => {
@@ -1400,6 +1401,17 @@ fn try_start_with_rules_and_ready(
         let _ = startup_failed_rx.await;
     });
     true
+}
+
+fn coordinator_lock_path(user_id: u64, port: u16) -> std::path::PathBuf {
+    // Preserve election with older processes on the default endpoint, while
+    // allowing independent coordinators on explicitly selected ports.
+    let name = if port == mt_sea::network::DEFAULT_ZENOH_PORT {
+        format!("minot-coord_{user_id}.lock")
+    } else {
+        format!("minot-coord_{user_id}_{port}.lock")
+    };
+    std::env::temp_dir().join(name)
 }
 
 fn current_user_id() -> u64 {
@@ -1463,6 +1475,22 @@ pub async fn start_default_with_torpedo_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coordinator_locks_follow_user_and_port() {
+        assert_eq!(
+            coordinator_lock_path(123, 7447),
+            std::env::temp_dir().join("minot-coord_123.lock")
+        );
+        assert_ne!(
+            coordinator_lock_path(123, 7447),
+            coordinator_lock_path(123, 17447)
+        );
+        assert_ne!(
+            coordinator_lock_path(123, 17447),
+            coordinator_lock_path(456, 17447)
+        );
+    }
 
     #[tokio::test]
     async fn queued_heartbeat_wins_a_simultaneously_expired_idle_deadline() {

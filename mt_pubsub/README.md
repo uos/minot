@@ -46,6 +46,33 @@ cargo run --example sub
 
 If you have multiple Minot networks on the same physical network, use the `MINOT_DOMAIN_ID` environment variable to prevent them from connecting to each other.
 
+## Zenoh coordinator port
+
+`MINOT_ZENOH_PORT` selects the coordinator TCP port (default: `7447`). Set it
+before starting Minot and every node that shares that coordinator. It controls
+the router listener, local-only/unicast client endpoint, and local reachability
+probe. Explicit `MINOT_COORD_ADDR` endpoints keep their specified port. Invalid
+or zero port values warn and fall back to `7447`.
+
+To coexist with a ROS Zenoh router already using port 7447:
+
+```bash
+export MINOT_ZENOH_PORT=17447
+minot --local-only coord
+```
+
+Set the same variable in the shells or containers running your Minot nodes.
+Local-only mode restricts sessions to loopback; for a remote coordinator use an
+explicit endpoint such as `MINOT_COORD_ADDR=tcp/192.168.1.10:17447`.
+
+Embedded coordinator election uses a per-user, per-port file lock. Concurrent
+processes sharing the same temporary filesystem elect one coordinator; the
+other processes retry registration while it starts. Containers with separate
+filesystems and machines on different hosts do not share that election. For
+those deployments designate one coordinator and use `CoordMode::External` on
+nodes that must not auto-start another. Peer/gossip transport discovery does
+not elect a Minot coordinator.
+
 ## Delivery modes
 
 `Qos` combines `Reliability` and `Durability`. Reliability also controls failure

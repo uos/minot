@@ -15,13 +15,27 @@ When used in static and simple environments, it is stable enough for replacing t
     
     To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
 
+## Zenoh Port
+
+Set `MINOT_ZENOH_PORT` before starting Minot and its nodes to choose the
+coordinator TCP port. The default is `7447`. For example, use
+`MINOT_ZENOH_PORT=17447` when a ROS Zenoh router already owns port 7447. Local
+client endpoints and the startup probe use the selected port too; an explicit
+`MINOT_COORD_ADDR` keeps its own endpoint port. Invalid or zero values warn and
+fall back to `7447`.
+
 ## Automatic Coordinator
 
 Like in ROS1, the communication technically needs a *Master* to distribute routes. In our case, it is the *Coordinator*. 
 
 **However**, you do not need to start it manually! When a Minot node starts up (e.g. your publisher or subscriber), it will attempt to find a coordinator on the network. If it times out, the node will **automatically spin up an embedded coordinator** in the background.
 
-This means you can just run your nodes directly without worrying about network setup!
+Processes sharing a temporary filesystem elect one embedded coordinator using
+a per-user, per-port lock. The other nodes retry registration as it starts.
+This lock is not shared across separate Docker filesystems or different hosts.
+For those deployments run one designated coordinator and select
+`CoordMode::External` on the other nodes. Zenoh peer/gossip discovery connects
+sessions but does not elect the Minot application coordinator.
 
 !!! info
 

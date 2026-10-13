@@ -4,7 +4,11 @@ use std::time::Duration;
 
 use log::{info, warn};
 
+pub const DEFAULT_ZENOH_PORT: u16 = 7447;
+
+/// Default endpoint; configured sessions honor `MINOT_ZENOH_PORT`.
 pub const LOCAL_COORD_ENDPOINT: &str = "tcp/127.0.0.1:7447";
+/// Default endpoint; configured sessions honor `MINOT_ZENOH_PORT`.
 pub const NETWORK_COORD_ENDPOINT: &str = "tcp/0.0.0.0:7447";
 
 static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
@@ -59,13 +63,34 @@ pub(crate) fn disable_shm_runtime() {
     SHM_RUNTIME_AVAILABLE.store(false, Ordering::Release);
 }
 
+/// TCP port used for the local coordinator probe and coordinator endpoints.
+///
+/// Set `MINOT_ZENOH_PORT` before creating any Minot sessions. All nodes sharing
+/// a coordinator must use the same value. Unset values use 7447; invalid or
+/// zero values warn and fall back to 7447. Explicit `MINOT_COORD_ADDR`
+/// endpoints retain their own port.
+pub fn coordinator_port() -> u16 {
+    match std::env::var("MINOT_ZENOH_PORT") {
+        Ok(value) => match value.parse::<u16>() {
+            Ok(port) if port != 0 => port,
+            _ => {
+                warn!("Invalid MINOT_ZENOH_PORT '{value}', selecting default {DEFAULT_ZENOH_PORT}");
+                DEFAULT_ZENOH_PORT
+            }
+        },
+        Err(std::env::VarError::NotPresent) => DEFAULT_ZENOH_PORT,
+        Err(error) => {
+            warn!("Invalid MINOT_ZENOH_PORT: {error}, selecting default {DEFAULT_ZENOH_PORT}");
+            DEFAULT_ZENOH_PORT
+        }
+    }
+}
+
 /// Return whether something is accepting connections on the local coordinator endpoint.
 /// This is used to decide whether an auto-start node must create the router before
 /// opening its client session. It preserves local-only configuration.
 pub fn local_router_is_running() -> bool {
-    let address: SocketAddr = "127.0.0.1:7447"
-        .parse()
-        .expect("the local coordinator address must be valid");
+    let address = SocketAddr::from(([127, 0, 0, 1], coordinator_port()));
     TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
 }
 
@@ -76,6 +101,7 @@ pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
         is_unicast_only(),
         std::env::var("MINOT_COORD_ADDR").ok(),
         role == NetworkRole::Coordinator && local_router_is_running(),
+        coordinator_port(),
     )
 }
 
@@ -164,26 +190,29 @@ fn config_for(
     unicast_only: bool,
     coordinator_addr: Option<String>,
     local_router_running: bool,
+    port: u16,
 ) -> zenoh::Config {
+    let local_endpoint = format!("tcp/127.0.0.1:{port}");
+    let network_endpoint = format!("tcp/0.0.0.0:{port}");
     if local_only {
         if coordinator_addr.is_some() {
-            warn!("--local-only selected. Using {}", LOCAL_COORD_ENDPOINT);
+            warn!("--local-only selected. Using {}", local_endpoint);
         }
 
         let json5 = match (role, local_router_running) {
             (NetworkRole::Coordinator, false) => format!(
                 r#"{{mode:"router",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},listen:{{endpoints:["{}"]}}}}"#,
-                LOCAL_COORD_ENDPOINT
+                local_endpoint
             ),
             // An external Zenoh router owns the endpoint. Run the Minot
             // coordinator logic on a client session connected to that router.
             (NetworkRole::Coordinator, true) | (NetworkRole::Client, _) => format!(
                 r#"{{mode:"client",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
-                LOCAL_COORD_ENDPOINT
+                local_endpoint
             ),
         };
 
-        info!("Using local-only networking on {}", LOCAL_COORD_ENDPOINT);
+        info!("Using local-only networking on {}", local_endpoint);
         return zenoh::Config::from_json5(&json5)
             .expect("internal local-only Zenoh configuration must be valid");
     }
@@ -192,12 +221,9 @@ fn config_for(
         let multicast = if unicast_only { "false" } else { "true" };
         let json5 = format!(
             r#"{{mode:"router",scouting:{{multicast:{{enabled:{multicast}}},gossip:{{enabled:{multicast}}}}},listen:{{endpoints:["{}"]}}}}"#,
-            NETWORK_COORD_ENDPOINT
+            network_endpoint
         );
-        info!(
-            "Using network coordinator endpoint on {}",
-            NETWORK_COORD_ENDPOINT
-        );
+        info!("Using network coordinator endpoint on {}", network_endpoint);
         return zenoh::Config::from_json5(&json5)
             .expect("internal network coordinator Zenoh configuration must be valid");
     }
@@ -205,9 +231,9 @@ fn config_for(
     if unicast_only && coordinator_addr.is_none() {
         let json5 = format!(
             r#"{{mode:"client",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
-            LOCAL_COORD_ENDPOINT
+            local_endpoint
         );
-        info!("Client using local unicast coordinator: {LOCAL_COORD_ENDPOINT}");
+        info!("Client using local unicast coordinator: {local_endpoint}");
         return zenoh::Config::from_json5(&json5)
             .expect("internal unicast Zenoh configuration must be valid");
     }
@@ -233,4 +259,63 @@ fn config_for(
     }
 
     zenoh::Config::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_port_reaches_listeners_and_local_clients() {
+        for port in [DEFAULT_ZENOH_PORT, 17447] {
+            for (local_only, unicast_only) in [(true, false), (false, true)] {
+                let router = config_for(
+                    NetworkRole::Coordinator,
+                    local_only,
+                    unicast_only,
+                    None,
+                    false,
+                    port,
+                );
+                let host = if local_only { "127.0.0.1" } else { "0.0.0.0" };
+                assert_eq!(
+                    router.get_json("listen/endpoints").unwrap(),
+                    format!(r#"["tcp/{host}:{port}"]"#)
+                );
+                let client = config_for(
+                    NetworkRole::Client,
+                    local_only,
+                    unicast_only,
+                    None,
+                    false,
+                    port,
+                );
+                assert_eq!(
+                    client.get_json("connect/endpoints").unwrap(),
+                    format!(r#"["tcp/127.0.0.1:{port}"]"#)
+                );
+            }
+            let shared_router = config_for(NetworkRole::Coordinator, true, false, None, true, port);
+            assert_eq!(
+                shared_router.get_json("connect/endpoints").unwrap(),
+                format!(r#"["tcp/127.0.0.1:{port}"]"#)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_coordinator_address_keeps_its_port() {
+        let config = config_for(
+            NetworkRole::Client,
+            false,
+            false,
+            Some("tcp/192.0.2.1:23456".into()),
+            false,
+            17447,
+        );
+        assert_eq!(
+            config.get_json("connect/endpoints").unwrap(),
+            r#"["tcp/192.0.2.1:23456"]"#
+        );
+    }
 }
