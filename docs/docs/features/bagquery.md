@@ -51,7 +51,27 @@ _bag.{
     _type = Imu
     _short = "i"
   }
+  image.{
+    _topic = "/camera/image_raw"
+    _type = Image
+    _short = "img"
+  }
+  compressed.{
+    _topic = "/camera/image_raw/compressed"
+    _type = ImageCompressed
+    _short = "jpg"
+  }
+  calibration.{
+    _topic = "/camera/camera_info"
+    _type = CameraInfo
+    _short = "cam"
+  }
 }
+
+# Camera topics support `image`, `imagecompressed` (alias `compressedimage`),
+# and `camerainfo`; `mixed` includes all three.
+# Publish images and calibration through ROS or raw Minot (mt_pubsub).
+pf! [img, jpg, cam] 0s..20s
 
 # send all lidar frames between the time of 10s and 20s of the bagfile immediately
 pf! l 10s..20s

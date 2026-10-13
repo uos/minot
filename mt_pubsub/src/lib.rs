@@ -5,6 +5,9 @@ use std::{marker::PhantomData, sync::Arc};
 use mt_sea::{net::Packet, ship::NetworkShipImpl, *};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "image")]
+pub use mt_net::image::{self, ImageMessageExt, ToImage};
+
 pub use mt_sea::{
     ArchivedMessage, Durability, NodeOptions, Qos, ReconnectPolicy, Reliability, Timing,
 };

@@ -18,3 +18,8 @@ rkyv.workspace = true
 ros2-interfaces-jazzy-rkyv.workspace = true
 anyhow.workspace = true
 serde.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"], optional = true }
+
+[features]
+default = ["image"]
+image = ["dep:image"]

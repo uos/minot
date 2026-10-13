@@ -287,6 +287,9 @@ pub async fn run_dyn_wind(
         .build()
         .map_err(|e| anyhow!("{e}"))?;
 
+    let mut image_publishers = HashMap::new();
+    let mut compressed_image_publishers = HashMap::new();
+    let mut camera_info_publishers = HashMap::new();
     let mut cloud_publishers: HashMap<(String, String), HirozPub<PointCloud2>> = HashMap::new();
     let mut imu_publishers: HashMap<(String, String), HirozPub<Imu>> = HashMap::new();
     let mut odom_publishers: HashMap<(String, String), HirozPub<Odometry>> = HashMap::new();
@@ -320,6 +323,63 @@ pub async fn run_dyn_wind(
             };
 
             match data.data {
+                mt_net::SensorTypeMapped::Image(msg) => {
+                    if !image_publishers.contains_key(&publisher_key) {
+                        let mut builder =
+                            node.create_pub::<hiroz_msgs::sensor_msgs::Image>(&data.topic);
+                        if let Some(qos) = qos {
+                            builder = builder.with_qos(qos);
+                        }
+                        image_publishers.insert(
+                            publisher_key.clone(),
+                            builder.build().map_err(|e| anyhow!("{e}"))?,
+                        );
+                    }
+                    image_publishers
+                        .get(&publisher_key)
+                        .expect("Publisher exists")
+                        .async_publish(&image_msg(msg))
+                        .await
+                        .map_err(|e| anyhow!("{e}"))?;
+                }
+                mt_net::SensorTypeMapped::CompressedImage(msg) => {
+                    if !compressed_image_publishers.contains_key(&publisher_key) {
+                        let mut builder = node
+                            .create_pub::<hiroz_msgs::sensor_msgs::CompressedImage>(&data.topic);
+                        if let Some(qos) = qos {
+                            builder = builder.with_qos(qos);
+                        }
+                        compressed_image_publishers.insert(
+                            publisher_key.clone(),
+                            builder.build().map_err(|e| anyhow!("{e}"))?,
+                        );
+                    }
+                    compressed_image_publishers
+                        .get(&publisher_key)
+                        .expect("Publisher exists")
+                        .async_publish(&compressed_image_msg(msg))
+                        .await
+                        .map_err(|e| anyhow!("{e}"))?;
+                }
+                mt_net::SensorTypeMapped::CameraInfo(msg) => {
+                    if !camera_info_publishers.contains_key(&publisher_key) {
+                        let mut builder =
+                            node.create_pub::<hiroz_msgs::sensor_msgs::CameraInfo>(&data.topic);
+                        if let Some(qos) = qos {
+                            builder = builder.with_qos(qos);
+                        }
+                        camera_info_publishers.insert(
+                            publisher_key.clone(),
+                            builder.build().map_err(|e| anyhow!("{e}"))?,
+                        );
+                    }
+                    camera_info_publishers
+                        .get(&publisher_key)
+                        .expect("Publisher exists")
+                        .async_publish(&camera_info_msg(msg))
+                        .await
+                        .map_err(|e| anyhow!("{e}"))?;
+                }
                 mt_net::SensorTypeMapped::Lidar(cloud_msg) => {
                     if !cloud_publishers.contains_key(&publisher_key) {
                         let mut builder = node.create_pub::<PointCloud2>(&data.topic);
@@ -604,4 +664,46 @@ async fn main() -> anyhow::Result<()> {
     run_dyn_wind(&wind_name, tx).await?;
 
     Ok(())
+}
+
+fn image_msg(msg: mt_net::Image) -> hiroz_msgs::sensor_msgs::Image {
+    hiroz_msgs::sensor_msgs::Image {
+        header: header_msg(msg.header),
+        height: msg.height,
+        width: msg.width,
+        encoding: msg.encoding,
+        is_bigendian: msg.is_bigendian,
+        step: msg.step,
+        data: msg.data.into(),
+    }
+}
+
+fn compressed_image_msg(msg: mt_net::CompressedImage) -> hiroz_msgs::sensor_msgs::CompressedImage {
+    hiroz_msgs::sensor_msgs::CompressedImage {
+        header: header_msg(msg.header),
+        format: msg.format,
+        data: msg.data.into(),
+    }
+}
+
+fn camera_info_msg(msg: mt_net::CameraInfo) -> hiroz_msgs::sensor_msgs::CameraInfo {
+    hiroz_msgs::sensor_msgs::CameraInfo {
+        header: header_msg(msg.header),
+        height: msg.height,
+        width: msg.width,
+        distortion_model: msg.distortion_model,
+        d: msg.d,
+        k: msg.k,
+        r: msg.r,
+        p: msg.p,
+        binning_x: msg.binning_x,
+        binning_y: msg.binning_y,
+        roi: hiroz_msgs::sensor_msgs::RegionOfInterest {
+            x_offset: msg.roi.x_offset,
+            y_offset: msg.roi.y_offset,
+            height: msg.roi.height,
+            width: msg.roi.width,
+            do_rectify: msg.roi.do_rectify,
+        },
+    }
 }

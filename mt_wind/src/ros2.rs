@@ -142,6 +142,9 @@ pub async fn run_dyn_wind(
         NodeOptions::new().enable_rosout(true),
     )?;
 
+    let mut image_publishers = HashMap::new();
+    let mut compressed_image_publishers = HashMap::new();
+    let mut camera_info_publishers = HashMap::new();
     let mut cloud_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
@@ -172,6 +175,42 @@ pub async fn run_dyn_wind(
             let pub_type = ros2_client::MessageTypeName::new(&package_name, &type_name);
 
             match data.data {
+                mt_net::SensorTypeMapped::Image(msg) => {
+                    if !image_publishers.contains_key(&topic_parse) {
+                        let publisher = node.create_publisher::<ros2_interfaces_jazzy_serde::sensor_msgs::msg::Image>(
+                            &node.create_topic(&wanted_topic, pub_type, &qos)?, None)?;
+                        image_publishers.insert(topic_parse.clone(), publisher);
+                    }
+                    image_publishers
+                        .get(&topic_parse)
+                        .expect("Publisher exists")
+                        .async_publish(mt_bagread::camera::image_to_serde(msg))
+                        .await?;
+                }
+                mt_net::SensorTypeMapped::CompressedImage(msg) => {
+                    if !compressed_image_publishers.contains_key(&topic_parse) {
+                        let publisher = node.create_publisher::<ros2_interfaces_jazzy_serde::sensor_msgs::msg::CompressedImage>(
+                            &node.create_topic(&wanted_topic, pub_type, &qos)?, None)?;
+                        compressed_image_publishers.insert(topic_parse.clone(), publisher);
+                    }
+                    compressed_image_publishers
+                        .get(&topic_parse)
+                        .expect("Publisher exists")
+                        .async_publish(mt_bagread::camera::compressed_image_to_serde(msg))
+                        .await?;
+                }
+                mt_net::SensorTypeMapped::CameraInfo(msg) => {
+                    if !camera_info_publishers.contains_key(&topic_parse) {
+                        let publisher = node.create_publisher::<ros2_interfaces_jazzy_serde::sensor_msgs::msg::CameraInfo>(
+                            &node.create_topic(&wanted_topic, pub_type, &qos)?, None)?;
+                        camera_info_publishers.insert(topic_parse.clone(), publisher);
+                    }
+                    camera_info_publishers
+                        .get(&topic_parse)
+                        .expect("Publisher exists")
+                        .async_publish(mt_bagread::camera::camera_info_to_serde(msg))
+                        .await?;
+                }
                 mt_net::SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&topic_parse);
                     if existing_pubber.is_none() {

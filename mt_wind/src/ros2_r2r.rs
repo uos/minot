@@ -221,6 +221,75 @@ pub async fn run_dyn_wind(
             }
             let pubber = existing_pubber.expect("Should be inserted manually if not exists.");
             match data.data {
+                mt_net::SensorTypeMapped::Image(msg) => {
+                    let native_t = r2r::sensor_msgs::msg::Image {
+                        header: Header {
+                            stamp: Time {
+                                sec: msg.header.stamp.sec,
+                                nanosec: msg.header.stamp.nanosec,
+                            },
+                            frame_id: msg.header.frame_id,
+                        },
+                        height: msg.height,
+                        width: msg.width,
+                        encoding: msg.encoding,
+                        is_bigendian: msg.is_bigendian,
+                        step: msg.step,
+                        data: msg.data,
+                    };
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding camera CDR")?;
+                    pubber.publish_raw(&raw)?;
+                }
+                mt_net::SensorTypeMapped::CompressedImage(msg) => {
+                    let native_t = r2r::sensor_msgs::msg::CompressedImage {
+                        header: Header {
+                            stamp: Time {
+                                sec: msg.header.stamp.sec,
+                                nanosec: msg.header.stamp.nanosec,
+                            },
+                            frame_id: msg.header.frame_id,
+                        },
+                        format: msg.format,
+                        data: msg.data,
+                    };
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding camera CDR")?;
+                    pubber.publish_raw(&raw)?;
+                }
+                mt_net::SensorTypeMapped::CameraInfo(msg) => {
+                    let native_t = r2r::sensor_msgs::msg::CameraInfo {
+                        header: Header {
+                            stamp: Time {
+                                sec: msg.header.stamp.sec,
+                                nanosec: msg.header.stamp.nanosec,
+                            },
+                            frame_id: msg.header.frame_id,
+                        },
+                        height: msg.height,
+                        width: msg.width,
+                        distortion_model: msg.distortion_model,
+                        d: msg.d,
+                        k: msg.k.to_vec(),
+                        r: msg.r.to_vec(),
+                        p: msg.p.to_vec(),
+                        binning_x: msg.binning_x,
+                        binning_y: msg.binning_y,
+                        roi: r2r::sensor_msgs::msg::RegionOfInterest {
+                            x_offset: msg.roi.x_offset,
+                            y_offset: msg.roi.y_offset,
+                            height: msg.roi.height,
+                            width: msg.roi.width,
+                            do_rectify: msg.roi.do_rectify,
+                        },
+                    };
+                    let raw = native_t
+                        .to_serialized_bytes()
+                        .context("Error encoding camera CDR")?;
+                    pubber.publish_raw(&raw)?;
+                }
                 mt_net::SensorTypeMapped::Lidar(l) => {
                     let native_t = PointCloud2 {
                         header: Header {

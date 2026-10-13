@@ -124,6 +124,9 @@ pub enum SensorType {
     Mixed,
     Any,
     Tf,
+    Image,
+    CompressedImage,
+    CameraInfo,
 }
 
 impl FromStr for SensorType {
@@ -135,6 +138,9 @@ impl FromStr for SensorType {
             "imu" => Self::Imu,
             "odom" => Self::Odom,
             "tf" => Self::Tf,
+            "image" => Self::Image,
+            "imagecompressed" | "compressedimage" | "compressed_image" => Self::CompressedImage,
+            "camerainfo" | "camera_info" => Self::CameraInfo,
             "mixed" => Self::Mixed,
             _ => Self::Any,
         })
@@ -144,6 +150,9 @@ impl FromStr for SensorType {
 pub const POINTCLOUD_ROS2_TYPE: &str = "sensor_msgs/msg/PointCloud2";
 pub const IMU_ROS2_TYPE: &str = "sensor_msgs/msg/Imu";
 pub const ODOM_ROS2_TYPE: &str = "nav_msgs/msg/Odometry";
+pub const IMAGE_ROS2_TYPE: &str = "sensor_msgs/msg/Image";
+pub const COMPRESSED_IMAGE_ROS2_TYPE: &str = "sensor_msgs/msg/CompressedImage";
+pub const CAMERA_INFO_ROS2_TYPE: &str = "sensor_msgs/msg/CameraInfo";
 pub const TF_ROS2_TYPE: &str = "tf2_msgs/msg/TFMessage";
 
 impl SensorType {
@@ -152,11 +161,22 @@ impl SensorType {
             SensorType::Lidar => query == POINTCLOUD_ROS2_TYPE,
             SensorType::Imu => query == IMU_ROS2_TYPE,
             SensorType::Mixed => {
-                query == POINTCLOUD_ROS2_TYPE || query == IMU_ROS2_TYPE || query == ODOM_ROS2_TYPE
+                matches!(
+                    query,
+                    POINTCLOUD_ROS2_TYPE
+                        | IMU_ROS2_TYPE
+                        | ODOM_ROS2_TYPE
+                        | IMAGE_ROS2_TYPE
+                        | COMPRESSED_IMAGE_ROS2_TYPE
+                        | CAMERA_INFO_ROS2_TYPE
+                )
             }
             SensorType::Any => true,
             SensorType::Odom => query == ODOM_ROS2_TYPE,
             SensorType::Tf => query == TF_ROS2_TYPE,
+            SensorType::Image => query == IMAGE_ROS2_TYPE,
+            SensorType::CompressedImage => query == COMPRESSED_IMAGE_ROS2_TYPE,
+            SensorType::CameraInfo => query == CAMERA_INFO_ROS2_TYPE,
         }
     }
 }
@@ -2764,6 +2784,30 @@ pub fn compile_code_with_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_sensor_selectors() {
+        for (names, sensor, ros_type) in [
+            (&["Image"][..], SensorType::Image, IMAGE_ROS2_TYPE),
+            (
+                &["ImageCompressed", "CompressedImage", "compressed_image"][..],
+                SensorType::CompressedImage,
+                COMPRESSED_IMAGE_ROS2_TYPE,
+            ),
+            (
+                &["CameraInfo", "camera_info"][..],
+                SensorType::CameraInfo,
+                CAMERA_INFO_ROS2_TYPE,
+            ),
+        ] {
+            for name in names {
+                assert_eq!(SensorType::from_str(name).unwrap(), sensor);
+            }
+            assert!(sensor.is(ros_type));
+            assert!(!sensor.is(IMU_ROS2_TYPE));
+            assert!(SensorType::Mixed.is(ros_type));
+        }
+    }
 
     #[test]
     fn minimal_wind() {

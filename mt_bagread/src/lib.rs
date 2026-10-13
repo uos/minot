@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde::{Deserializer, de};
 use std::fmt;
 
+pub mod camera;
 pub mod qos;
 pub use mt_net::Qos::*;
 
@@ -339,13 +340,17 @@ pub struct BagReadResult {
     pub end_of_bag: bool,
 }
 
-fn match_send_sensor(send_sensor: &[AnySensor], topic_name: &str) -> (bool, SensorType) {
+fn match_send_sensor(
+    send_sensor: &[AnySensor],
+    topic_name: &str,
+    topic_type: &str,
+) -> (bool, SensorType) {
     let mut send_type = SensorType::Any;
     let mut pass = false;
     for sensor in send_sensor.iter() {
         let (n_pass, n_send_type) = match &sensor.id {
             SensorIdentification::Topic(item) => (item.as_str() == topic_name, SensorType::Any),
-            SensorIdentification::Type(t) => (t.is(topic_name), *t),
+            SensorIdentification::Type(t) => (t.is(topic_type), *t),
             SensorIdentification::TopicAndType { topic, msg_type: t } => {
                 (topic.as_str() == topic_name, *t)
             }
@@ -365,6 +370,25 @@ fn deserialize_message(
     topic_type: &str,
 ) -> anyhow::Result<SensorTypeMapped> {
     match send_type {
+        SensorType::Image => {
+            let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::Image =
+                cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+            Ok(SensorTypeMapped::Image(camera::image_to_rkyv(dec)))
+        }
+        SensorType::CompressedImage => {
+            let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::CompressedImage =
+                cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+            Ok(SensorTypeMapped::CompressedImage(
+                camera::compressed_image_to_rkyv(dec),
+            ))
+        }
+        SensorType::CameraInfo => {
+            let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::CameraInfo =
+                cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
+            Ok(SensorTypeMapped::CameraInfo(camera::camera_info_to_rkyv(
+                dec,
+            )))
+        }
         SensorType::Lidar => {
             let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2 =
                 cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
@@ -378,6 +402,13 @@ fn deserialize_message(
             Ok(SensorTypeMapped::Imu(d))
         }
         SensorType::Mixed => match topic_type {
+            mt_mtc::IMAGE_ROS2_TYPE => deserialize_message(data, SensorType::Image, topic_type),
+            mt_mtc::COMPRESSED_IMAGE_ROS2_TYPE => {
+                deserialize_message(data, SensorType::CompressedImage, topic_type)
+            }
+            mt_mtc::CAMERA_INFO_ROS2_TYPE => {
+                deserialize_message(data, SensorType::CameraInfo, topic_type)
+            }
             POINTCLOUD_ROS2_TYPE => {
                 let dec: ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2 =
                     cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
@@ -422,13 +453,14 @@ fn deserialize_message(
 fn check_until_sensor(
     until_sensors: &[AnySensor],
     topic_name: &str,
+    topic_type: &str,
     counter: &mut u64,
     play_count: &PlayCount,
 ) -> anyhow::Result<bool> {
     for us in until_sensors {
         let pass = match &us.id {
             SensorIdentification::Topic(topic) => topic.as_str() == topic_name,
-            SensorIdentification::Type(t) => t.is(topic_name),
+            SensorIdentification::Type(t) => t.is(topic_type),
             SensorIdentification::TopicAndType { topic, msg_type: _ } => {
                 topic.as_str() == topic_name
             }
@@ -566,10 +598,15 @@ where
                     _ => {}
                 }
 
+                let topic_meta = metadata
+                    .get_topic_meta(&channel.topic)
+                    .ok_or(anyhow!("Topic does not exist."))?;
+
                 if let Some((until_sensors, pc)) = &until_sensor {
                     if check_until_sensor(
                         until_sensors,
                         &channel.topic,
+                        &topic_meta.topic_type,
                         &mut until_sensor_counter,
                         pc,
                     )? {
@@ -580,11 +617,8 @@ where
                     }
                 }
 
-                let topic_meta = metadata
-                    .get_topic_meta(&channel.topic)
-                    .ok_or(anyhow!("Topic does not exist."))?;
-
-                let (pass, send_type) = match_send_sensor(send_sensor, &channel.topic);
+                let (pass, send_type) =
+                    match_send_sensor(send_sensor, &channel.topic, &topic_meta.topic_type);
 
                 let len_before = msgs.len();
 
@@ -672,10 +706,10 @@ fn collect_until_db3(
     let relevant_ids: Vec<i64> = db3
         .topic_map
         .iter()
-        .filter(|(_, (name, _, _))| {
-            let (send_pass, _) = match_send_sensor(send_sensor, name);
+        .filter(|(_, (name, topic_type, _))| {
+            let (send_pass, _) = match_send_sensor(send_sensor, name, topic_type);
             let until_pass = until_sensor
-                .map(|(us, _)| match_send_sensor(us, name).0)
+                .map(|(us, _)| match_send_sensor(us, name, topic_type).0)
                 .unwrap_or(false);
             send_pass || until_pass
         })
@@ -784,14 +818,20 @@ fn collect_until_db3(
         }
 
         if let Some((until_sensors, pc)) = &until_sensor {
-            if check_until_sensor(until_sensors, &topic_name, &mut until_sensor_counter, pc)? {
+            if check_until_sensor(
+                until_sensors,
+                &topic_name,
+                &topic_type,
+                &mut until_sensor_counter,
+                pc,
+            )? {
                 breaked_until = true;
                 reached_end_naturally = false;
                 break;
             }
         }
 
-        let (pass, send_type) = match_send_sensor(send_sensor, &topic_name);
+        let (pass, send_type) = match_send_sensor(send_sensor, &topic_name, &topic_type);
 
         let len_before = msgs.len();
         if pass {
@@ -1799,3 +1839,6 @@ offered_qos_profiles: ""
         assert_eq!(v5_qos.deadline.nsec, v9_qos.deadline.nsec);
     }
 }
+
+#[cfg(test)]
+mod camera_tests;

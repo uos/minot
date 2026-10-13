@@ -148,3 +148,51 @@ if let Some(message) = subscriber.next_archived().await {
 ```
 
 Call `message.deserialize()` when an existing API still requires an owned value.
+
+## Camera image conversion
+
+The default `image` feature converts `sensor_msgs::msg::Image` and
+`CompressedImage` messages into `image::DynamicImage`:
+
+```toml
+mt_pubsub = "0.13"
+```
+
+```rust
+use mt_pubsub::{ToImage, ImageMessageExt, image::{
+    image_from_dynamic, compressed_image_from_dynamic, ImageFormat, Time,
+}};
+
+let pixels = message.to_image()?; // Image or CompressedImage
+let raw = image_from_dynamic(&pixels)?
+    .with_header(message.header.clone());
+let png = compressed_image_from_dynamic(&pixels, ImageFormat::Png)?
+    .with_frame_id("camera_optical_frame")
+    .with_stamp(Time { sec: 42, nanosec: 123 });
+```
+
+The helper copies raw pixels into an owned image, removes row padding, respects
+16-bit byte order, and converts BGR/BGRA to RGB/RGBA. Supported raw encodings are
+`mono8`, `rgb8`, `bgr8`, `rgba8`, `bgra8`, their `16` variants, `8UC1`, and
+`16UC1`. Grayscale and depth samples retain their original values without scaling.
+JPEG and PNG compressed payloads are decoded by their signatures, including
+16-bit PNG. Additional codecs can be enabled through an application dependency
+on the `image` crate. Bayer, YUV, floating-point depth, and `compressedDepth`
+transport need specialized processing and return errors. Malformed buffers also
+return errors.
+
+Encoding produces tightly packed raw grayscale/RGB/RGBA messages at 8 or 16
+bits, or JPEG/PNG compressed messages. Headers default to zero/empty. Use the fluent
+`with_header`, `with_frame_id`, and `with_stamp` setters before publishing.
+Setters apply in order; `with_header` replaces the complete header. PNG preserves supported
+samples and alpha; JPEG is lossy and accepts 8-bit grayscale/RGB. Convert other
+color types explicitly before JPEG encoding. Unsupported color types return an
+error rather than silently losing precision or alpha.
+
+Archived references from `next_archived().archived()` can be decoded using
+`image::archived_image_to_image` or `image::archived_compressed_image_to_image`,
+without first deserializing the message payload.
+
+For use without `mt_pubsub`, import `mt_net::image::ToImage`; `mt_net` also
+enables `image` by default. Use `default-features = false` to omit image codecs
+when only forwarding messages.

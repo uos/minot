@@ -65,6 +65,9 @@ pub async fn run_dyn_wind(
             }
         },
     };
+    let mut image_publishers = HashMap::new();
+    let mut compressed_image_publishers = HashMap::new();
+    let mut camera_info_publishers = HashMap::new();
     let mut cloud_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
@@ -78,6 +81,99 @@ pub async fn run_dyn_wind(
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             match data.data {
+                mt_net::SensorTypeMapped::Image(msg) => {
+                    if !image_publishers.contains_key(&data.topic) {
+                        let publisher = nh
+                            .advertise::<sensor_msgs::Image>(&data.topic, 10, false)
+                            .await?;
+                        image_publishers.insert(data.topic.clone(), publisher);
+                    }
+                    let msg = sensor_msgs::Image {
+                        header: std_msgs::Header {
+                            seq: 0,
+                            stamp: Time {
+                                secs: msg.header.stamp.sec,
+                                nsecs: i32::try_from(msg.header.stamp.nanosec)?,
+                            },
+                            frame_id: msg.header.frame_id,
+                        },
+                        height: msg.height,
+                        width: msg.width,
+                        encoding: msg.encoding,
+                        is_bigendian: msg.is_bigendian,
+                        step: msg.step,
+                        data: msg.data,
+                    };
+                    image_publishers
+                        .get(&data.topic)
+                        .expect("Publisher exists")
+                        .publish(&msg)
+                        .await?;
+                }
+                mt_net::SensorTypeMapped::CompressedImage(msg) => {
+                    if !compressed_image_publishers.contains_key(&data.topic) {
+                        let publisher = nh
+                            .advertise::<sensor_msgs::CompressedImage>(&data.topic, 10, false)
+                            .await?;
+                        compressed_image_publishers.insert(data.topic.clone(), publisher);
+                    }
+                    let msg = sensor_msgs::CompressedImage {
+                        header: std_msgs::Header {
+                            seq: 0,
+                            stamp: Time {
+                                secs: msg.header.stamp.sec,
+                                nsecs: i32::try_from(msg.header.stamp.nanosec)?,
+                            },
+                            frame_id: msg.header.frame_id,
+                        },
+                        format: msg.format,
+                        data: msg.data,
+                    };
+                    compressed_image_publishers
+                        .get(&data.topic)
+                        .expect("Publisher exists")
+                        .publish(&msg)
+                        .await?;
+                }
+                mt_net::SensorTypeMapped::CameraInfo(msg) => {
+                    if !camera_info_publishers.contains_key(&data.topic) {
+                        let publisher = nh
+                            .advertise::<sensor_msgs::CameraInfo>(&data.topic, 10, false)
+                            .await?;
+                        camera_info_publishers.insert(data.topic.clone(), publisher);
+                    }
+                    let msg = sensor_msgs::CameraInfo {
+                        header: std_msgs::Header {
+                            seq: 0,
+                            stamp: Time {
+                                secs: msg.header.stamp.sec,
+                                nsecs: i32::try_from(msg.header.stamp.nanosec)?,
+                            },
+                            frame_id: msg.header.frame_id,
+                        },
+                        height: msg.height,
+                        width: msg.width,
+                        distortion_model: msg.distortion_model,
+                        D: msg.d,
+                        K: msg.k,
+                        R: msg.r,
+                        P: msg.p,
+                        binning_x: msg.binning_x,
+                        binning_y: msg.binning_y,
+                        roi: sensor_msgs::RegionOfInterest {
+                            x_offset: msg.roi.x_offset,
+                            y_offset: msg.roi.y_offset,
+                            height: msg.roi.height,
+                            width: msg.roi.width,
+                            do_rectify: msg.roi.do_rectify,
+                        },
+                    };
+                    camera_info_publishers
+                        .get(&data.topic)
+                        .expect("Publisher exists")
+                        .publish(&msg)
+                        .await?;
+                }
                 mt_net::SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&data.topic);
                     if existing_pubber.is_none() {

@@ -52,6 +52,9 @@ pub async fn run_dyn_wind(
     let node = nh.await??;
     let mut wind_receiver = wind_receiver.await??;
 
+    let mut image_publishers = HashMap::new();
+    let mut compressed_image_publishers = HashMap::new();
+    let mut camera_info_publishers = HashMap::new();
     let mut cloud_publishers = HashMap::new();
     let mut odom_publishers = HashMap::new();
     let mut imu_publishers = HashMap::new();
@@ -64,6 +67,57 @@ pub async fn run_dyn_wind(
     while let Some(wind_data) = wind_receiver.recv().await {
         for data in wind_data {
             match data.data {
+                SensorTypeMapped::Image(msg) => {
+                    if !image_publishers.contains_key(&data.topic) {
+                        let qos = if matches!(&data.qos, Some(mt_net::Qos::Custom(profile)) if profile.durability == "transient_local")
+                        {
+                            Qos::Reliable.transient_local()
+                        } else {
+                            Qos::Reliable
+                        };
+                        let publisher = node.create_publisher(data.topic.clone(), qos).await?;
+                        image_publishers.insert(data.topic.clone(), publisher);
+                    }
+                    image_publishers
+                        .get(&data.topic)
+                        .expect("Publisher exists")
+                        .publish(&msg)
+                        .await?;
+                }
+                SensorTypeMapped::CompressedImage(msg) => {
+                    if !compressed_image_publishers.contains_key(&data.topic) {
+                        let qos = if matches!(&data.qos, Some(mt_net::Qos::Custom(profile)) if profile.durability == "transient_local")
+                        {
+                            Qos::Reliable.transient_local()
+                        } else {
+                            Qos::Reliable
+                        };
+                        let publisher = node.create_publisher(data.topic.clone(), qos).await?;
+                        compressed_image_publishers.insert(data.topic.clone(), publisher);
+                    }
+                    compressed_image_publishers
+                        .get(&data.topic)
+                        .expect("Publisher exists")
+                        .publish(&msg)
+                        .await?;
+                }
+                SensorTypeMapped::CameraInfo(msg) => {
+                    if !camera_info_publishers.contains_key(&data.topic) {
+                        let qos = if matches!(&data.qos, Some(mt_net::Qos::Custom(profile)) if profile.durability == "transient_local")
+                        {
+                            Qos::Reliable.transient_local()
+                        } else {
+                            Qos::Reliable
+                        };
+                        let publisher = node.create_publisher(data.topic.clone(), qos).await?;
+                        camera_info_publishers.insert(data.topic.clone(), publisher);
+                    }
+                    camera_info_publishers
+                        .get(&data.topic)
+                        .expect("Publisher exists")
+                        .publish(&msg)
+                        .await?;
+                }
                 SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&data.topic);
                     if existing_pubber.is_none() {

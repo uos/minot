@@ -48,10 +48,11 @@ name = "minot"
 path = "src/minot.rs"
 
 [features]
-default = ["embed-coord", "embed-mt-pubsub", "db3", "shm"]
+default = ["embed-coord", "embed-mt-pubsub", "db3", "shm", "image"]
+image = ["mt_net/image", "mt_wind?/image"]
 db3 = ["mt_bagread/db3"]
 
-default-hiroz = ["embed-coord", "embed-hiroz", "db3", "shm"]
+default-hiroz = ["embed-coord", "embed-hiroz", "db3", "shm", "image"]
 
 # Enable shared memory for large same-machine messages, with automatic network fallback.
 # `minot` is the only crate that turns this on by default; every library crate leaves it off.
