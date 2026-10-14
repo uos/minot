@@ -23,6 +23,7 @@ static SHM_RUNTIME_AVAILABLE: AtomicBool = AtomicBool::new(true);
 pub enum NetworkRole {
     Client,
     Coordinator,
+    PubSubPeer,
 }
 
 /// Restrict subsequently created Minot Zenoh sessions to IPv4 loopback.
@@ -95,6 +96,9 @@ pub fn local_router_is_running() -> bool {
 }
 
 pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
+    if role == NetworkRole::PubSubPeer {
+        return peer_config_for(is_local_only(), is_unicast_only(), coordinator_port());
+    }
     config_for(
         role,
         is_local_only(),
@@ -105,11 +109,38 @@ pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
     )
 }
 
+fn peer_config_for(local: bool, unicast_only: bool, port: u16) -> zenoh::Config {
+    let multicast = !unicast_only;
+    let host = if local { "127.0.0.1" } else { "0.0.0.0" };
+    let mut config = zenoh::Config::from_json5(&format!(
+            r#"{{mode:"peer",listen:{{endpoints:["tcp/{host}:0"]}},scouting:{{multicast:{{enabled:{multicast},address:"224.0.0.224:{port}",autoconnect:["peer"],listen:true}},gossip:{{enabled:true,multihop:false,autoconnect:["peer"]}}}}}}"#
+        )).expect("internal peer configuration must be valid");
+    if local {
+        // Every local listener is reachable in both directions. Let only one
+        // side initiate each connection, avoiding duplicate discovery connects.
+        for method in ["multicast", "gossip"] {
+            config
+                .insert_json5(
+                    &format!("scouting/{method}/autoconnect_strategy"),
+                    "\"greater-zid\"",
+                )
+                .expect("local peer autoconnect strategy");
+        }
+        config
+            .insert_json5("scouting/multicast/interface", "\"127.0.0.1\"")
+            .expect("loopback interface configuration");
+    }
+    config
+}
+
 /// Open a Zenoh session, retrying without shared memory if SHM initialization fails.
 pub(crate) fn open_zenoh_session(role: NetworkRole) -> anyhow::Result<zenoh::Session> {
-    use zenoh::Wait;
+    open_zenoh_session_with_config(zenoh_config(role))
+}
 
-    let config = zenoh_config(role);
+/// Open a configured session with the same SHM fallback used by Minot ships.
+pub fn open_zenoh_session_with_config(config: zenoh::Config) -> anyhow::Result<zenoh::Session> {
+    use zenoh::Wait;
     #[cfg(feature = "shm")]
     let config = {
         let mut config = config;
@@ -129,6 +160,8 @@ pub(crate) fn open_zenoh_session(role: NetworkRole) -> anyhow::Result<zenoh::Ses
         config
     };
 
+    #[cfg(feature = "shm")]
+    let fallback_config = config.clone();
     match zenoh::open(config).wait() {
         Ok(session) => Ok(session),
         Err(error) => {
@@ -139,7 +172,7 @@ pub(crate) fn open_zenoh_session(role: NetworkRole) -> anyhow::Result<zenoh::Ses
                 }
                 warn!("Zenoh SHM initialization failed: {error}. Retrying with network transport");
                 disable_shm_runtime();
-                let mut fallback = zenoh_config(role);
+                let mut fallback = fallback_config;
                 disable_shm_in_config(&mut fallback)?;
                 return zenoh::open(fallback)
                     .wait()
@@ -206,7 +239,9 @@ fn config_for(
             ),
             // An external Zenoh router owns the endpoint. Run the Minot
             // coordinator logic on a client session connected to that router.
-            (NetworkRole::Coordinator, true) | (NetworkRole::Client, _) => format!(
+            (NetworkRole::Coordinator, true)
+            | (NetworkRole::Client, _)
+            | (NetworkRole::PubSubPeer, _) => format!(
                 r#"{{mode:"client",scouting:{{multicast:{{enabled:false}},gossip:{{enabled:false}}}},connect:{{endpoints:["{}"],exit_on_failure:false}}}}"#,
                 local_endpoint
             ),
@@ -264,6 +299,45 @@ fn config_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_config_uses_dynamic_listeners_and_an_isolated_scouting_port() {
+        let config = peer_config_for(true, false, 18447);
+        assert_eq!(config.get_json("mode").unwrap(), "\"peer\"");
+        assert_eq!(
+            config.get_json("listen/endpoints").unwrap(),
+            r#"["tcp/127.0.0.1:0"]"#
+        );
+        assert_eq!(
+            config.get_json("scouting/multicast/address").unwrap(),
+            "\"224.0.0.224:18447\""
+        );
+        assert_eq!(
+            config.get_json("scouting/multicast/interface").unwrap(),
+            "\"127.0.0.1\""
+        );
+        assert_eq!(
+            config.get_json("scouting/gossip/multihop").unwrap(),
+            "false"
+        );
+        for method in ["multicast", "gossip"] {
+            assert_eq!(
+                config
+                    .get_json(&format!("scouting/{method}/autoconnect_strategy"))
+                    .unwrap(),
+                "\"greater-zid\""
+            );
+        }
+        let unicast = peer_config_for(false, true, 18447);
+        assert_eq!(
+            unicast.get_json("scouting/multicast/enabled").unwrap(),
+            "false"
+        );
+        assert_eq!(
+            unicast.get_json("listen/endpoints").unwrap(),
+            r#"["tcp/0.0.0.0:0"]"#
+        );
+    }
 
     #[test]
     fn configured_port_reaches_listeners_and_local_clients() {

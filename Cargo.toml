@@ -147,3 +147,10 @@ codegen-units = 1
 
 [profile.colcon]
 inherits = "release"
+
+[patch.crates-io]
+# 1.10.1 can deadlock under peer churn; pin the merged StartConditions fix
+# until it is available in a crates.io release (eclipse-zenoh/zenoh#2779).
+# A patch only applies when minot is the workspace root, so a crate that depends
+# on minot has to carry the same entry.
+zenoh = { git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "646f2d1b730e584a570015a77bee9f6db08be9d1" }

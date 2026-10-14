@@ -73,3 +73,7 @@ mode = "0644"
 source = "target/release/librat.a"
 dest = "/usr/lib/librat.a"
 mode = "0644"
+
+[dev-dependencies]
+mt_pubsub.workspace = true
+mt_coord.workspace = true

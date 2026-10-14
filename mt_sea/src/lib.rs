@@ -126,8 +126,21 @@ impl ConnectionState {
         }
     }
 
+    /// Connection state for a coordinator-free session. Generation stays at
+    /// zero; the session is ready until its lifetime token is cancelled.
+    pub fn for_session(shutdown: tokio_util::sync::CancellationToken) -> std::sync::Arc<Self> {
+        let state = std::sync::Arc::new(Self::new());
+        state.mark_link_proven();
+        let watcher = std::sync::Arc::clone(&state);
+        tokio::spawn(async move {
+            shutdown.cancelled().await;
+            watcher.mark_disconnected();
+        });
+        state
+    }
+
     /// Which registration is currently live. Starts at 0 and increments once
-    /// per successful re-registration.
+    /// per successful re-registration. Peer sessions keep generation zero.
     pub fn generation(&self) -> u64 {
         self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -145,6 +158,7 @@ impl ConnectionState {
 
     /// Whether the coordinator has been observed answering this node.
     ///
+    /// In coordinator-free sessions this instead means the local session is open.
     /// Registration only proves the coordinator was reachable at that instant.
     /// This becomes true once it echoes a heartbeat, which is also when the
     /// node's disconnect detector arms; before that, a coordinator that dies
@@ -384,7 +398,8 @@ where
     T: Archive,
     T::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>,
 {
-    pub(crate) fn from_aligned_bytes(bytes: AlignedVec) -> anyhow::Result<Self> {
+    /// Validate an aligned wire buffer before exposing an archived view.
+    pub fn from_aligned_bytes(bytes: AlignedVec) -> anyhow::Result<Self> {
         rkyv::access::<T::Archived, rkyv::rancor::Error>(&bytes)
             .map_err(|error| anyhow::anyhow!("Could not validate archived message: {error}"))?;
         Ok(Self {

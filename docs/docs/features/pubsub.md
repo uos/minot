@@ -1,6 +1,6 @@
 # Pub/Sub
 
-An async implementation of a basic Publish/Subscribe pattern with a ROS-like API, but running natively over the Minot network stack.
+An async Publish/Subscribe API running directly over Zenoh peers by default.
 
 !!! tip "Golang Support"
 
@@ -15,27 +15,51 @@ When used in static and simple environments, it is stable enough for replacing t
     
     To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
 
-## Zenoh Port
+## Peer Discovery
 
-Set `MINOT_ZENOH_PORT` before starting Minot and its nodes to choose the
-coordinator TCP port. The default is `7447`. For example, use
-`MINOT_ZENOH_PORT=17447` when a ROS Zenoh router already owns port 7447. Local
-client endpoints and the startup probe use the selected port too; an explicit
-`MINOT_COORD_ADDR` keeps its own endpoint port. Invalid or zero values warn and
-fall back to `7447`.
+`NodeConfig::new` selects `CoordMode::Peer`. Nodes declare typed topics directly
+in Zenoh without starting a Minot coordinator or acquiring a lock file.
+Multicast scouting and single-hop gossip connect peers automatically. `MINOT_ZENOH_PORT`
+(default `7447`) selects the peer UDP scouting port and the existing coordinator
+TCP port; use a different value on all Minot nodes to coexist with ROS Zenoh.
+Peer listeners use OS-assigned TCP ports unless explicitly configured.
 
-## Automatic Coordinator
+For Docker or routed networks without multicast, supply reachable peers through
+`MINOT_PEERS=tcp/seed:17447` (comma-separated endpoints), or use
+`NodeConfig::peer_endpoints` and `NodeConfig::listen_endpoint`. Explicit peers
+disable multicast; gossip remains enabled. Bootstrap nodes are ordinary peers.
+They must advertise reachable listener addresses for mesh expansion.
 
-Like in ROS1, the communication technically needs a *Master* to distribute routes. In our case, it is the *Coordinator*. 
+Discovery is asynchronous. Use
+`publisher.wait_for_subscribers(Duration::from_secs(5)).await?` when at least one
+recipient must be discovered before publishing the first sample. For a known
+startup group, `wait_for_subscriber_count(count, timeout)` waits for the
+required number of receiving endpoints. Startup QoS checks and counts use the
+peers observed so far if a discovery query times out during mesh expansion;
+Reliable delivery still requires a complete subscriber snapshot and all ACKs.
+Local-only peers choose one connection initiator per pair to avoid duplicate
+connection attempts.
 
-**However**, you do not need to start it manually! When a Minot node starts up (e.g. your publisher or subscriber), it will attempt to find a coordinator on the network. If it times out, the node will **automatically spin up an embedded coordinator** in the background.
+## Coordinated Compatibility
 
-Processes sharing a temporary filesystem elect one embedded coordinator using
-a per-user, per-port lock. The other nodes retry registration as it starts.
-This lock is not shared across separate Docker filesystems or different hosts.
-For those deployments run one designated coordinator and select
-`CoordMode::External` on the other nodes. Zenoh peer/gossip discovery connects
-sessions but does not elect the Minot application coordinator.
+`mt_rat` variable synchronization and bag-query coordination retain their
+coordinator protocol. Pub/sub applications can explicitly select
+`CoordMode::AutoStart`, `Start`, or `External` to use the previous topic routing.
+Peer and coordinated pub/sub endpoints use different wire protocols; select
+the same mode on both sides of a topic.
+
+The coordinator's listener and local startup probe honor `MINOT_ZENOH_PORT`.
+Explicit `MINOT_COORD_ADDR` keeps its own port. Its per-user/per-port lock still
+requires a shared filesystem; use one designated coordinator for coordinated
+applications across separate containers.
+
+Peer `Reliable` delivery acknowledges subscriber queue acceptance. Missing
+acknowledgements or loss of a fatal reliable node cancels the peer run.
+Transient-local writers provide retained samples directly to late subscribers.
+Peer loss detection uses Zenoh liveliness; coordinator heartbeat/reconnect
+settings continue to apply to coordinated modes. The peer implementation uses
+owned Zenoh buffers; explicit Minot SHM pool controls remain on the coordinated
+path.
 
 !!! info
 
@@ -53,7 +77,7 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Resolves when connected to a Coordinator (or automatically starts one)
+    // Opens a coordinator-free Zenoh peer session
     let node = Node::create(NodeConfig::new("my_node_pub")).await?;     
 
     // Qos can be Reliable or BestEffort
@@ -74,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 !!! info
 
-    Nodes will automatically detect the Coordinator and do not need any setup. Like the other networking stack from Minot, you just need to ensure that each Node that you want to connect with each other is reachable in the network.
+    Nodes discover each other through multicast or bootstrap peers and gossip. Ensure that their advertised listener addresses are reachable.
 
 
 In contrast to Variable Sharing, the publisher does not care about syncing with the subscriber. But like most abstractions, this comes at a cost. Here it is setting the capacity of the queue length for the subscriber - like in ROS.

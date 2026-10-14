@@ -24,7 +24,9 @@ fn auto_start_worker() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let node = mt_pubsub::Node::create(
-            mt_pubsub::NodeConfig::new(format!("startup_{index}")).mode(mt_pubsub::Qos::BestEffort),
+            mt_pubsub::NodeConfig::new(format!("startup_{index}"))
+                .mode(mt_pubsub::Qos::BestEffort)
+                .coord_mode(mt_pubsub::CoordMode::AutoStart),
         )
         .await
         .expect("simultaneous auto-start must register");

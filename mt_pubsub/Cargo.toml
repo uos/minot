@@ -17,6 +17,8 @@ exclude.workspace = true
 mt_sea.workspace = true
 mt_coord = { workspace = true, features = ["embed-scope"] }
 mt_net.workspace = true
+zenoh.workspace = true
+serde_json.workspace = true
 env_logger.workspace = true
 log.workspace = true
 nalgebra.workspace = true
