@@ -415,7 +415,9 @@ async fn tui(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
         {
             let wind_name =
                 mt_wind::get_env_or_default("wind_ratpub_name", &EMBED_RATPUB_TURBINE_NAME)?;
-            clients.insert(wind_name.clone() + "_pub");
+            if mt_wind::mt_pubsub::publisher_registers()? {
+                clients.insert(wind_name.clone() + "_pub");
+            }
             clients.insert(wind_name);
         }
 
@@ -988,7 +990,9 @@ async fn async_play(
     {
         let wind_name =
             mt_wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
-        clients.insert(wind_name.clone() + "_pub");
+        if mt_wind::mt_pubsub::publisher_registers()? {
+            clients.insert(wind_name.clone() + "_pub");
+        }
         clients.insert(wind_name.clone());
         let (tx, rx) = tokio::sync::oneshot::channel();
         ready_rxs.push(rx);
@@ -1534,7 +1538,9 @@ async fn serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
                                     "wind_ratpub_name",
                                     &EMBED_RATPUB_TURBINE_NAME,
                                 )?;
-                                clients.insert(wind_name.clone() + "_pub");
+                                if mt_wind::mt_pubsub::publisher_registers()? {
+                                    clients.insert(wind_name.clone() + "_pub");
+                                }
                                 clients.insert(wind_name);
                             }
 

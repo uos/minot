@@ -337,6 +337,9 @@ impl fmt::Debug for Bagfile {
 #[derive(Clone, Debug)]
 pub struct BagReadResult {
     pub messages: Vec<(u64, BagMsg)>,
+    /// No further message of the requested sensors remains in the bag. This is
+    /// also set when other topics remain: an IMU stream that ends before the
+    /// lidar stream would otherwise answer every later query with nothing.
     pub end_of_bag: bool,
 }
 
@@ -655,9 +658,14 @@ where
     // Resume at the message that stopped this call. Seeking to the previous message instead
     // would replay an already consumed message.
     if breaked_until {
-        let options = IndexedReaderOptions::new().log_time_on_or_after(
-            break_log_time.expect("break_log_time is set whenever breaked_until is set"),
-        );
+        let break_log_time =
+            break_log_time.expect("break_log_time is set whenever breaked_until is set");
+        if msgs.is_empty()
+            && !send_sensor_remains(file, buffer, summary, metadata, send_sensor, break_log_time)?
+        {
+            reached_end_naturally = true;
+        }
+        let options = IndexedReaderOptions::new().log_time_on_or_after(break_log_time);
         *reader = mcap::sans_io::indexed_reader::IndexedReader::new_with_options(summary, options)
             .expect("could not construct reader");
         *last_iter_time = time_iter_before;
@@ -667,6 +675,47 @@ where
         messages: msgs,
         end_of_bag: reached_end_naturally,
     })
+}
+
+/// Whether any message of `send_sensor` is logged at or after `from_log_time`.
+///
+/// Only called for an empty segment, so a stream with a gap stops at its next
+/// message and only an exhausted stream reads to the end of the file.
+fn send_sensor_remains<T>(
+    file: &mut T,
+    buffer: &mut Vec<u8>,
+    summary: &Summary,
+    metadata: &Metadata,
+    send_sensor: &[AnySensor],
+    from_log_time: u64,
+) -> anyhow::Result<bool>
+where
+    T: Seek + Read,
+{
+    let options = IndexedReaderOptions::new().log_time_on_or_after(from_log_time);
+    let mut reader =
+        mcap::sans_io::indexed_reader::IndexedReader::new_with_options(summary, options)
+            .map_err(|e| anyhow!("could not construct look-ahead reader: {e}"))?;
+    while let Some(event) = reader.next_event() {
+        match event? {
+            IndexedReadEvent::ReadChunkRequest { offset, length } => {
+                file.seek(std::io::SeekFrom::Start(offset))?;
+                buffer.resize(length, 0);
+                file.read_exact(buffer)?;
+                reader.insert_chunk_record_data(offset, buffer)?;
+            }
+            IndexedReadEvent::Message { header, .. } => {
+                let channel = summary.channels.get(&header.channel_id).unwrap();
+                let topic_meta = metadata
+                    .get_topic_meta(&channel.topic)
+                    .ok_or(anyhow!("Topic does not exist."))?;
+                if match_send_sensor(send_sensor, &channel.topic, &topic_meta.topic_type).0 {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(feature = "db3")]
@@ -863,6 +912,22 @@ fn collect_until_db3(
     }
 
     if breaked_until {
+        // An empty segment with no requested message left is the end for this query.
+        if msgs.is_empty() {
+            let mut remains = false;
+            for row_result in rows_iter.by_ref() {
+                let (_, _, topic_id) = row_result.context("failed reading db3 message row")?;
+                if let Some((name, topic_type, _)) = topic_map.get(&topic_id)
+                    && match_send_sensor(send_sensor, name, topic_type).0
+                {
+                    remains = true;
+                    break;
+                }
+            }
+            if !remains {
+                reached_end_naturally = true;
+            }
+        }
         // Roll back to just before the message that triggered the break so the
         // next call replays from that point.
         db3.cursor_ns = time_iter_before_ns;
@@ -1842,3 +1907,6 @@ offered_qos_profiles: ""
 
 #[cfg(test)]
 mod camera_tests;
+
+#[cfg(test)]
+mod end_of_stream_tests;

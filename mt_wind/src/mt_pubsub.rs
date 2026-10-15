@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use mt_net::SensorTypeMapped;
-use mt_pubsub::{Node, NodeConfig, Qos};
+use mt_pubsub::{CoordMode, Node, NodeConfig, Qos};
 use mt_sea::{Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -40,12 +40,43 @@ pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::Wi
     Ok(rx)
 }
 
+/// Env variable selecting how the turbine's publishers reach subscribers:
+/// `peer` (default), `autostart`, `start` or `external`.
+pub const COORD_MODE_ENV: &str = "wind_ratpub_coord_mode";
+
+/// Coordination mode of the turbine's publishers.
+///
+/// Coordinated and peer topics are separate: a coordinated subscriber never
+/// sees a peer publisher, so choose the mode the subscribers use. Replay
+/// control stays on the coordinator in every mode.
+pub fn publisher_coord_mode() -> anyhow::Result<CoordMode> {
+    let value = crate::get_env_or_default(COORD_MODE_ENV, "peer")?;
+    match value.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+        "autostart" => Ok(CoordMode::AutoStart),
+        "start" => Ok(CoordMode::Start),
+        "external" => Ok(CoordMode::External),
+        "peer" => Ok(CoordMode::Peer),
+        _ => Err(anyhow!(
+            "Invalid {COORD_MODE_ENV} '{value}', expected autostart, start, external or peer"
+        )),
+    }
+}
+
+/// Whether the turbine's publisher node registers with the coordinator, so the
+/// coordinator must wait for it among the expected clients.
+pub fn publisher_registers() -> anyhow::Result<bool> {
+    Ok(!matches!(publisher_coord_mode()?, CoordMode::Peer))
+}
+
 pub async fn run_dyn_wind(
     wind_name: &str,
     ready: tokio::sync::oneshot::Sender<()>,
 ) -> anyhow::Result<Option<()>> {
     let nh_name = wind_name.to_string() + "_pub";
-    let nh = tokio::spawn(async move { Node::create(NodeConfig::new(nh_name)).await });
+    let coord_mode = publisher_coord_mode()?;
+    let nh = tokio::spawn(async move {
+        Node::create(NodeConfig::new(nh_name).coord_mode(coord_mode)).await
+    });
     let wind_name_owned = wind_name.to_owned();
     let wind_receiver = tokio::spawn(async move { wind(&wind_name_owned).await });
 
