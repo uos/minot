@@ -6,6 +6,7 @@ fn topic_sensor(topic: &str) -> Vec<AnySensor> {
         name: topic.into(),
         id: SensorIdentification::Topic(topic.into()),
         short: None,
+        passive: false,
     }]
 }
 
@@ -19,6 +20,7 @@ fn bag(records: &[(&str, u64)]) -> Bagfile {
         for (topic, ros_type) in [
             ("/imu", "sensor_msgs/msg/Imu"),
             ("/cloud", "sensor_msgs/msg/PointCloud2"),
+            ("/cam", "sensor_msgs/msg/CompressedImage"),
         ] {
             let schema = writer.add_schema(ros_type, "ros2msg", b"").unwrap();
             let channel = writer
@@ -58,6 +60,31 @@ fn imus_until_cloud(bag: &mut Bagfile) -> BagReadResult {
         &bag.summary,
         bag.metadata.as_ref().unwrap(),
         &topic_sensor("/imu"),
+        Some((&topic_sensor("/cloud"), &PlayCount::Amount(1))),
+        None,
+    )
+    .unwrap()
+}
+
+/// The IMUs and a passive camera up to the next cloud, as `pf! [i, c], l 1`
+/// asks for them with `c._passive = true`.
+fn imus_and_passive_camera_until_cloud(bag: &mut Bagfile) -> BagReadResult {
+    let mut sending = topic_sensor("/imu");
+    sending.push(AnySensor {
+        name: "/cam".into(),
+        id: SensorIdentification::Topic("/cam".into()),
+        short: None,
+        passive: true,
+    });
+    collect_until(
+        bag.reader.as_mut().unwrap(),
+        bag.io.as_mut().unwrap(),
+        &mut bag.read_buffer,
+        &mut bag.last_iter_time,
+        &mut bag.start_time,
+        &bag.summary,
+        bag.metadata.as_ref().unwrap(),
+        &sending,
         Some((&topic_sensor("/cloud"), &PlayCount::Amount(1))),
         None,
     )
@@ -124,4 +151,51 @@ fn gap_in_send_stream_is_not_the_end() {
     assert_eq!(times(&one_cloud(&mut bag)), vec![3]);
     let r = imus_until_cloud(&mut bag);
     assert_eq!((times(&r), r.end_of_bag), (vec![4], false));
+}
+
+#[test]
+fn passive_stream_does_not_keep_an_exhausted_query_alive() {
+    let mut bag = bag(&[
+        ("/imu", 1),
+        ("/cam", 2),
+        ("/cloud", 3),
+        ("/imu", 4),
+        ("/cam", 5),
+        ("/cloud", 6),
+        ("/cam", 7),
+        ("/cloud", 8),
+        ("/cam", 9),
+        ("/cloud", 10),
+    ]);
+    let r = imus_and_passive_camera_until_cloud(&mut bag);
+    assert_eq!((times(&r), r.end_of_bag), (vec![1, 2], false));
+    assert_eq!(times(&one_cloud(&mut bag)), vec![3]);
+    let r = imus_and_passive_camera_until_cloud(&mut bag);
+    assert_eq!((times(&r), r.end_of_bag), (vec![4, 5], false));
+    assert_eq!(times(&one_cloud(&mut bag)), vec![6]);
+    // Camera images remain, but no IMU does: the query ends instead of
+    // sending images on for ever.
+    let r = imus_and_passive_camera_until_cloud(&mut bag);
+    assert_eq!((times(&r), r.end_of_bag), (vec![], true));
+}
+
+#[test]
+fn passive_stream_is_sent_through_a_gap_in_the_deciding_stream() {
+    let mut bag = bag(&[
+        ("/imu", 1),
+        ("/cloud", 2),
+        ("/cam", 3),
+        ("/cloud", 4),
+        ("/imu", 5),
+        ("/cloud", 6),
+    ]);
+    let r = imus_and_passive_camera_until_cloud(&mut bag);
+    assert_eq!((times(&r), r.end_of_bag), (vec![1], false));
+    assert_eq!(times(&one_cloud(&mut bag)), vec![2]);
+    // No IMU between clouds 2 and 4, but one follows: the image still goes out.
+    let r = imus_and_passive_camera_until_cloud(&mut bag);
+    assert_eq!((times(&r), r.end_of_bag), (vec![3], false));
+    assert_eq!(times(&one_cloud(&mut bag)), vec![4]);
+    let r = imus_and_passive_camera_until_cloud(&mut bag);
+    assert_eq!((times(&r), r.end_of_bag), (vec![5], false));
 }

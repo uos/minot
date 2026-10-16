@@ -130,6 +130,7 @@ fn camera_sensors() -> Vec<AnySensor> {
         name: format!("{sensor:?}"),
         id: SensorIdentification::Type(sensor),
         short: None,
+        passive: false,
     })
     .collect()
 }

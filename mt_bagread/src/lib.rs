@@ -655,13 +655,15 @@ where
         }
     }
 
+    let deciding = deciding_sensors(send_sensor);
+    let holds_deciding = holds_deciding_message(&msgs, &deciding);
     // Resume at the message that stopped this call. Seeking to the previous message instead
     // would replay an already consumed message.
     if breaked_until {
         let break_log_time =
             break_log_time.expect("break_log_time is set whenever breaked_until is set");
-        if msgs.is_empty()
-            && !send_sensor_remains(file, buffer, summary, metadata, send_sensor, break_log_time)?
+        if !holds_deciding
+            && !send_sensor_remains(file, buffer, summary, metadata, &deciding, break_log_time)?
         {
             reached_end_naturally = true;
         }
@@ -670,6 +672,7 @@ where
             .expect("could not construct reader");
         *last_iter_time = time_iter_before;
     };
+    drop_trailing_passive(&mut msgs, holds_deciding, reached_end_naturally);
 
     Ok(BagReadResult {
         messages: msgs,
@@ -677,9 +680,40 @@ where
     })
 }
 
+/// The streams that decide whether a query has reached the end of the bag:
+/// every requested stream except the passive ones. A query of passive streams
+/// only is decided by all of them.
+fn deciding_sensors(send_sensor: &[AnySensor]) -> Vec<AnySensor> {
+    let active: Vec<AnySensor> = send_sensor
+        .iter()
+        .filter(|sensor| !sensor.passive)
+        .cloned()
+        .collect();
+    if active.is_empty() {
+        send_sensor.to_vec()
+    } else {
+        active
+    }
+}
+
+fn holds_deciding_message(msgs: &[(u64, BagMsg)], deciding: &[AnySensor]) -> bool {
+    msgs.iter()
+        .any(|(_, msg)| match_send_sensor(deciding, &msg.topic, &msg.msg_type).0)
+}
+
+/// At the end of the bag, passive messages that no longer accompany a deciding
+/// one are dropped. The query is then empty, which is how the end is reported,
+/// instead of sending passive streams on while the replay they belong to is
+/// already over.
+fn drop_trailing_passive(msgs: &mut Vec<(u64, BagMsg)>, holds_deciding: bool, end_of_bag: bool) {
+    if end_of_bag && !holds_deciding {
+        msgs.clear();
+    }
+}
+
 /// Whether any message of `send_sensor` is logged at or after `from_log_time`.
 ///
-/// Only called for an empty segment, so a stream with a gap stops at its next
+/// Only called for a segment without a deciding message, so a stream with a gap stops at its next
 /// message and only an exhausted stream reads to the end of the file.
 fn send_sensor_remains<T>(
     file: &mut T,
@@ -911,14 +945,16 @@ fn collect_until_db3(
         }
     }
 
+    let deciding = deciding_sensors(send_sensor);
+    let holds_deciding = holds_deciding_message(&msgs, &deciding);
     if breaked_until {
-        // An empty segment with no requested message left is the end for this query.
-        if msgs.is_empty() {
+        // A segment without a deciding message, and none of them left, is the end for this query.
+        if !holds_deciding {
             let mut remains = false;
             for row_result in rows_iter.by_ref() {
                 let (_, _, topic_id) = row_result.context("failed reading db3 message row")?;
                 if let Some((name, topic_type, _)) = topic_map.get(&topic_id)
-                    && match_send_sensor(send_sensor, name, topic_type).0
+                    && match_send_sensor(&deciding, name, topic_type).0
                 {
                     remains = true;
                     break;
@@ -936,6 +972,7 @@ fn collect_until_db3(
         // message we processed so the next call doesn't re-read it.
         db3.cursor_ns = cursor_ns.map(|ns| ns.saturating_add(1));
     }
+    drop_trailing_passive(&mut msgs, holds_deciding, reached_end_naturally);
 
     Ok(BagReadResult {
         messages: msgs,
@@ -943,9 +980,7 @@ fn collect_until_db3(
     })
 }
 
-fn tf_message_to_rkyv(
-    msg: ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage,
-) -> TFMessage {
+fn tf_message_to_rkyv(msg: ros2_interfaces_jazzy_serde::tf2_msgs::msg::TFMessage) -> TFMessage {
     use ros2_interfaces_jazzy_rkyv::builtin_interfaces::msg::Time;
     use ros2_interfaces_jazzy_rkyv::geometry_msgs::msg::{
         Quaternion, Transform, TransformStamped, Vector3,
@@ -984,6 +1019,21 @@ fn tf_message_to_rkyv(
 }
 
 impl Bagfile {
+    /// Messages the bag holds on `topic`, zero for a topic it does not have.
+    /// `None` while no bag is open.
+    pub fn topic_message_count(&self, topic: &str) -> Option<u64> {
+        let metadata = self.metadata.as_ref()?;
+        Some(
+            metadata
+                .rosbag2_bagfile_information
+                .topics_with_message_count
+                .iter()
+                .filter(|counted| counted.topic_metadata.name == topic)
+                .map(|counted| counted.message_count.max(0) as u64)
+                .sum(),
+        )
+    }
+
     pub fn next(&mut self, kind: &PlayKindUnitedPass3) -> anyhow::Result<BagReadResult> {
         #[cfg(feature = "db3")]
         if let Some(db3) = self.db3.as_mut() {

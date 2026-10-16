@@ -734,6 +734,53 @@ pub struct WindCursor {
     streamed_dataset: Option<StreamedDataset>,
     pub(crate) variable_cache: HashMap<mt_mtc::Var, mt_mtc::Rhs>,
     dynamic_vars: HashMap<String, Vec<PlayKindUnitedPass3>>,
+    /// Messages read from the bag for sending since the last `reset!`, by
+    /// topic. Reported at the end of the bag so a consumer can tell when it
+    /// has received everything instead of waiting for silence.
+    replayed: std::collections::BTreeMap<String, u64>,
+    /// Topics whose every message has been replayed, and reported so.
+    ended: std::collections::BTreeSet<String>,
+}
+
+/// `topic=count` pairs separated by spaces, in topic order. Topics never
+/// contain whitespace, so the list parses back by splitting.
+fn format_replayed(replayed: &std::collections::BTreeMap<String, u64>) -> String {
+    replayed
+        .iter()
+        .map(|(topic, count)| format!("{topic}={count}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Report each requested topic once its last message in the bag is replayed,
+/// before that message is sent. A topic the bag does not have ends at zero.
+///
+/// Consumers match the line: keep its wording. A consumer that also counts
+/// the messages it receives then knows when it has all of a stream, without
+/// waiting for the end of the whole bag.
+fn report_ended_streams(wc: &mut WindCursor, kind: &PlayKindUnitedPass3) {
+    let sensors = match kind {
+        PlayKindUnitedPass3::SensorCount { sensors, .. } => sensors,
+        PlayKindUnitedPass3::UntilSensorCount { sending, .. } => sending,
+    };
+    for sensor in sensors {
+        let topic = match &sensor.id {
+            mt_mtc::SensorIdentification::Topic(topic)
+            | mt_mtc::SensorIdentification::TopicAndType { topic, .. } => topic,
+            mt_mtc::SensorIdentification::Type(_) => continue,
+        };
+        if wc.ended.contains(topic) {
+            continue;
+        }
+        let Some(total) = wc.bagfile.read().unwrap().topic_message_count(topic) else {
+            continue;
+        };
+        let replayed = wc.replayed.get(topic).copied().unwrap_or(0);
+        if replayed >= total {
+            info!(target: "minot::replay", "stream {topic} ended after {replayed} messages");
+            wc.ended.insert(topic.clone());
+        }
+    }
 }
 
 impl Default for WindCursor {
@@ -754,6 +801,8 @@ impl Default for WindCursor {
             compile_state: WindCompile::default(),
             dynamic_vars: HashMap::new(),
             section_label: None,
+            replayed: std::collections::BTreeMap::new(),
+            ended: std::collections::BTreeSet::new(),
         }
     }
 }
@@ -1801,6 +1850,8 @@ impl App {
                                     Ok(opened) => {
                                         let mut wc = wind_cursor_worker.write().unwrap();
                                         *wc.bagfile.write().unwrap() = opened.bagfile;
+                                        wc.replayed.clear();
+                                        wc.ended.clear();
                                         wc.streamed_dataset = opened.streamed.map(StreamedDataset);
                                         info!("read bag or Marina dataset {path}");
                                     }
@@ -1905,6 +1956,14 @@ impl App {
                                     start_bag_read.elapsed()
                                 );
                                 let reached_end = bagmsgs.end_of_bag;
+                                let replayed = {
+                                    let mut wc = wind_cursor_worker.write().unwrap();
+                                    for (_, msg) in bagmsgs.messages.iter() {
+                                        *wc.replayed.entry(msg.topic.clone()).or_default() += 1;
+                                    }
+                                    report_ended_streams(&mut wc, &kind);
+                                    format_replayed(&wc.replayed)
+                                };
 
                                 let mut wind_data = Vec::with_capacity(bagmsgs.messages.len());
                                 let mut start_time = None;
@@ -1922,8 +1981,10 @@ impl App {
 
                                 if wind_data.is_empty() {
                                     if reached_end {
+                                        // Consumers match this line: keep the
+                                        // wording and the `replayed` list format.
                                         warn!(
-                                            "reached end of bagfile with no more matching messages"
+                                            "reached end of bagfile with no more matching messages; replayed {replayed}"
                                         );
                                         promote_streamed_dataset(&wind_cursor_worker).await;
                                         return;

@@ -582,6 +582,10 @@ pub struct AnySensor {
     pub name: String, // custom name given by config
     pub id: SensorIdentification,
     pub short: Option<String>, // to be used while parsing to not write so much
+    /// `_passive = true`: the stream is sent along in bag order but never keeps
+    /// a query alive. Once a query's other streams are exhausted, the query is
+    /// at the end of the bag even if passive messages remain.
+    pub passive: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -2526,6 +2530,7 @@ fn resolve_struct_in_ns(user_ns: &[(Var, Rhs)], var: &str) -> Option<AnySensor> 
     let mut short = None;
     let mut topic: Option<String> = None;
     let mut msg_type = None;
+    let mut passive = false;
     let mut short_lookup: HashMap<String, String> = HashMap::new();
 
     for (v, rhs) in user_ns.iter() {
@@ -2595,6 +2600,14 @@ fn resolve_struct_in_ns(user_ns: &[(Var, Rhs)], var: &str) -> Option<AnySensor> 
                             return None;
                         }
                     },
+                    "passive" => match rhs {
+                        Rhs::Val(Val::BoolVal(b)) => {
+                            passive = *b;
+                        }
+                        _ => {
+                            return None;
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -2614,7 +2627,12 @@ fn resolve_struct_in_ns(user_ns: &[(Var, Rhs)], var: &str) -> Option<AnySensor> 
         }
     };
 
-    Some(AnySensor { name, id, short })
+    Some(AnySensor {
+        name,
+        id,
+        short,
+        passive,
+    })
 }
 
 fn resolve_sensors(user_ns: &[(Var, Rhs)], sensors: &[String]) -> anyhow::Result<Vec<AnySensor>> {
@@ -2807,6 +2825,43 @@ mod tests {
             assert!(!sensor.is(IMU_ROS2_TYPE));
             assert!(SensorType::Mixed.is(ros_type));
         }
+    }
+
+    #[test]
+    fn passive_sensor_attribute() {
+        const SRC: &str = r#"
+        _bag.{
+            imu.{
+                _short = i
+                _type = Imu
+            }
+            cam.{
+                _topic = "/cam"
+                _short = c
+                _type = CompressedImage
+                _passive = true
+            }
+        }
+
+        pf! [i, c], i 2 tick
+        "#;
+
+        let eval = compile_code(SRC).unwrap();
+        let sending = eval
+            .wind
+            .iter()
+            .find_map(|function| match function {
+                WindFunction::SendFrames(PlayKindUnitedPass3::UntilSensorCount {
+                    sending, ..
+                }) => Some(sending.clone()),
+                _ => None,
+            })
+            .expect("pf! compiles to a send");
+        let passive = sending
+            .iter()
+            .map(|sensor| (sensor.name.as_str(), sensor.passive))
+            .collect::<Vec<_>>();
+        assert_eq!(passive, [("i", false), ("c", true)]);
     }
 
     #[test]
