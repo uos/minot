@@ -1,3 +1,4 @@
+pub mod claim;
 pub mod client;
 pub mod coordinator;
 pub mod net;

@@ -15,6 +15,25 @@ When used in static and simple environments, it is stable enough for replacing t
     
     To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
 
+## Several Stacks on One Machine
+
+A program that starts a whole stack of its own (Pelorus replaying a bag, with the
+Minot it spawns) can take a network no other stack on the machine uses:
+
+```rust
+let claim = mt_pubsub::claim_network()?;
+// Before any thread starts, so children and this process's sessions agree:
+unsafe { claim.apply_to_process() };
+```
+
+The first claim gets the defaults (`7447`, domain `0`), so tools left on them
+still see it. Later ones get a free port, with the same number as their domain.
+Claims are locked per user in the temp directory and released when dropped or
+when the process ends. A process that finds `MINOT_ZENOH_PORT` already set keeps
+it and claims nothing, which is how a parent hands its choice to its children.
+To reach a stack that is not on the defaults from a viewer, start the viewer
+with the same `MINOT_ZENOH_PORT` and `MINOT_DOMAIN_ID`.
+
 ## Peer Discovery
 
 `NodeConfig::new` selects `CoordMode::Peer`. Nodes declare typed topics directly

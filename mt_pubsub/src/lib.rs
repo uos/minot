@@ -5,6 +5,7 @@ mod peer;
 pub use coordinated::{CoordMode, NodeConfig};
 #[cfg(feature = "image")]
 pub use mt_net::image::{self, ImageMessageExt, ToImage};
+pub use mt_sea::claim::{NetworkClaim, claim_network};
 pub use mt_sea::{
     ArchivedMessage, Durability, NodeOptions, Qos, ReconnectPolicy, Reliability, Timing,
 };

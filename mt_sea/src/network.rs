@@ -87,6 +87,14 @@ pub fn coordinator_port() -> u16 {
     }
 }
 
+/// The port `MINOT_ZENOH_PORT` names, if it is set to a usable one.
+pub(crate) fn coordinator_port_from_env() -> Option<u16> {
+    std::env::var("MINOT_ZENOH_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+}
+
 /// Return whether something is accepting connections on the local coordinator endpoint.
 /// This is used to decide whether an auto-start node must create the router before
 /// opening its client session. It preserves local-only configuration.
