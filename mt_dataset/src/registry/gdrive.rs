@@ -807,7 +807,24 @@ impl GDriveRegistry {
                             continue;
                         }
 
-                        if status == StatusCode::OK && downloaded == 0 {
+                        if status == StatusCode::OK && response_content_type_is_html(&resp) {
+                            pb.finish_and_clear();
+                            return Err(html_response_error(resp, title).await);
+                        }
+
+                        // The server ignored the Range header and is sending the whole file.
+                        // Retry a few times in case it is transient, then restart as a plain
+                        // stream instead of failing a partially written download.
+                        if status == StatusCode::OK
+                            && downloaded > 0
+                            && attempt < RESUMABLE_UPLOAD_RETRIES
+                        {
+                            attempt += 1;
+                            tokio::time::sleep(Duration::from_millis(250 * attempt as u64)).await;
+                            continue;
+                        }
+
+                        if status == StatusCode::OK {
                             pb.finish_and_clear();
                             return self
                                 .stream_response_to_path(
@@ -957,25 +974,7 @@ impl GDriveRegistry {
 
         let status = resp.status();
         if status != StatusCode::PARTIAL_CONTENT && response_content_type_is_html(&resp) {
-            let first_chunk = resp
-                .chunk()
-                .await
-                .with_context(|| format!("failed reading HTML error response for {}", title))?;
-            if let Some(chunk) = first_chunk.as_deref() {
-                if let Some(kind) = html_error_hint(chunk) {
-                    if kind == DownloadContentHint::GoogleDriveQuotaExceeded {
-                        return Err(anyhow!(
-                            "Google Drive quota exceeded while downloading {}. \
-                             Google Drive returned an HTML quota page. Retry after the quota resets.",
-                            title
-                        ));
-                    }
-                }
-            }
-            return Err(anyhow!(
-                "downloaded content for {} returned Content-Type text/html, not archive bytes",
-                title
-            ));
+            return Err(html_response_error(resp, title).await);
         }
 
         let total = resp
@@ -1461,6 +1460,29 @@ fn html_error_hint(bytes: &[u8]) -> Option<DownloadContentHint> {
         return Some(DownloadContentHint::GoogleDriveQuotaExceeded);
     }
     Some(DownloadContentHint::HtmlResponse)
+}
+
+async fn html_response_error(mut resp: reqwest::Response, title: &str) -> anyhow::Error {
+    let first_chunk = match resp.chunk().await {
+        Ok(chunk) => chunk,
+        Err(err) => {
+            return anyhow::Error::new(err)
+                .context(format!("failed reading HTML error response for {}", title));
+        }
+    };
+    if first_chunk.as_deref().and_then(html_error_hint)
+        == Some(DownloadContentHint::GoogleDriveQuotaExceeded)
+    {
+        return anyhow!(
+            "Google Drive quota exceeded for {}. \
+             Google Drive returned an HTML quota page. Retry after the quota resets.",
+            title
+        );
+    }
+    anyhow!(
+        "downloaded content for {} returned Content-Type text/html, not archive bytes",
+        title
+    )
 }
 
 fn response_content_type_is_html(resp: &reqwest::Response) -> bool {
