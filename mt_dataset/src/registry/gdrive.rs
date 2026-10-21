@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -32,6 +33,9 @@ const DRIVE_LIST_PAGE_SIZE: &str = "1000";
 /// anonymous downloads with an HTML page instead of the file.
 const METADATA_DOWNLOAD_CONCURRENCY: usize = 32;
 const METADATA_DOWNLOAD_ATTEMPTS: u32 = 5;
+/// Drive occasionally holds a request for half a minute before failing it; a
+/// metadata file is a few hundred bytes, so give up early and retry instead.
+const METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
 const RESUMABLE_CHUNK_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RESUMABLE_CHUNK_START_BYTES: usize = 32 * 1024 * 1024;
 const RESUMABLE_CHUNK_MAX_BYTES: usize = 48 * 1024 * 1024;
@@ -94,6 +98,42 @@ struct FilesListResponse {
 struct DriveFile {
     id: String,
     name: String,
+    /// `modifiedTime` from the API, or the "last modified" column of the
+    /// public folder page. Pushes overwrite files in place, so the id alone
+    /// does not identify a file's content.
+    #[serde(rename = "modifiedTime", default)]
+    modified: Option<String>,
+}
+
+/// Google's per-file download quota for anonymous access. It lasts for hours,
+/// so retrying only delays the listing.
+#[derive(Debug)]
+struct DownloadQuotaExceeded(String);
+
+impl std::fmt::Display for DownloadQuotaExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Google Drive download quota exceeded for file {}, try again later",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for DownloadQuotaExceeded {}
+
+/// Metadata files downloaded by earlier listings, keyed by Drive file id.
+/// Anonymous downloads are throttled hard, so a listing only fetches the
+/// files that are new or changed since the last one.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct MetadataCache {
+    entries: HashMap<String, CachedMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CachedMetadata {
+    modified: String,
+    body: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,7 +411,7 @@ impl GDriveRegistry {
         loop {
             let mut req = self.client.get(DRIVE_FILES_API).query(&[
                 ("q", query),
-                ("fields", "nextPageToken,files(id,name)"),
+                ("fields", "nextPageToken,files(id,name,modifiedTime)"),
                 ("pageSize", DRIVE_LIST_PAGE_SIZE),
                 ("supportsAllDrives", "true"),
                 ("includeItemsFromAllDrives", "true"),
@@ -429,8 +469,12 @@ impl GDriveRegistry {
                 .unwrap_or_default();
             let body = cap.get(2).map(|m| m.as_str()).unwrap_or_default();
             let name = strip_html_tags(body).trim().to_string();
+            let modified = cap
+                .get(3)
+                .map(|m| m.as_str().trim().to_string())
+                .filter(|m| !m.is_empty());
             if !id.is_empty() && !name.is_empty() {
-                files.push(DriveFile { id, name });
+                files.push(DriveFile { id, name, modified });
             }
         }
 
@@ -1019,24 +1063,122 @@ impl GDriveRegistry {
 
     /// Downloads the small JSON files a listing reads, a few at a time and in
     /// the order given, retrying the ones Google throttles.
-    async fn download_metadata_files(&self, files: &[DriveFile]) -> Vec<Result<Vec<u8>>> {
+    ///
+    /// Files whose modification marker matches the local cache are not
+    /// downloaded again. A file that cannot be downloaded falls back to an
+    /// older cached copy, or is `None` (and logged) when there is none.
+    async fn download_metadata_files(&self, files: &[DriveFile]) -> Vec<Option<Vec<u8>>> {
+        let mut cache = self.load_metadata_cache();
+        let cached = |f: &DriveFile| {
+            let entry = cache.entries.get(&f.id)?;
+            (f.modified.as_deref() == Some(entry.modified.as_str()))
+                .then(|| entry.body.clone().into_bytes())
+        };
+        let mut results: Vec<Option<Result<Vec<u8>>>> =
+            files.iter().map(|f| cached(f).map(Ok)).collect();
+
         // Owned ids keep the stream free of higher-ranked borrows, which the
         // `Send` bound of the async_trait futures cannot express.
-        let ids: Vec<String> = files.iter().map(|f| f.id.clone()).collect();
-        stream::iter(ids)
-            .map(|id| async move { self.download_file_bytes_retrying(&id).await })
-            .buffered(METADATA_DOWNLOAD_CONCURRENCY)
+        let missing: Vec<(usize, String)> = results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.is_none())
+            .map(|(i, _)| (i, files[i].id.clone()))
+            .collect();
+        if missing.is_empty() {
+            return results
+                .into_iter()
+                .map(|r| r.and_then(Result::ok))
+                .collect();
+        }
+        let downloads: Vec<(usize, Result<Vec<u8>>)> = stream::iter(missing)
+            .map(|(i, id)| async move { (i, self.download_file_bytes_retrying(&id).await) })
+            .buffer_unordered(METADATA_DOWNLOAD_CONCURRENCY)
             .collect()
-            .await
+            .await;
+
+        for (i, result) in downloads {
+            if let (Ok(bytes), Some(modified)) = (&result, &files[i].modified)
+                && let Ok(body) = String::from_utf8(bytes.clone())
+            {
+                cache.entries.insert(
+                    files[i].id.clone(),
+                    CachedMetadata {
+                        modified: modified.clone(),
+                        body,
+                    },
+                );
+            }
+            results[i] = Some(result);
+        }
+        if let Err(err) = self.save_metadata_cache(&cache) {
+            log::debug!("could not save gdrive metadata cache: {err:#}");
+        }
+        results
+            .into_iter()
+            .zip(files)
+            .map(|(result, file)| match result {
+                Some(Ok(bytes)) => Some(bytes),
+                Some(Err(err)) => {
+                    let stale = cache.entries.get(&file.id);
+                    match stale {
+                        Some(_) => {
+                            log::warn!("{}: using cached {} ({err:#})", self.name, file.name)
+                        }
+                        None => log::warn!("{}: skipping {} ({err:#})", self.name, file.name),
+                    }
+                    stale.map(|entry| entry.body.clone().into_bytes())
+                }
+                None => None,
+            })
+            .collect()
+    }
+
+    fn metadata_cache_path(&self) -> Result<PathBuf> {
+        Ok(crate::storage::config::cache_dir()?
+            .join("gdrive")
+            .join(format!("{}.json", self.name)))
+    }
+
+    fn load_metadata_cache(&self) -> MetadataCache {
+        self.metadata_cache_path()
+            .ok()
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_metadata_cache(&self, cache: &MetadataCache) -> Result<()> {
+        let path = self.metadata_cache_path()?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| anyhow!("metadata cache path has no parent"))?;
+        fs::create_dir_all(dir)?;
+        // Write and rename, so a concurrent listing never reads half a file.
+        let tmp = tempfile::NamedTempFile::new_in(dir)?;
+        serde_json::to_writer(&tmp, cache)?;
+        tmp.persist(&path)?;
+        Ok(())
     }
 
     async fn download_file_bytes_retrying(&self, id: &str) -> Result<Vec<u8>> {
         let mut delay = Duration::from_millis(500);
         let mut attempt = 1;
         loop {
-            match self.download_file_bytes(id).await {
+            let download =
+                tokio::time::timeout(METADATA_REQUEST_TIMEOUT, self.download_file_bytes(id));
+            let result = download.await.unwrap_or_else(|_| {
+                Err(anyhow!(
+                    "Google Drive download of {id} timed out after {}s",
+                    METADATA_REQUEST_TIMEOUT.as_secs()
+                ))
+            });
+            match result {
                 Ok(bytes) => return Ok(bytes),
-                Err(err) if attempt < METADATA_DOWNLOAD_ATTEMPTS => {
+                Err(err)
+                    if attempt < METADATA_DOWNLOAD_ATTEMPTS
+                        && err.downcast_ref::<DownloadQuotaExceeded>().is_none() =>
+                {
                     log::debug!("gdrive download of {id} failed (attempt {attempt}): {err:#}");
                     tokio::time::sleep(delay).await;
                     delay *= 2;
@@ -1079,6 +1221,10 @@ impl GDriveRegistry {
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/html"));
         if is_html {
+            let page = resp.text().await.unwrap_or_default();
+            if page.contains("Quota exceeded") {
+                return Err(DownloadQuotaExceeded(id.to_string()).into());
+            }
             return Err(anyhow!(
                 "Google Drive returned an HTML page instead of file {} (rate limited?)",
                 id
@@ -1244,7 +1390,9 @@ impl RegistryDriver for GDriveRegistry {
         let mut out = Vec::new();
         let manifest_downloads = self.download_metadata_files(&manifest_files).await;
         for bytes_result in manifest_downloads {
-            let bytes = bytes_result?;
+            let Some(bytes) = bytes_result else {
+                continue;
+            };
             let manifest: PublicManifest = match serde_json::from_slice(&bytes) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -1269,7 +1417,9 @@ impl RegistryDriver for GDriveRegistry {
 
         let meta_downloads = self.download_metadata_files(&files).await;
         for (file, bytes_result) in files.iter().zip(meta_downloads) {
-            let bytes = bytes_result?;
+            let Some(bytes) = bytes_result else {
+                continue;
+            };
             let meta: MetaFile = serde_json::from_slice(&bytes)
                 .with_context(|| format!("failed parsing metadata file {}", file.name))?;
             let bag = meta.bag.without_attachment();
@@ -1296,8 +1446,9 @@ impl RegistryDriver for GDriveRegistry {
         let mut result: Vec<(BagRef, Option<BagInfo>)> = Vec::new();
         let downloads = self.download_metadata_files(&files).await;
         for bytes_result in downloads {
-            // A failed download would silently shrink the listing.
-            let bytes = bytes_result?;
+            let Some(bytes) = bytes_result else {
+                continue;
+            };
             let meta: MetaFile = match serde_json::from_slice(&bytes) {
                 Ok(m) => m,
                 Err(_) => continue,
@@ -1331,8 +1482,9 @@ impl RegistryDriver for GDriveRegistry {
         let manifest_files = self.query_files(&manifest_query).await?;
         let manifest_downloads = self.download_metadata_files(&manifest_files).await;
         for bytes_result in manifest_downloads {
-            // A failed download would silently shrink the listing.
-            let bytes = bytes_result?;
+            let Some(bytes) = bytes_result else {
+                continue;
+            };
             let manifest: PublicManifest = match serde_json::from_slice(&bytes) {
                 Ok(m) => m,
                 Err(_) => continue,
@@ -1427,7 +1579,7 @@ fn public_file_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r#"href=\"https://drive\.google\.com/file/d/([^/\"]+)/view[^\"]*\"[^>]*>(.*?)</a>"#,
+            r#"href=\"https://drive\.google\.com/file/d/([^/\"]+)/view[^\"]*\"[^>]*>(.*?)</a>(?:\s*</div>\s*<div class=\"flip-entry-last-modified\"><div>([^<]*)</div>)?"#,
         )
         .expect("valid public drive file regex")
     })
