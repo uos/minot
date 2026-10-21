@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 
 use crate::model::bag_ref::BagRef;
 use crate::registry::driver::{BagInfo, PushMeta, RegistryDriver, RemoteDescriptor};
@@ -25,6 +25,13 @@ use crate::storage::config::RegistryDownloadMode;
 
 const DRIVE_FILES_API: &str = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD_API: &str = "https://www.googleapis.com/upload/drive/v3/files";
+/// Largest page `files.list` allows; the default of 100 silently truncated
+/// listings of bigger registries.
+const DRIVE_LIST_PAGE_SIZE: &str = "1000";
+/// Small metadata downloads in flight at once. Google answers a larger burst of
+/// anonymous downloads with an HTML page instead of the file.
+const METADATA_DOWNLOAD_CONCURRENCY: usize = 32;
+const METADATA_DOWNLOAD_ATTEMPTS: u32 = 5;
 const RESUMABLE_CHUNK_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RESUMABLE_CHUNK_START_BYTES: usize = 32 * 1024 * 1024;
 const RESUMABLE_CHUNK_MAX_BYTES: usize = 48 * 1024 * 1024;
@@ -79,6 +86,8 @@ struct PublicManifest {
 #[derive(Debug, Deserialize)]
 struct FilesListResponse {
     files: Vec<DriveFile>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -357,29 +366,42 @@ impl GDriveRegistry {
             return Ok(filter_public_files(&files, query));
         }
 
-        let mut req = self.client.get(DRIVE_FILES_API).query(&[
-            ("q", query),
-            ("fields", "files(id,name)"),
-            ("supportsAllDrives", "true"),
-            ("includeItemsFromAllDrives", "true"),
-        ]);
+        let mut files = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut req = self.client.get(DRIVE_FILES_API).query(&[
+                ("q", query),
+                ("fields", "nextPageToken,files(id,name)"),
+                ("pageSize", DRIVE_LIST_PAGE_SIZE),
+                ("supportsAllDrives", "true"),
+                ("includeItemsFromAllDrives", "true"),
+            ]);
+            if let Some(token) = page_token.as_deref() {
+                req = req.query(&[("pageToken", token)]);
+            }
 
-        if let Some(auth) = auth {
-            req = req.header("Authorization", auth);
-        } else if let Some(key) = api_key.as_deref() {
-            req = req.query(&[("key", key)]);
+            if let Some(auth) = auth.as_deref() {
+                req = req.header("Authorization", auth);
+            } else if let Some(key) = api_key.as_deref() {
+                req = req.query(&[("key", key)]);
+            }
+
+            let resp = req
+                .send()
+                .await
+                .context("failed querying Google Drive files")?
+                .error_for_status()
+                .context("Google Drive list query failed")?
+                .json::<FilesListResponse>()
+                .await
+                .context("failed decoding Google Drive file list")?;
+            files.extend(resp.files);
+            match resp.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
         }
-
-        let resp = req
-            .send()
-            .await
-            .context("failed querying Google Drive files")?
-            .error_for_status()
-            .context("Google Drive list query failed")?
-            .json::<FilesListResponse>()
-            .await
-            .context("failed decoding Google Drive file list")?;
-        Ok(resp.files)
+        Ok(files)
     }
 
     async fn list_public_folder_files(&self) -> Result<Vec<DriveFile>> {
@@ -995,6 +1017,36 @@ impl GDriveRegistry {
         Ok(())
     }
 
+    /// Downloads the small JSON files a listing reads, a few at a time and in
+    /// the order given, retrying the ones Google throttles.
+    async fn download_metadata_files(&self, files: &[DriveFile]) -> Vec<Result<Vec<u8>>> {
+        // Owned ids keep the stream free of higher-ranked borrows, which the
+        // `Send` bound of the async_trait futures cannot express.
+        let ids: Vec<String> = files.iter().map(|f| f.id.clone()).collect();
+        stream::iter(ids)
+            .map(|id| async move { self.download_file_bytes_retrying(&id).await })
+            .buffered(METADATA_DOWNLOAD_CONCURRENCY)
+            .collect()
+            .await
+    }
+
+    async fn download_file_bytes_retrying(&self, id: &str) -> Result<Vec<u8>> {
+        let mut delay = Duration::from_millis(500);
+        let mut attempt = 1;
+        loop {
+            match self.download_file_bytes(id).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(err) if attempt < METADATA_DOWNLOAD_ATTEMPTS => {
+                    log::debug!("gdrive download of {id} failed (attempt {attempt}): {err:#}");
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     async fn download_file_bytes(&self, id: &str) -> Result<Vec<u8>> {
         let auth = self.auth_header_optional().await?;
         let api_key = self.api_key_optional();
@@ -1013,12 +1065,26 @@ impl GDriveRegistry {
             req = req.query(&[("key", key)]);
         }
 
-        let bytes = req
+        let resp = req
             .send()
             .await
             .with_context(|| format!("failed downloading {} from Google Drive", id))?
             .error_for_status()
-            .with_context(|| format!("Google Drive download failed for {}", id))?
+            .with_context(|| format!("Google Drive download failed for {}", id))?;
+        // Throttled anonymous downloads still answer 200, but with an HTML
+        // page in place of the file.
+        let is_html = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with("text/html"));
+        if is_html {
+            return Err(anyhow!(
+                "Google Drive returned an HTML page instead of file {} (rate limited?)",
+                id
+            ));
+        }
+        let bytes = resp
             .bytes()
             .await
             .context("failed reading Google Drive response bytes")?;
@@ -1176,12 +1242,7 @@ impl RegistryDriver for GDriveRegistry {
         let manifest_files = self.query_files(&manifest_query).await?;
 
         let mut out = Vec::new();
-        let manifest_downloads = join_all(
-            manifest_files
-                .iter()
-                .map(|f| self.download_file_bytes(&f.id)),
-        )
-        .await;
+        let manifest_downloads = self.download_metadata_files(&manifest_files).await;
         for bytes_result in manifest_downloads {
             let bytes = bytes_result?;
             let manifest: PublicManifest = match serde_json::from_slice(&bytes) {
@@ -1206,7 +1267,7 @@ impl RegistryDriver for GDriveRegistry {
         );
         let files = self.query_files(&q).await?;
 
-        let meta_downloads = join_all(files.iter().map(|f| self.download_file_bytes(&f.id))).await;
+        let meta_downloads = self.download_metadata_files(&files).await;
         for (file, bytes_result) in files.iter().zip(meta_downloads) {
             let bytes = bytes_result?;
             let meta: MetaFile = serde_json::from_slice(&bytes)
@@ -1233,12 +1294,10 @@ impl RegistryDriver for GDriveRegistry {
         let files = self.query_files(&q).await?;
 
         let mut result: Vec<(BagRef, Option<BagInfo>)> = Vec::new();
-        let downloads = join_all(files.iter().map(|f| self.download_file_bytes(&f.id))).await;
+        let downloads = self.download_metadata_files(&files).await;
         for bytes_result in downloads {
-            let bytes = match bytes_result {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
+            // A failed download would silently shrink the listing.
+            let bytes = bytes_result?;
             let meta: MetaFile = match serde_json::from_slice(&bytes) {
                 Ok(m) => m,
                 Err(_) => continue,
@@ -1270,17 +1329,10 @@ impl RegistryDriver for GDriveRegistry {
             self.folder_id
         );
         let manifest_files = self.query_files(&manifest_query).await?;
-        let manifest_downloads = join_all(
-            manifest_files
-                .iter()
-                .map(|f| self.download_file_bytes(&f.id)),
-        )
-        .await;
+        let manifest_downloads = self.download_metadata_files(&manifest_files).await;
         for bytes_result in manifest_downloads {
-            let bytes = match bytes_result {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
+            // A failed download would silently shrink the listing.
+            let bytes = bytes_result?;
             let manifest: PublicManifest = match serde_json::from_slice(&bytes) {
                 Ok(m) => m,
                 Err(_) => continue,
