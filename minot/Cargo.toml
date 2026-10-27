@@ -54,7 +54,7 @@ mt_sea.workspace = true
 log.workspace = true
 mt_log = { workspace = true, features = ["env"] }
 nalgebra.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util"] }
 tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
