@@ -9,7 +9,7 @@ Minot is a highly versatile toolset for debugging and verifying stateful robot p
 * ROS1 -> ROS2 or language migrations
 * Functional method evaluations
 
-Visit the [Web Documentation](https://stelzo.codeberg.page/minot) or `ssh minot@steado.tech` to find out more.
+Visit the [Web Documentation](https://minot.steado.tech) or `ssh minot@steado.tech` to find out more.
 
 ## ROS 2
 
@@ -38,7 +38,7 @@ sudo apt install ros-jazzy-minot
 Alternatively, with the matching ROS environment sourced, the installer can select the corresponding prebuilt release or build it from source:
 
 ~~~bash
-curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro "$ROS_DISTRO"
+curl -sSLf https://minot.steado.tech/install | sh -s -- --ros-distro "$ROS_DISTRO"
 ~~~
 
 ### From Source
@@ -66,7 +66,7 @@ Now run it like any ROS node.
 ros2 run minot minot tui <file.mt>
 ~~~
 
-Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://stelzo.codeberg.page/minot/installation/packages.html).
+Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://minot.steado.tech/installation/packages.html).
 
 ### VS Code Extension
 

@@ -19,9 +19,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cd docs && uvx --from zensical==0.0.71 zensical build --clean --strict
-      - name: Deploy to Codeberg Pages
-        uses: https://codeberg.org/git-pages/action@v2
-        with:
-          site: https://${{ forge.repository_owner }}.codeberg.page/minot/
-          token: ${{ forge.token }}
-          source: docs/site/
+      - name: Deploy to minot.steado.tech
+        env:
+          DOCS_DEPLOY_KEY: ${{ secrets.DOCS_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends rsync openssh-client
+          key="$(mktemp)"
+          hosts="$(mktemp)"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          printf '%s\n' "$DOCS_DEPLOY_KEY" >"$key"
+          echo "[minot.steado.tech]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvqpiJdvk+zuDXcjOgNdA3p98+6L7MAnhOEOLrw4phX" >"$hosts"
+          # The key may only rsync into /var/www/minot.steado.tech (rrsync on the server).
+          rsync -rlt --checksum --delete --delay-updates --chmod=D755,F644 --stats \
+            -e "ssh -p 2222 -i $key -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes" \
+            docs/site/ minot-docs@minot.steado.tech:

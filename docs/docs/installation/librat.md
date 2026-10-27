@@ -56,7 +56,7 @@ target_link_libraries(my_app PRIVATE ${RAT_LIBRARIES})
 Every [release](archives.md) contains `librat-<target>.a`, `librat-<target>.so` or `librat-<target>.dylib`, `rat.h`, `librat.pc` and `libratConfig.cmake`. The [installation script](script.md) installs them with `--with-rat`.
 
 ~~~bash
-curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --with-rat
+curl -sSLf https://minot.steado.tech/install | sh -s -- --with-rat
 ~~~
 
 ### From Source

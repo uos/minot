@@ -210,7 +210,7 @@ ${BOLD}EXAMPLES:${NC}
     ${CYAN}# Resolve to a semver compatible version${NC}
     ./install.sh --version 0.1
 
-For more information, visit: ${BLUE}https://stelzo.codeberg.page/minot/installation.html${NC}
+For more information, visit: ${BLUE}https://minot.steado.tech/installation.html${NC}
 
 EOF
 }

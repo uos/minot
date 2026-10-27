@@ -3,7 +3,7 @@
 For most users, the easiest way to install everything Minot offers is using the installation script with a single command. This will install the `minot` binaries and libraries into your user directory.
 
 ~~~bash
-curl -sSLf https://stelzo.codeberg.page/minot/install | sh
+curl -sSLf https://minot.steado.tech/install | sh
 ~~~
 
 For ROS support, source your ROS environment and pass its distribution to the
@@ -11,7 +11,7 @@ script. Lyrical, Jazzy, and Humble are supported release targets.
 
 ~~~bash title="ROS 2 Lyrical"
 source /opt/ros/lyrical/setup.bash
-curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --ros-distro lyrical
+curl -sSLf https://minot.steado.tech/install | sh -s -- --ros-distro lyrical
 ~~~
 
 You can now run Minot.
@@ -49,5 +49,5 @@ Use the `--embed` option to specify which components to embed when building from
 Use `--with-rat` to also install the [rat library](librat.md) (`librat`, `rat.h`, pkg-config and CMake files) next to the binary.
 
 ~~~bash title="Script arguments"
-curl -sSLf https://stelzo.codeberg.page/minot/install | sh -s -- --help
+curl -sSLf https://minot.steado.tech/install | sh -s -- --help
 ~~~
