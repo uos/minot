@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Minot</title>
+  <desc id="desc">A compact lighthouse with a shorter tapered base and a proportional pendulum cutout.</desc>
+  <g transform="translate(0 9)">
+    <path d="M74 36 106 24q8 16 0 32L74 42Z" fill="#dfa0ae"/>
+    <path d="m64 17 16 14h-6v18l13 39q1 4-3 4H44q-4 0-3-4l13-39V31h-6Zm-5 18v7h10v-7ZM61.1540 53.0513a3 3 0 0 1 5.6921 1.8974L60.9067 72.7667a4.5 4.5 0 1 1 -5.6921 -1.8974Z" fill="#aa435b" fill-rule="evenodd"/>
+  </g>
+</svg>

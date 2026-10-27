@@ -4,7 +4,6 @@ description = "Coordinator runtime for Minot — can be embedded in-process or r
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

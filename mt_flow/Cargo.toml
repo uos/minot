@@ -4,7 +4,6 @@ description = "Resumable, credit-controlled chunk streams over a Minot network."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

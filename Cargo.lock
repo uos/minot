@@ -3789,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -3926,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "mt_action"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "log",
@@ -3941,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "mt_bagread"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "camino",
@@ -3962,7 +3962,7 @@ dependencies = [
 
 [[package]]
 name = "mt_coord"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "fs2",
@@ -3976,7 +3976,7 @@ dependencies = [
 
 [[package]]
 name = "mt_dataset"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4019,7 +4019,7 @@ dependencies = [
 
 [[package]]
 name = "mt_flow"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -4033,7 +4033,7 @@ dependencies = [
 
 [[package]]
 name = "mt_log"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "env_filter 2.0.0",
  "env_logger",
@@ -4041,11 +4041,12 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
 name = "mt_mtc"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -4058,7 +4059,7 @@ dependencies = [
 
 [[package]]
 name = "mt_net"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "image",
@@ -4069,17 +4070,14 @@ dependencies = [
 
 [[package]]
 name = "mt_pubsub"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "env_logger",
  "futures-lite",
  "log",
  "mt_coord",
  "mt_net",
  "mt_sea",
- "nalgebra",
  "rkyv",
  "ros2-interfaces-jazzy-rkyv",
  "serde_json",
@@ -4090,24 +4088,21 @@ dependencies = [
 
 [[package]]
 name = "mt_rat"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "env_logger",
  "log",
  "mt_coord",
  "mt_pubsub",
  "mt_sea",
  "nalgebra",
- "rand 0.10.3",
  "rkyv",
  "tokio",
 ]
 
 [[package]]
 name = "mt_scope"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -4120,7 +4115,7 @@ dependencies = [
 
 [[package]]
 name = "mt_sea"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4139,7 +4134,7 @@ dependencies = [
 
 [[package]]
 name = "mt_service"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "log",
@@ -4153,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "mt_wind"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5667,7 +5662,6 @@ dependencies = [
  "instability",
  "ratatui-core",
  "ratatui-crossterm",
- "ratatui-macros",
  "ratatui-termina",
  "ratatui-termwiz",
  "ratatui-widgets",
@@ -5706,16 +5700,6 @@ dependencies = [
  "crossterm",
  "instability",
  "ratatui-core",
-]
-
-[[package]]
-name = "ratatui-macros"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed7dc68daa7498a43e4d68e0eb078427e10c38fbcfbb1e42d955f1fa2140d814"
-dependencies = [
- "ratatui-core",
- "ratatui-widgets",
 ]
 
 [[package]]
@@ -5761,9 +5745,9 @@ dependencies = [
 
 [[package]]
 name = "ratslang"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d19094b383e26695ad36d1d7061d2eba5946d19bcd6c3e1c0ed644974b34a5"
+checksum = "450c8dc9bad8683e17ad3327b3e5c920388bdb5f601c2767a690db3e2025e484"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -7956,13 +7940,10 @@ checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-util",
- "hashbrown 0.15.5",
  "libc",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 

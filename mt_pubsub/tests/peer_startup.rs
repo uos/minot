@@ -127,7 +127,10 @@ fn concurrent_peers_with_separate_filesystems_exchange_messages() {
     concurrent_startup(false);
 }
 
+// Zenoh 1.10.1 can deadlock when this many peers start at once. Enable again
+// with the first Zenoh release that has eclipse-zenoh/zenoh#2779.
 #[test]
+#[ignore = "needs eclipse-zenoh/zenoh#2779, which no Zenoh release has yet"]
 fn simultaneous_swarm_startup_with_two_nodes_per_process() {
     concurrent_startup(true);
 }

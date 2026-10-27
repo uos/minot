@@ -6,7 +6,6 @@ keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-authors.workspace = true
 categories.workspace = true
 documentation.workspace = true
 homepage.workspace = true
@@ -14,7 +13,9 @@ rust-version.workspace = true
 exclude.workspace = true
 
 [features]
-default = []
+default = ["zenoh-defaults"]
+# Compatibility option for non-TCP endpoints and Zenoh authentication.
+zenoh-defaults = ["zenoh/default"]
 shm = ["zenoh/shared-memory"]
 
 [dependencies]

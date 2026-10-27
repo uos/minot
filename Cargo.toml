@@ -20,12 +20,11 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.13.1"
+version = "0.14.0"
 keywords = ["robotics"]
 license = "MIT OR Apache-2.0"
 repository = "https://codeberg.org/stelzo/minot.git"
 edition = "2024"
-authors = ["stelzo <stelzo@steado.de>"]
 categories = ["science::robotics"]
 documentation = "https://uos.github.io/minot"
 homepage = "https://uos.github.io/minot"
@@ -44,19 +43,19 @@ exclude = [
 ]
 
 [workspace.dependencies]
-mt_sea = { path = "mt_sea", version = "0.13.1", default-features = false }
-mt_coord = { path = "mt_coord", version = "0.13.1", default-features = false }
-mt_pubsub = { path = "mt_pubsub", version = "0.13.1", default-features = false }
-mt_service = { path = "mt_service", version = "0.13.1", default-features = false }
-mt_action = { path = "mt_action", version = "0.13.1", default-features = false }
-mt_scope = { path = "mt_scope", version = "0.13.1", default-features = false }
-mt_bagread = { path = "mt_bagread", version = "0.13.1", default-features = false }
-mt_net = { path = "mt_net", version = "0.13.1", default-features = false }
-mt_flow = { path = "mt_flow", version = "0.13.1", default-features = false }
-mt_dataset = { path = "mt_dataset", version = "0.13.1", default-features = false }
-mt_wind = { path = "mt_wind", version = "0.13.1", default-features = false }
-mt_mtc = { path = "mt_mtc", version = "0.13.1", default-features = false }
-mt_log = { path = "mt_log", version = "0.13.1", default-features = false }
+mt_sea = { path = "mt_sea", version = "0.14.0", default-features = false }
+mt_coord = { path = "mt_coord", version = "0.14.0", default-features = false }
+mt_pubsub = { path = "mt_pubsub", version = "0.14.0", default-features = false }
+mt_service = { path = "mt_service", version = "0.14.0", default-features = false }
+mt_action = { path = "mt_action", version = "0.14.0", default-features = false }
+mt_scope = { path = "mt_scope", version = "0.14.0", default-features = false }
+mt_bagread = { path = "mt_bagread", version = "0.14.0", default-features = false }
+mt_net = { path = "mt_net", version = "0.14.0", default-features = false }
+mt_flow = { path = "mt_flow", version = "0.14.0", default-features = false }
+mt_dataset = { path = "mt_dataset", version = "0.14.0", default-features = false }
+mt_wind = { path = "mt_wind", version = "0.14.0", default-features = false }
+mt_mtc = { path = "mt_mtc", version = "0.14.0", default-features = false }
+mt_log = { path = "mt_log", version = "0.14.0", default-features = false }
 
 # Tools
 anyhow = "1.0"
@@ -69,7 +68,11 @@ clap_complete = "4.6"
 
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 futures = "0.3.34"
-ratatui = "0.30"
+ratatui = { version = "0.30", default-features = false, features = [
+  "std",
+  "layout-cache",
+  "underline-color",
+] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 chrono = "0.4.45"
 tui-logger = "0.18.3"
@@ -87,14 +90,14 @@ rand = "0.10"
 fs2 = "0.4"
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
-tokio-util = { version = "0.7", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 cdr-encoding = "0.11"
 bytesize = "2.7"
 
 # IO
 futures-lite = "2.6"
 tokio = { version = "1.53", features = ["signal", "process"] }
-zenoh = { version = "1.10", features = [
+zenoh = { version = "1.10", default-features = false, features = [
   "transport_multilink",
   "transport_tcp",
   "unstable",

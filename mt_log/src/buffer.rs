@@ -2,7 +2,7 @@
 
 use std::io::Write;
 use std::sync::Mutex;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::format::{LogLevel, Record, colour_stderr, sanitize};
 

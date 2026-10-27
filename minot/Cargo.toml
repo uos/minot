@@ -6,83 +6,11 @@ keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-authors.workspace = true
 categories.workspace = true
 documentation.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 exclude.workspace = true
-
-[dependencies]
-mt_wind = { optional = true, workspace = true }
-mt_sea.workspace = true
-log.workspace = true
-mt_log = { workspace = true, features = ["env"] }
-nalgebra.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-mt_net.workspace = true
-mt_mtc.workspace = true
-mt_bagread.workspace = true
-mt_dataset = { workspace = true, features = ["minot-registry"] }
-anyhow.workspace = true
-crossterm.workspace = true
-futures.workspace = true
-ratatui.workspace = true
-chrono.workspace = true
-tui-logger.workspace = true
-clap.workspace = true
-clap_complete.workspace = true
-regex.workspace = true
-once_cell.workspace = true
-rust_decimal.workspace = true
-bytesize.workspace = true
-mt_coord = { workspace = true, features = ["embed-scope"] }
-syn = { version = "3.0.6", features = ["full", "extra-traits"] }
-heck = "0.5.0"
-
-[[bin]]
-name = "minot"
-path = "src/minot.rs"
-
-[features]
-default = ["embed-coord", "embed-mt-pubsub", "db3", "shm", "image"]
-image = ["mt_net/image", "mt_wind?/image"]
-db3 = ["mt_bagread/db3"]
-
-default-hiroz = ["embed-coord", "embed-hiroz", "db3", "shm", "image"]
-
-# Enable shared memory for large same-machine messages, with automatic network fallback.
-# `minot` is the only crate that turns this on by default; every library crate leaves it off.
-shm = ["mt_sea/shm", "mt_coord/shm", "mt_wind?/shm"]
-
-# Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
-embed-ros2-c = ["embed-ros2-c-turbine"]
-
-# Same as above but removing BestAvailable QoS to be compatible with Humble
-embed-ros2-c-humble = ["embed-ros2-c-turbine", "mt_wind/humble"]
-
-# Use a native Rust implementation of ROS2 (ros2-client crate). Not stable for publishing the "any" type.
-embed-ros2-native = ["embed-ros2-turbine"]
-
-# Publish ROS 2 messages through ZettaScaleLabs Hiroz.
-embed-hiroz = ["embed-hiroz-turbine"]
-
-# Use a native Rust ROS implementation so no ROS installation needed. Can only publish non-any typed topics.
-embed-ros1-native = ["embed-ros1-turbine"]
-
-# Publishing through a pub-sub implementation on top of the existing network stack from Minot.
-embed-mt-pubsub = ["embed-mt-pubsub-turbine"]
-
-# Run the coordinator in the background.
-embed-coord = []
-embed-ros2-turbine = ["dep:mt_wind", "mt_wind/ros2-native"]
-embed-ros2-c-turbine = ["dep:mt_wind", "mt_wind/ros2-c"]
-embed-hiroz-turbine = ["dep:mt_wind", "mt_wind/hiroz"]
-embed-ros1-turbine = ["dep:mt_wind", "mt_wind/ros1-native"]
-embed-mt-pubsub-turbine = ["dep:mt_wind", "mt_wind/mt_pubsub"]
 
 [package.metadata.docs.rs]
 features = [
@@ -119,3 +47,75 @@ pkg-fmt = "bin"
 source = "target/release/minot"
 dest = "/usr/bin/minot"
 mode = "0755"
+
+[dependencies]
+mt_wind = { optional = true, workspace = true }
+mt_sea.workspace = true
+log.workspace = true
+mt_log = { workspace = true, features = ["env"] }
+nalgebra.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+mt_net.workspace = true
+mt_mtc.workspace = true
+mt_bagread.workspace = true
+mt_dataset = { workspace = true, features = ["minot-registry"] }
+anyhow.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+ratatui = { workspace = true, features = ["crossterm"] }
+chrono.workspace = true
+tui-logger.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+rust_decimal.workspace = true
+bytesize.workspace = true
+mt_coord = { workspace = true, features = ["embed-scope"] }
+syn = { version = "3.0.6", features = ["full", "extra-traits"] }
+heck = "0.5.0"
+
+[[bin]]
+name = "minot"
+path = "src/minot.rs"
+
+[features]
+default = ["embed-coord", "embed-mt-pubsub", "db3", "shm", "image", "zenoh-defaults"]
+zenoh-defaults = ["mt_sea/zenoh-defaults"]
+image = ["mt_net/image", "mt_wind?/image"]
+db3 = ["mt_bagread/db3"]
+
+default-hiroz = ["embed-coord", "embed-hiroz", "db3", "shm", "image", "zenoh-defaults"]
+
+# Enable shared memory for large same-machine messages, with automatic network fallback.
+# `minot` is the only crate that turns this on by default; every library crate leaves it off.
+shm = ["mt_sea/shm", "mt_coord/shm", "mt_wind?/shm"]
+
+# Use the official C API for ROS2 publishing (r2r crate). Enable for maximum compatibility at the cost of needing an actively sourced ROS2 installation.
+embed-ros2-c = ["embed-ros2-c-turbine"]
+
+# Same as above but removing BestAvailable QoS to be compatible with Humble
+embed-ros2-c-humble = ["embed-ros2-c-turbine", "mt_wind/humble"]
+
+# Use a native Rust implementation of ROS2 (ros2-client crate). Not stable for publishing the "any" type.
+embed-ros2-native = ["embed-ros2-turbine"]
+
+# Publish ROS 2 messages through ZettaScaleLabs Hiroz.
+embed-hiroz = ["embed-hiroz-turbine"]
+
+# Use a native Rust ROS implementation so no ROS installation needed. Can only publish non-any typed topics.
+embed-ros1-native = ["embed-ros1-turbine"]
+
+# Publishing through a pub-sub implementation on top of the existing network stack from Minot.
+embed-mt-pubsub = ["embed-mt-pubsub-turbine"]
+
+# Run the coordinator in the background.
+embed-coord = []
+embed-ros2-turbine = ["dep:mt_wind", "mt_wind/ros2-native"]
+embed-ros2-c-turbine = ["dep:mt_wind", "mt_wind/ros2-c"]
+embed-hiroz-turbine = ["dep:mt_wind", "mt_wind/hiroz"]
+embed-ros1-turbine = ["dep:mt_wind", "mt_wind/ros1-native"]
+embed-mt-pubsub-turbine = ["dep:mt_wind", "mt_wind/mt_pubsub"]

@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-dev-resolute
     steps:
       - uses: actions/checkout@v4
-      - run: cd docs && uvx zensical build --clean
+      - run: cd docs && uvx --from zensical==0.0.71 zensical build --clean --strict
       - name: Deploy to Codeberg Pages
         uses: https://codeberg.org/git-pages/action@v2
         with:

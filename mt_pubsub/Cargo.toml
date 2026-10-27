@@ -6,7 +6,6 @@ keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-authors.workspace = true
 categories.workspace = true
 documentation.workspace = true
 homepage.workspace = true
@@ -19,22 +18,22 @@ mt_coord = { workspace = true, features = ["embed-scope"] }
 mt_net.workspace = true
 zenoh.workspace = true
 serde_json.workspace = true
-env_logger.workspace = true
 log.workspace = true
-nalgebra.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 rkyv.workspace = true
 anyhow.workspace = true
-async-trait.workspace = true
-ros2-interfaces-jazzy-rkyv.workspace = true
 futures-lite = { workspace = true, optional = true }
 
 [features]
-default = ["image"]
+default = ["image", "zenoh-defaults"]
+zenoh-defaults = ["mt_sea/zenoh-defaults"]
 image = ["mt_net/image"]
 shm = ["mt_sea/shm"]
 smol = ["dep:futures-lite"]
+
+[dev-dependencies]
+ros2-interfaces-jazzy-rkyv.workspace = true
 
 [[example]]
 name = "smol"

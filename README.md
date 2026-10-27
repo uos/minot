@@ -1,3 +1,5 @@
+<img src="assets/minot.svg" alt="Minot logo" width="160" align="right">
+
 # Minot
 
 Minot is a highly versatile toolset for debugging and verifying stateful robot perception software. Some common use cases are:

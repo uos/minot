@@ -102,10 +102,10 @@ impl log::Log for Logger {
         let level = LogLevel::from(record.level());
         let target = record.target();
         let message = record.args().to_string();
-        if let Some(suppress) = self.suppress {
-            if suppress(level, target, &message) {
-                return;
-            }
+        if let Some(suppress) = self.suppress
+            && suppress(level, target, &message)
+        {
+            return;
         }
 
         if self.owns_screen.load(Ordering::Relaxed) {

@@ -6,35 +6,11 @@ keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-authors.workspace = true
 categories.workspace = true
 documentation.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 exclude.workspace = true
-
-[features]
-default = []
-shm = ["mt_sea/shm"]
-
-[dependencies]
-mt_sea.workspace = true
-env_logger.workspace = true
-log.workspace = true
-nalgebra.workspace = true
-tokio.workspace = true
-rkyv.workspace = true
-anyhow.workspace = true
-async-trait.workspace = true
-rand.workspace = true
-
-[lib]
-name = "rat"
-crate-type = [
-  "cdylib",    # C shared library (librat.so / librat.dylib)
-  "rlib",      # needed when building the example and for Rust users
-  "staticlib",
-] # use as crate on rust and as static or shared library on C/C++
 
 [package.metadata.deb]
 name = "librat-dev"
@@ -73,6 +49,27 @@ mode = "0644"
 source = "target/release/librat.a"
 dest = "/usr/lib/librat.a"
 mode = "0644"
+
+[features]
+default = ["zenoh-defaults"]
+zenoh-defaults = ["mt_sea/zenoh-defaults"]
+shm = ["mt_sea/shm"]
+
+[dependencies]
+mt_sea.workspace = true
+log.workspace = true
+nalgebra.workspace = true
+tokio.workspace = true
+rkyv.workspace = true
+anyhow.workspace = true
+
+[lib]
+name = "rat"
+crate-type = [
+  "cdylib",    # C shared library (librat.so / librat.dylib)
+  "rlib",      # needed when building the example and for Rust users
+  "staticlib",
+] # use as crate on rust and as static or shared library on C/C++
 
 [dev-dependencies]
 mt_pubsub.workspace = true

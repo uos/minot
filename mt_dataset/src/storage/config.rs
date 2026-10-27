@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
 use log::warn;
@@ -179,8 +180,22 @@ pub fn infer_kind_from_uri(uri: &str) -> &'static str {
 pub const DEFAULT_REGISTRY_NAME: &str = "osnabotics_public";
 pub const DEFAULT_GDRIVE_FOLDER_ID: &str = "10hjoMIyWTOVNOo3zDOfHoSb1S55gO3rJ";
 
+static SCHEMA_URL: OnceLock<String> = OnceLock::new();
+
+/// Point the configuration file written on first use at the application's
+/// defaults schema, as `# @schema <url>`, so an editor with the Ratslang
+/// language server checks and completes it. Applications pass the
+/// `default.rl` of their own release; only the first call counts.
+pub fn set_schema_url(url: impl Into<String>) {
+    let _ = SCHEMA_URL.set(url.into());
+}
+
 fn generate_initial_config() -> String {
-    let mut content = DEFAULT_CONFIG.trim_end().to_string();
+    let mut content = match SCHEMA_URL.get() {
+        Some(url) => format!("# @schema {url}\n\n"),
+        None => String::new(),
+    };
+    content.push_str(DEFAULT_CONFIG.trim_end());
 
     #[cfg(feature = "osnabotics-default-registry")]
     {
@@ -548,4 +563,22 @@ pub fn remove_local_state(all: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_written_configuration_names_the_schema_it_was_given() {
+        set_schema_url("https://example.org/releases/download/v1.0.0/default.rl");
+        let content = generate_initial_config();
+        assert!(
+            content.starts_with(
+                "# @schema https://example.org/releases/download/v1.0.0/default.rl\n\n"
+            ),
+            "{content}"
+        );
+        ratslang::compile_code(&content).unwrap();
+    }
 }

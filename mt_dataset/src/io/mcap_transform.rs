@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek};
+use std::io::{BufWriter, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,6 +20,29 @@ const MARINA_CODEC_KEY: &str = "marina.pointcloud.codec";
 const MARINA_CODEC_VAL: &str = "cloudini";
 const CHUNK_PROGRESS_EVERY: usize = 16;
 const MESSAGE_PROGRESS_EVERY: usize = 200_000;
+
+/// Reads the profile from the header record that opens every MCAP file.
+fn read_profile_from_file(file: &mut File) -> Result<String> {
+    file.seek(SeekFrom::Start(0))
+        .context("failed seeking to mcap header")?;
+    let mut prefix = [0u8; mcap::MAGIC.len() + 1 + 8];
+    file.read_exact(&mut prefix)
+        .context("failed reading mcap header")?;
+    let (magic, record) = prefix.split_at(mcap::MAGIC.len());
+    if magic != mcap::MAGIC {
+        return Err(anyhow!("not an mcap file: bad magic"));
+    }
+    let op = record[0];
+    let length = u64::from_le_bytes(record[1..].try_into().expect("8 byte length"));
+    let length = usize::try_from(length).context("mcap header length overflows usize")?;
+    let mut body = vec![0u8; length];
+    file.read_exact(&mut body)
+        .context("failed reading mcap header body")?;
+    match mcap::parse_record(op, &body).context("failed parsing mcap header")? {
+        mcap::records::Record::Header(header) => Ok(header.profile),
+        _ => Err(anyhow!("mcap file does not start with a header record")),
+    }
+}
 
 fn read_summary_from_file(file: &mut File) -> Result<Summary> {
     let mut summary_reader = mcap::sans_io::summary_reader::SummaryReader::new();
@@ -115,6 +138,7 @@ pub fn compress_mcap_for_push_with_progress(
 ) -> Result<TransformStats> {
     let mut input_file = File::open(input)
         .with_context(|| format!("failed to open input mcap {}", input.display()))?;
+    let profile = read_profile_from_file(&mut input_file)?;
     let summary = read_summary_from_file(&mut input_file)?;
     let mut reader =
         IndexedReader::new(&summary).context("failed constructing mcap indexed reader")?;
@@ -147,6 +171,7 @@ pub fn compress_mcap_for_push_with_progress(
     let mut writer = Some(make_writer(
         BufWriter::new(writer_file),
         options.output_mcap_compression,
+        &profile,
     )?);
 
     let mut stats = TransformStats::default();
@@ -291,6 +316,7 @@ pub fn decompress_mcap_after_pull_with_progress(
 ) -> Result<TransformStats> {
     let mut input_file = File::open(input)
         .with_context(|| format!("failed to open input mcap {}", input.display()))?;
+    let profile = read_profile_from_file(&mut input_file)?;
     let summary = read_summary_from_file(&mut input_file)?;
     let mut reader =
         IndexedReader::new(&summary).context("failed constructing mcap indexed reader")?;
@@ -323,6 +349,7 @@ pub fn decompress_mcap_after_pull_with_progress(
     let mut writer = Some(make_writer(
         BufWriter::new(writer_file),
         options.output_mcap_compression,
+        &profile,
     )?);
 
     let mut stats = TransformStats::default();
@@ -465,9 +492,12 @@ pub fn decompress_cdr_pointcloud(data: &[u8]) -> Result<Vec<u8>> {
         .context("failed CDR-encoding restored PointCloud2")
 }
 
+/// Creates the output writer. `profile` is the input's, so a ROS 2 bag stays
+/// recognizable as one after the transform.
 fn make_writer(
     writer: BufWriter<File>,
     compression: McapChunkCompression,
+    profile: &str,
 ) -> Result<Writer<BufWriter<File>>> {
     let mcap_compression = match compression {
         McapChunkCompression::None => None,
@@ -475,6 +505,7 @@ fn make_writer(
         McapChunkCompression::Lz4 => Some(Compression::Lz4),
     };
     let options = WriteOptions::new()
+        .profile(profile)
         .compression(mcap_compression)
         .compression_threads(0);
 
@@ -624,4 +655,39 @@ fn decompress_pointcloud_message<'a>(msg: Message<'a>) -> Result<Message<'a>> {
         publish_time: msg.publish_time,
         data: Cow::Owned(payload),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_and_pull_keep_the_input_profile() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let input = dir.path().join("input.mcap");
+        let packed = dir.path().join("packed.mcap");
+        let restored = dir.path().join("restored.mcap");
+
+        let mut writer = WriteOptions::new()
+            .profile("ros2")
+            .create(BufWriter::new(File::create(&input)?))?;
+        let channel = writer.add_channel(0, "/chatter", CDR_ENCODING, &Default::default())?;
+        writer.write_to_known_channel(
+            &mcap::records::MessageHeader {
+                channel_id: channel,
+                sequence: 0,
+                log_time: 1,
+                publish_time: 1,
+            },
+            &[0, 1, 0, 0],
+        )?;
+        writer.finish()?;
+
+        compress_mcap_for_push(&input, &packed)?;
+        decompress_mcap_after_pull(&packed, &restored)?;
+
+        assert_eq!(read_profile_from_file(&mut File::open(&packed)?)?, "ros2");
+        assert_eq!(read_profile_from_file(&mut File::open(&restored)?)?, "ros2");
+        Ok(())
+    }
 }

@@ -1,0 +1,12 @@
+/* Minot colours, from the lighthouse of the logo. seakit.css does the rest. */
+[data-md-color-scheme="default"] {
+  --sk-brand: #aa435b;
+  --sk-brand-strong: #863447;
+  --sk-brand-soft: #dfa0ae;
+}
+
+[data-md-color-scheme="slate"] {
+  --sk-brand: #dfa0ae;
+  --sk-brand-strong: #c97286;
+  --sk-brand-soft: #dfa0ae;
+}

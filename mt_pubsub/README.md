@@ -43,6 +43,23 @@ cargo run --example sub
 
 If you have multiple Minot networks on the same physical network, use the `MINOT_DOMAIN_ID` environment variable to isolate their application topics.
 
+## Minimal dependencies
+
+For TCP pub/sub without image conversion codecs or Zenoh's additional transports:
+
+```toml
+mt_pubsub = { version = "0.14.0", default-features = false }
+```
+
+TCP pub/sub retains multicast scouting, gossip discovery, reliability, and liveliness.
+The `image` feature adds JPEG/PNG conversion helpers; raw image messages remain available
+without it. The `zenoh-defaults` feature restores Zenoh's authentication, compression,
+and additional transports (including TLS, QUIC, UDP data transport, and WebSockets).
+Both features remain enabled by default for existing library consumers. `mt_service`
+and `mt_rat` also offer `zenoh-defaults`, and can use TCP with default features disabled.
+The Minot CLI keeps the full transport set in its default feature configuration.
+Shared-memory support is selected independently with `shm`.
+
 ## Peer networking and coordinator compatibility
 
 `NodeConfig::new` now selects `CoordMode::Peer`. Publishers and subscribers

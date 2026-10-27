@@ -310,11 +310,11 @@ pub fn parse(line: &str) -> Record {
     let line = sanitize(line.to_owned());
 
     #[cfg(feature = "json")]
-    if line.starts_with('{') {
-        if let Some(mut record) = wire::decode(&line) {
-            normalize(&mut record);
-            return record;
-        }
+    if line.starts_with('{')
+        && let Some(mut record) = wire::decode(&line)
+    {
+        normalize(&mut record);
+        return record;
     }
 
     let mut rest = line.as_str();
@@ -345,12 +345,12 @@ fn normalize(record: &mut Record) {
         record.source = Some(tag);
         record.message = tail;
     }
-    if record.target.is_none() {
-        if let Some((target, tail)) = split_target(&record.message) {
-            let (target, tail) = (target.to_owned(), tail.to_owned());
-            record.target = Some(target);
-            record.message = tail;
-        }
+    if record.target.is_none()
+        && let Some((target, tail)) = split_target(&record.message)
+    {
+        let (target, tail) = (target.to_owned(), tail.to_owned());
+        record.target = Some(target);
+        record.message = tail;
     }
     if let (Some(source), Some(target)) = (&record.source, &record.target) {
         record.target = match strip_segment(target, source) {

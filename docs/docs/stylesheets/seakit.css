@@ -1,0 +1,196 @@
+/* SeaKit documentation theme.
+
+   Pelorus, Polarstern, Marina, Minot, Dedrunk and Ratslang share this file unchanged.
+   Each site sets its logo colours in brand.css and everything below follows
+   from them. The palette in zensical.toml is "custom", so the theme adds no
+   colours of its own.
+
+   brand.css defines, per colour scheme:
+     --sk-brand         links, active navigation and headings in the hero
+     --sk-brand-strong  hover and pressed states
+     --sk-brand-soft    the filled button, in the logo's lighter colour */
+
+[data-md-color-scheme] {
+  --md-primary-fg-color: var(--sk-brand);
+  --md-primary-fg-color--light: var(--sk-brand-soft);
+  --md-primary-fg-color--dark: var(--sk-brand-strong);
+  --md-primary-bg-color: #fff;
+  --md-primary-bg-color--light: #ffffffb3;
+  --md-accent-fg-color: var(--sk-brand-strong);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--sk-brand) 10%, transparent);
+  --md-accent-bg-color: #fff;
+  --md-accent-bg-color--light: #ffffffb3;
+  --md-typeset-a-color: var(--sk-brand);
+  --sk-edge: color-mix(in srgb, var(--sk-brand-soft) 45%, var(--md-default-bg-color));
+  --sk-on-soft: #1f1d1a;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color: var(--sk-brand-soft);
+}
+
+/* Logos carry their own colours in either scheme. */
+:is(.md-logo, .sk-wordmark) img {
+  filter: none;
+}
+
+/* The filled button uses the logo's light colour with dark lettering. */
+.md-typeset .md-button--primary {
+  background-color: var(--sk-brand-soft);
+  border-color: var(--sk-brand-soft);
+  color: var(--sk-on-soft);
+}
+
+.md-typeset .md-button--primary:is(:hover, :focus-visible) {
+  background-color: color-mix(in srgb, var(--sk-brand-soft) 80%, #fff);
+  border-color: color-mix(in srgb, var(--sk-brand-soft) 80%, #fff);
+  color: var(--sk-on-soft);
+}
+
+/* Home page hero: wordmark, tagline, short copy and buttons on the left, an
+   image or a code example on the right. */
+.sk-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 2rem;
+  padding: .4rem 0 1.6rem;
+}
+
+.sk-intro-copy { min-width: 0; }
+
+.sk-wordmark {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  margin-bottom: 1rem;
+}
+
+.sk-wordmark img {
+  width: 3.3rem;
+  height: 3.3rem;
+  flex: none;
+}
+
+.md-typeset .sk-wordmark h1 {
+  margin: 0;
+  color: var(--md-default-fg-color);
+  font-size: clamp(2.6rem, 5vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: -.045em;
+  line-height: 1;
+}
+
+.md-typeset .sk-tagline {
+  margin: 0 0 .9rem;
+  color: var(--md-default-fg-color);
+  font-size: clamp(1.35rem, 2.6vw, 1.85rem);
+  line-height: 1.2;
+  letter-spacing: -.02em;
+}
+
+.md-typeset .sk-intro-copy > p:not([class]) {
+  max-width: 44ch;
+  margin: 0 0 1.1rem;
+}
+
+.sk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+
+.md-typeset .sk-actions p {
+  display: contents;
+}
+
+.md-typeset .sk-actions .md-button {
+  padding: .55em .95em;
+  font-size: .75rem;
+}
+
+.md-typeset .sk-note {
+  margin: .55rem 0 0;
+  color: var(--md-default-fg-color--light);
+  font-size: .65rem;
+}
+
+.md-typeset .sk-intro-visual {
+  display: block;
+  margin: 0;
+  min-width: 0;
+  max-width: none;
+}
+
+.sk-intro-visual img {
+  display: block;
+  width: 100%;
+  object-fit: contain;
+  border: 1px solid var(--sk-edge);
+  border-radius: .4rem;
+}
+
+.md-typeset .sk-intro-visual pre {
+  margin: 0;
+}
+
+.md-typeset .sk-intro-visual pre > code {
+  border: 1px solid var(--sk-edge);
+  border-radius: .4rem;
+}
+
+.md-typeset .sk-intro-visual figcaption {
+  margin: .6rem 0 0;
+  color: var(--md-default-fg-color--light);
+  font-size: .6rem;
+  font-style: normal;
+}
+
+.sk-intro-visual figcaption a { color: inherit; }
+
+/* Three short claims under the hero. */
+.sk-highlights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.4rem;
+  padding: 1.1rem 0;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.sk-highlights strong,
+.sk-highlights span { display: block; }
+
+.sk-highlights strong {
+  margin-bottom: .35rem;
+  color: var(--sk-brand);
+  font-size: .8rem;
+  line-height: 1.35;
+}
+
+.sk-highlights span {
+  font-size: .7rem;
+  line-height: 1.5;
+}
+
+.md-typeset .sk-links {
+  margin: .8rem 0 2rem;
+  font-size: .7rem;
+}
+
+@media (max-width: 760px) {
+  .sk-intro {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+  .md-typeset .sk-intro-visual:has(img) {
+    width: min(100%, 20rem);
+    justify-self: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .sk-highlights { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .sk-actions { flex-direction: column; }
+  .md-typeset .sk-actions .md-button { text-align: center; }
+}
