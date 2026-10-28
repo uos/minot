@@ -2,7 +2,7 @@
 # Template file. CI fills in the version and one checksum per downloaded file before publishing to the tap.
 class Minot < Formula
   desc "A versatile toolset for debugging and verifying stateful robot perception software"
-  homepage "https://codeberg.org/stelzo/minot"
+  homepage "https://minot.steado.tech"
   version "VERSION_PLACEHOLDER"
   license any_of: ["MIT", "Apache-2.0"]
 

@@ -26,8 +26,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://codeberg.org/stelzo/minot.git"
 edition = "2024"
 categories = ["science::robotics"]
-documentation = "https://uos.github.io/minot"
-homepage = "https://uos.github.io/minot"
+documentation = "https://minot.steado.tech/docs/"
+homepage = "https://minot.steado.tech"
 rust-version = "1.89.0"
 exclude = [
   "**/.github/**",
@@ -117,8 +117,8 @@ hiroz-msgs = { version = "0.2.0", default-features = false, features = [
   "rosgraph_msgs",
   "tf2_msgs",
 ] }
-ros2-client = { version = "0.11.0" }
-ros2-interfaces-jazzy-serde = { version = "0.0.5", features = [
+ros2-client = { version = "0.12" }
+ros2-interfaces-jazzy-serde = { version = "0.0.7", features = [
   "std_msgs",
   "geometry_msgs",
   "sensor_msgs",
