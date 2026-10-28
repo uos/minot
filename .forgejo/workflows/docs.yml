@@ -32,6 +32,7 @@ jobs:
           printf '%s\n' "$DOCS_DEPLOY_KEY" >"$key"
           echo "[minot.steado.tech]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvqpiJdvk+zuDXcjOgNdA3p98+6L7MAnhOEOLrw4phX" >"$hosts"
           # The key may only rsync into /var/www/minot.steado.tech (rrsync on the server).
+          # The site serves the documentation under /docs/ and redirects everything else there.
           rsync -rlt --checksum --delete --delay-updates --chmod=D755,F644 --stats \
             -e "ssh -p 2222 -i $key -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes" \
-            docs/site/ minot-docs@minot.steado.tech:
+            docs/site/ minot-docs@minot.steado.tech:docs/

@@ -17,7 +17,7 @@ source /opt/ros/lyrical/setup.bash 2>/dev/null \
     || source /opt/ros/humble/setup.bash
 
 # Get Minot with ROS2 publisher
-curl -sSLf https://minot.steado.tech/install | sh -s -- --ros-distro $ROS_DISTRO
+curl -sSLf https://minot.steado.tech/docs/install | sh -s -- --ros-distro $ROS_DISTRO
 
 # Get a Bagfile
 curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?dl=1" \
@@ -25,10 +25,10 @@ curl -Lo dlg_cut.zip "https://myshare.uni-osnabrueck.de/f/5faf4154af384854ab94?d
     && rm dlg_cut.zip
 
 # Get the query
-curl -Lo demo.mt "https://minot.steado.tech/assets/demo_publish.mt"
+curl -Lo demo.mt "https://minot.steado.tech/docs/assets/demo_publish.mt"
 
 # Get the rviz demo preset
-curl -Lo demo.rviz "https://minot.steado.tech/assets/demo_publish.rviz"
+curl -Lo demo.rviz "https://minot.steado.tech/docs/assets/demo_publish.rviz"
 
 # Run rviz and wait for data
 rviz2 -d demo.rviz

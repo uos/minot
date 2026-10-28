@@ -34,7 +34,7 @@ release matching `$ROS_DISTRO` when a prebuilt binary is available and falls
 back to a source build otherwise.
 
 ~~~bash
-curl -sSLf https://minot.steado.tech/install | sh -s -- --ros-distro "$ROS_DISTRO"
+curl -sSLf https://minot.steado.tech/docs/install | sh -s -- --ros-distro "$ROS_DISTRO"
 ~~~
 
 ### Source

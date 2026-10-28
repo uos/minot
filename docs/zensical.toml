@@ -2,7 +2,7 @@
 site_name = "Minot"
 site_description = "A versatile toolset for debugging and verifying stateful robot perception software."
 site_author = "stelzo <stelzo@steado.de>"
-site_url = "https://minot.steado.tech/"
+site_url = "https://minot.steado.tech/docs/"
 repo_url = "https://codeberg.org/stelzo/minot"
 repo_name = "stelzo/minot"
 strict = true
