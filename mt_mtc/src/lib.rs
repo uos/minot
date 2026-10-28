@@ -169,6 +169,7 @@ impl SensorType {
                         | IMAGE_ROS2_TYPE
                         | COMPRESSED_IMAGE_ROS2_TYPE
                         | CAMERA_INFO_ROS2_TYPE
+                        | TF_ROS2_TYPE
                 )
             }
             SensorType::Any => true,
@@ -2802,6 +2803,12 @@ pub fn compile_code_with_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_includes_tf() {
+        assert_eq!(SensorType::from_str("Tf").unwrap(), SensorType::Tf);
+        assert!(SensorType::Mixed.is(TF_ROS2_TYPE));
+    }
 
     #[test]
     fn camera_sensor_selectors() {

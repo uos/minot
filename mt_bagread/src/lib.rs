@@ -430,6 +430,7 @@ fn deserialize_message(
                 let d: Odometry = unsafe { std::mem::transmute(dec) };
                 Ok(SensorTypeMapped::Odometry(d))
             }
+            mt_mtc::TF_ROS2_TYPE => deserialize_message(data, SensorType::Tf, topic_type),
             CLOCK_ROS2_TYPE => {
                 let dec: ros2_interfaces_jazzy_serde::rosgraph_msgs::msg::Clock =
                     cdr::deserialize(data).map_err(|e| anyhow!("Error decoding CDR: {e}"))?;
