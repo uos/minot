@@ -117,8 +117,8 @@ hiroz-msgs = { version = "0.2.0", default-features = false, features = [
   "rosgraph_msgs",
   "tf2_msgs",
 ] }
-ros2-client = { version = "0.11.0" }
-ros2-interfaces-jazzy-serde = { version = "0.0.5", features = [
+ros2-client = { version = "0.12" }
+ros2-interfaces-jazzy-serde = { version = "0.0.7", features = [
   "std_msgs",
   "geometry_msgs",
   "sensor_msgs",

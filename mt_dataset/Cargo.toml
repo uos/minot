@@ -51,7 +51,7 @@ indicatif = "0.18"
 ratslang = "0.5.0"
 reqwest = { version = "0.13", default-features = false, features = ["form", "json", "multipart", "query", "rustls", "stream"] }
 ring = { version = "0.17", optional = true }
-ros2-interfaces-jazzy-serde = { version = "0.0.5", features = ["sensor_msgs", "std_msgs", "builtin_interfaces"] }
+ros2-interfaces-jazzy-serde = { version = "0.0.7", features = ["sensor_msgs", "std_msgs", "builtin_interfaces"] }
 ros_pointcloud2 = { version = "1.0.0-rc.5", features = ["ros2_interfaces_jazzy_serde"] }
 rpassword = "7"
 russh = { version = "0.63", default-features = false, features = ["ring"] }
