@@ -35,7 +35,7 @@ minot coord           # pub/sub coordinator
 <div class="sk-highlights">
   <div><strong>Bags are queryable now</strong><span>Jump to any message and replay it into your node, step by step.</span></div>
   <div><strong>Deterministic pub/sub</strong><span>Peer-to-peer over TCP, with quality of service per node, publisher, service and action.</span></div>
-  <div><strong>ROS optional</strong><span>Runs as a ROS node or on its own, from C++, Rust or Go.</span></div>
+  <div><strong>ROS optional</strong><span>Runs with ROS or on its own. Native APIs for Rust and Go, variable sharing for C and C++.</span></div>
 </div>
 
 ## About

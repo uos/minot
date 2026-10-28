@@ -48,7 +48,7 @@ If you have multiple Minot networks on the same physical network, use the `MINOT
 For TCP pub/sub without image conversion codecs or Zenoh's additional transports:
 
 ```toml
-mt_pubsub = { version = "0.14.0", default-features = false }
+mt_pubsub = { version = "0.14.1", default-features = false }
 ```
 
 TCP pub/sub retains multicast scouting, gossip discovery, reliability, and liveliness.
