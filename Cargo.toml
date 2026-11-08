@@ -93,6 +93,7 @@ uuid = { version = "1", features = ["v4"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 cdr-encoding = "0.11"
 bytesize = "2.7"
+bytes = "1.9"
 
 # IO
 futures-lite = "2.6"

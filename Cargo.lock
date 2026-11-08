@@ -4075,6 +4075,7 @@ name = "mt_pubsub"
 version = "0.14.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "futures-lite",
  "log",
  "mt_coord",

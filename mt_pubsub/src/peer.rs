@@ -2,6 +2,15 @@
 use super::NodeConfig;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use mt_sea::{ArchivedMessage, Qos, Reliability, Sendable};
+use rkyv::{
+    Archive, Place, Serialize, SerializeUnsized,
+    munge::munge,
+    rancor::{Fallible, Source},
+    ser::{Writer, WriterExt},
+    string::{ArchivedString, StringResolver},
+    util::AlignedVec,
+    vec::{ArchivedVec, VecResolver},
+};
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
@@ -54,18 +63,82 @@ enum TokenQuery {
     // Reliable delivery must not mistake an incomplete snapshot for no readers.
     Complete,
 }
-fn aligned(data: &[u8]) -> rkyv::util::AlignedVec {
-    let mut bytes = rkyv::util::AlignedVec::new();
-    bytes.extend_from_slice(data);
+/// Copy `slices` into one buffer aligned for rkyv, allocated once.
+fn aligned<'a>(len: usize, slices: impl IntoIterator<Item = &'a [u8]>) -> AlignedVec {
+    let mut bytes = AlignedVec::with_capacity(len);
+    for slice in slices {
+        bytes.extend_from_slice(slice);
+    }
     bytes
 }
 
+/// The wire envelope. `payload` is the rkyv archive of the message.
 #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct WireSample {
     writer: String,
     sequence: u64,
     qos: u8,
     payload: Vec<u8>,
+}
+
+/// Serializes as a [`WireSample`] whose payload is the archive of `value`,
+/// in one pass: the message is archived in place inside the envelope instead
+/// of on its own and then copied in as a `Vec<u8>`.
+struct Outgoing<'a, T> {
+    writer: &'a str,
+    sequence: u64,
+    qos: u8,
+    value: &'a T,
+}
+struct OutgoingResolver {
+    writer: StringResolver,
+    payload_pos: usize,
+    payload_len: usize,
+}
+impl<T> Archive for Outgoing<'_, T> {
+    type Archived = ArchivedWireSample;
+    type Resolver = OutgoingResolver;
+    fn resolve(&self, resolver: Self::Resolver, out: Place<Self::Archived>) {
+        munge!(let ArchivedWireSample { writer, sequence, qos, payload } = out);
+        ArchivedString::resolve_from_str(self.writer, resolver.writer, writer);
+        self.sequence.resolve((), sequence);
+        self.qos.resolve((), qos);
+        ArchivedVec::<u8>::resolve_from_len(
+            resolver.payload_len,
+            VecResolver::from_pos(resolver.payload_pos),
+            payload,
+        );
+    }
+}
+impl<T, S> Serialize<S> for Outgoing<'_, T>
+where
+    T: Serialize<S>,
+    S: Fallible + Writer<S::Error> + ?Sized,
+    S::Error: Source,
+    str: SerializeUnsized<S>,
+{
+    fn serialize(&self, serializer: &mut S) -> Result<OutgoingResolver, S::Error> {
+        let writer = ArchivedString::serialize_from_str(self.writer, serializer)?;
+        // Readers copy the payload to the start of an `AlignedVec`. Starting it
+        // at the same alignment here makes every padding decision, and so every
+        // byte, the same as `rkyv::to_bytes(value)`.
+        let payload_pos = serializer.align(AlignedVec::<16>::ALIGNMENT)?;
+        self.value.serialize_unsized(serializer)?;
+        Ok(OutgoingResolver {
+            writer,
+            payload_pos,
+            payload_len: serializer.pos() - payload_pos,
+        })
+    }
+}
+
+/// Lends a serialized sample to Zenoh without copying it, so the buffer can be
+/// taken back and reused once Zenoh has written it out.
+struct SharedBuffer(Arc<AlignedVec>);
+impl AsRef<[u8]> for SharedBuffer {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 #[derive(Debug)]
@@ -87,6 +160,22 @@ impl PeerNode {
     pub(crate) async fn create(config: &NodeConfig) -> Result<Arc<Self>> {
         config.node_options().timing.validate()?;
         let mut network = mt_sea::network::zenoh_config(mt_sea::network::NetworkRole::PubSubPeer);
+        // BestEffort uses CongestionControl::Drop. With zenoh's defaults (2 x 64 KiB
+        // batches per queue, 50 ms deadline for all fragments of a message) any
+        // sample larger than what the link drains in 50 ms is dropped by the
+        // sender before it reaches the wire: at 20 Mbit/s that is everything
+        // above ~128 KiB. Give large samples room and time to go out, like a DDS
+        // best-effort writer. `wait_before_drop` stays at 1 ms, so a dead link
+        // (queue already full) still drops new samples right away.
+        network
+            .insert_json5("transport/link/tx/queue/size/data", "16")
+            .map_err(ze)?;
+        network
+            .insert_json5(
+                "transport/link/tx/queue/congestion_control/drop/max_wait_before_drop_fragments",
+                "1000000",
+            )
+            .map_err(ze)?;
         if let Some(endpoint) = &config.listen_endpoint {
             network
                 .insert_json5("listen/endpoints", &serde_json::to_string(&[endpoint])?)
@@ -222,7 +311,9 @@ struct PublisherState {
     _cache_alive: Option<zenoh::liveliness::LivelinessToken>,
     stop: CancellationToken,
     sequence: AtomicU64,
-    serial: tokio::sync::Mutex<()>,
+    /// Serializes concurrent calls through clones to keep per-writer ordering,
+    /// and holds the send buffer for reuse.
+    serial: tokio::sync::Mutex<Option<AlignedVec>>,
     retained: Arc<Mutex<Option<ZBytes>>>,
 }
 impl Drop for PublisherState {
@@ -314,7 +405,7 @@ impl<T: Sendable> PeerPublisher<T> {
                 _cache_alive: cache_alive,
                 stop,
                 sequence: AtomicU64::new(0),
-                serial: tokio::sync::Mutex::new(()),
+                serial: tokio::sync::Mutex::new(None),
                 retained,
             }),
             _type: PhantomData,
@@ -334,19 +425,31 @@ impl<T: Sendable> PeerPublisher<T> {
     pub(crate) async fn publish(&self, value: &T) -> Result<()> {
         let state = &self.state;
         state.node.check_alive()?;
-        // Serialize concurrent calls through clones to keep per-writer ordering.
-        let _serial = state.serial.lock().await;
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(value)
-            .context("Cannot serialize pub/sub message")?;
-        let sample = WireSample {
-            writer: state.writer.clone(),
+        let mut spare = state.serial.lock().await;
+        let mut buffer = spare.take().unwrap_or_default();
+        buffer.clear();
+        let sample = Outgoing {
+            writer: &state.writer,
             sequence: state.sequence.fetch_add(1, Ordering::Relaxed),
             qos: qos_code(state.qos),
-            payload: bytes.to_vec(),
+            value,
         };
-        let bytes: ZBytes = rkyv::to_bytes::<rkyv::rancor::Error>(&sample)?
-            .to_vec()
-            .into();
+        let buffer = Arc::new(
+            rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&sample, buffer)
+                .context("Cannot serialize pub/sub message")?,
+        );
+        let bytes = ZBytes::from(bytes::Bytes::from_owner(SharedBuffer(buffer.clone())));
+        let result = self.send(bytes).await;
+        // Zenoh copies the sample into its batches while sending, so the buffer
+        // is normally ours again. It is not while a retained copy or a local
+        // subscriber still holds it; the next publish then allocates.
+        if let Ok(buffer) = Arc::try_unwrap(buffer) {
+            *spare = Some(buffer);
+        }
+        result
+    }
+    async fn send(&self, bytes: ZBytes) -> Result<()> {
+        let state = &self.state;
         if state.qos.is_transient_local() {
             *state.retained.lock().unwrap() = Some(bytes.clone());
         }
@@ -410,25 +513,35 @@ impl<T: Sendable> Drop for PeerSubscriber<T> {
 }
 
 async fn enqueue<T: Sendable>(
+    scratch: &mut AlignedVec,
     bytes: &ZBytes,
     qos: Qos,
     seen: &mut HashMap<String, u64>,
     sender: &tokio::sync::mpsc::Sender<ArchivedMessage<T>>,
     stop: &CancellationToken,
 ) -> Result<()> {
-    let wire = aligned(&bytes.to_bytes());
-    let sample = rkyv::from_bytes::<WireSample, rkyv::rancor::Error>(&wire)
+    // The envelope is only read here, so its buffer is reused across samples.
+    scratch.clear();
+    scratch.reserve(bytes.len());
+    for slice in bytes.slices() {
+        scratch.extend_from_slice(slice);
+    }
+    let sample = rkyv::access::<ArchivedWireSample, rkyv::rancor::Error>(scratch)
         .context("Invalid pub/sub envelope")?;
+    let sequence = sample.sequence.to_native();
     if qos.expects_reliable_delivery() && sample.qos == 0 {
         bail!("BestEffort publisher cannot satisfy a reliable subscriber");
     }
     if seen
-        .get(&sample.writer)
-        .is_some_and(|sequence| *sequence >= sample.sequence)
+        .get(sample.writer.as_str())
+        .is_some_and(|last| *last >= sequence)
     {
         return Ok(());
     }
-    let message = ArchivedMessage::from_aligned_bytes(aligned(&sample.payload))?;
+    let message = ArchivedMessage::from_aligned_bytes(aligned(
+        sample.payload.len(),
+        [sample.payload.as_slice()],
+    ))?;
     if qos.reliability_mode() == Reliability::BestEffort {
         match sender.try_send(message) {
             Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
@@ -440,7 +553,7 @@ async fn enqueue<T: Sendable>(
             result = sender.send(message) => result.map_err(ze)?,
         }
     }
-    seen.insert(sample.writer, sample.sequence);
+    seen.insert(sample.writer.to_string(), sequence);
     Ok(())
 }
 
@@ -505,6 +618,7 @@ impl<T: Sendable> PeerSubscriber<T> {
         tokio::spawn(async move {
             let _token = token;
             let mut seen = HashMap::new();
+            let mut scratch = AlignedVec::new();
             loop {
                 tokio::select! {
                     _ = quit.cancelled() => break,
@@ -552,18 +666,18 @@ impl<T: Sendable> PeerSubscriber<T> {
                         }
                     },
                     Some(bytes) = snapshot_rx.recv() => {
-                        if let Err(error) = enqueue(&bytes, qos, &mut seen, &tx, &quit).await {
+                        if let Err(error) = enqueue(&mut scratch, &bytes, qos, &mut seen, &tx, &quit).await {
                             log::warn!("Discovered retained sample rejected: {error}"); break;
                         }
                     },
                     result = subscriber.recv_async() => {
                         let Ok(sample) = result else { break; };
-                        if let Err(error) = enqueue(sample.payload(), qos, &mut seen, &tx, &quit).await { log::warn!("Peer sample rejected: {error}"); break; }
+                        if let Err(error) = enqueue(&mut scratch, sample.payload(), qos, &mut seen, &tx, &quit).await { log::warn!("Peer sample rejected: {error}"); break; }
                     },
                     result = queryable.recv_async() => {
                         let Ok(query) = result else { break; };
                         if let Some(bytes) = query.payload() {
-                            match enqueue(bytes, qos, &mut seen, &tx, &quit).await {
+                            match enqueue(&mut scratch, bytes, qos, &mut seen, &tx, &quit).await {
                                 Ok(()) => { let _ = query.reply(reader_key.clone(), Vec::<u8>::new()).await; },
                                 Err(error) => { let _ = query.reply_err(error.to_string()).await; }
                             }
@@ -587,5 +701,69 @@ impl<T: Sendable> PeerSubscriber<T> {
     }
     pub(crate) async fn next_archived(&mut self) -> Option<ArchivedMessage<T>> {
         self.chan.recv().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Debug, PartialEq)]
+    struct Cloud {
+        frame_id: String,
+        width: u32,
+        stamp: u64,
+        fields: Vec<(String, u8)>,
+        data: Vec<u8>,
+    }
+
+    #[test]
+    fn one_pass_envelope_matches_nested_serialization() {
+        let value = Cloud {
+            frame_id: "drone_7/1234".into(),
+            width: 100_000,
+            stamp: 1_700_000_000_123,
+            fields: vec![("x".into(), 7), ("intensity".into(), 7)],
+            data: (0..1_600_003u32).map(|i| (i * 31) as u8).collect(),
+        };
+        let nested = rkyv::to_bytes::<rkyv::rancor::Error>(&value).unwrap();
+        // Reused buffers start dirty and too small or too large.
+        for start in [AlignedVec::<16>::new(), AlignedVec::with_capacity(4 << 20)] {
+            for writer in ["w", "a_writer_name_longer_than_inline"] {
+                let mut buffer = start.clone();
+                buffer.extend_from_slice(b"stale");
+                buffer.clear();
+                let sample = Outgoing {
+                    writer,
+                    sequence: 42,
+                    qos: 2,
+                    value: &value,
+                };
+                let wire = rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&sample, buffer)
+                    .unwrap();
+                // Old readers deserialize the envelope.
+                let old = rkyv::from_bytes::<WireSample, rkyv::rancor::Error>(&wire).unwrap();
+                assert_eq!(old.writer, writer);
+                assert_eq!(old.sequence, 42);
+                assert_eq!(old.qos, 2);
+                assert_eq!(old.payload, nested.as_slice());
+                let message = ArchivedMessage::<Cloud>::from_aligned_bytes(aligned(
+                    old.payload.len(),
+                    [old.payload.as_slice()],
+                ))
+                .unwrap();
+                assert_eq!(message.deserialize().unwrap(), value);
+            }
+        }
+        // New readers accept envelopes from old writers.
+        let old = WireSample {
+            writer: "old".into(),
+            sequence: 1,
+            qos: 0,
+            payload: nested.to_vec(),
+        };
+        let wire = rkyv::to_bytes::<rkyv::rancor::Error>(&old).unwrap();
+        let sample = rkyv::access::<ArchivedWireSample, rkyv::rancor::Error>(&wire).unwrap();
+        assert_eq!(sample.payload.as_slice(), nested.as_slice());
     }
 }
