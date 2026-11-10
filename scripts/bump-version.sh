@@ -55,8 +55,8 @@ for pkgbuild in packaging/arch/PKGBUILD packaging/arch-bin/PKGBUILD; do
     sed "${SED_INPLACE[@]}" -e "s/^pkgver=.*/pkgver=${NEW_VERSION}/" -e "s/^pkgrel=.*/pkgrel=1/" "$pkgbuild"
 done
 
-# The install snippet on the mt_pubsub crates.io page
-sed "${SED_INPLACE[@]}" "s/mt_pubsub = { version = \"${CURRENT_VERSION}\"/mt_pubsub = { version = \"${NEW_VERSION}\"/" mt_pubsub/README.md
+# Keep workspace dependency examples current, including already stale versions.
+python3 scripts/update-doc-versions.py "$NEW_VERSION"
 
 VSCODE_PKG="vscode/package.json"
 sed "${SED_INPLACE[@]}" "s/\"version\": \"${CURRENT_VERSION}\"/\"version\": \"${NEW_VERSION}\"/" "$VSCODE_PKG"

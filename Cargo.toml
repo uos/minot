@@ -101,6 +101,7 @@ tokio = { version = "1.53", features = ["signal", "process"] }
 zenoh = { version = "1.10.2", default-features = false, features = [
   "transport_multilink",
   "transport_tcp",
+  "transport_udp",
   "unstable",
 ] }
 nalgebra = { version = "0.35", default-features = false, features = ["std"] }

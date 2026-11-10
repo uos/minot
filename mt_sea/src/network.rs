@@ -119,9 +119,18 @@ pub fn zenoh_config(role: NetworkRole) -> zenoh::Config {
 
 fn peer_config_for(local: bool, unicast_only: bool, port: u16) -> zenoh::Config {
     let multicast = !unicast_only;
-    let host = if local { "127.0.0.1" } else { "0.0.0.0" };
+    // Off-host peers get a TCP and a UDP link (zenoh multilink). zenoh sends
+    // best-effort puts over the UDP link, while declarations, queries and
+    // reliable samples stay on TCP, so a lost datagram never loses a
+    // subscription. Loopback peers keep a single TCP link: local UDP
+    // overflows the default socket buffers with large samples.
+    let (endpoints, max_links) = if local {
+        (r#""tcp/127.0.0.1:0""#, 1)
+    } else {
+        (r#""tcp/0.0.0.0:0","udp/0.0.0.0:0""#, 2)
+    };
     let mut config = zenoh::Config::from_json5(&format!(
-            r#"{{mode:"peer",listen:{{endpoints:["tcp/{host}:0"]}},scouting:{{multicast:{{enabled:{multicast},address:"224.0.0.224:{port}",autoconnect:["peer"],listen:true}},gossip:{{enabled:true,multihop:false,autoconnect:["peer"]}}}}}}"#
+            r#"{{mode:"peer",listen:{{endpoints:[{endpoints}]}},transport:{{unicast:{{max_links:{max_links}}}}},scouting:{{multicast:{{enabled:{multicast},address:"224.0.0.224:{port}",autoconnect:["peer"],listen:true}},gossip:{{enabled:true,multihop:false,autoconnect:["peer"]}}}}}}"#
         )).expect("internal peer configuration must be valid");
     if local {
         // Every local listener is reachable in both directions. Let only one
@@ -343,7 +352,15 @@ mod tests {
         );
         assert_eq!(
             unicast.get_json("listen/endpoints").unwrap(),
-            r#"["tcp/0.0.0.0:0"]"#
+            r#"["tcp/0.0.0.0:0","udp/0.0.0.0:0"]"#
+        );
+        assert_eq!(
+            unicast.get_json("transport/unicast/max_links").unwrap(),
+            "2"
+        );
+        assert_eq!(
+            config.get_json("transport/unicast/max_links").unwrap(),
+            "1"
         );
     }
 

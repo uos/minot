@@ -97,7 +97,8 @@ impl NodeConfig {
         self
     }
 
-    /// Peer listener endpoint. Defaults to an OS-assigned TCP port.
+    /// Peer listener endpoint. Defaults to OS-assigned TCP and UDP ports
+    /// (best-effort samples over UDP, the rest over TCP); setting one replaces both.
     /// Use a reachable fixed address for a bootstrap peer in a container mesh.
     pub fn listen_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.listen_endpoint = Some(endpoint.into());

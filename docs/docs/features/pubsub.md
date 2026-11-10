@@ -41,7 +41,7 @@ in Zenoh without starting a Minot coordinator or acquiring a lock file.
 Multicast scouting and single-hop gossip connect peers automatically. `MINOT_ZENOH_PORT`
 (default `7447`) selects the peer UDP scouting port and the existing coordinator
 TCP port; use a different value on all Minot nodes to coexist with ROS Zenoh.
-Peer listeners use OS-assigned TCP ports unless explicitly configured.
+Peer listeners use OS-assigned ports unless explicitly configured: a TCP and a UDP listener (zenoh multilink), so best-effort samples travel as datagrams while declarations, queries and reliable samples stay on TCP. Local-only peers keep a single TCP loopback link.
 
 For Docker or routed networks without multicast, supply reachable peers through
 `MINOT_PEERS=tcp/seed:17447` (comma-separated endpoints), or use
