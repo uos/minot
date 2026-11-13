@@ -34,7 +34,7 @@ fn identifier(session: &zenoh::Session) -> String {
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     )
 }
-fn qos_code(qos: Qos) -> u8 {
+pub(crate) fn qos_code(qos: Qos) -> u8 {
     match qos.reliability_mode() {
         Reliability::BestEffort => 0,
         Reliability::Reliable => 1,
@@ -44,7 +44,7 @@ fn qos_code(qos: Qos) -> u8 {
 fn hex(value: &str) -> String {
     value.bytes().map(|byte| format!("{byte:02x}")).collect()
 }
-fn topic_key<T>(domain: u16, topic: &str) -> String {
+pub(crate) fn topic_key<T>(domain: u16, topic: &str) -> String {
     // A versioned namespace prevents coordinated data and incompatible Rust
     // message types from being accidentally interpreted as peer samples.
     format!(
@@ -64,7 +64,7 @@ enum TokenQuery {
     Complete,
 }
 /// Copy `slices` into one buffer aligned for rkyv, allocated once.
-fn aligned<'a>(len: usize, slices: impl IntoIterator<Item = &'a [u8]>) -> AlignedVec {
+pub(crate) fn aligned<'a>(len: usize, slices: impl IntoIterator<Item = &'a [u8]>) -> AlignedVec {
     let mut bytes = AlignedVec::with_capacity(len);
     for slice in slices {
         bytes.extend_from_slice(slice);
@@ -74,23 +74,23 @@ fn aligned<'a>(len: usize, slices: impl IntoIterator<Item = &'a [u8]>) -> Aligne
 
 /// The wire envelope. `payload` is the rkyv archive of the message.
 #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-struct WireSample {
-    writer: String,
-    sequence: u64,
-    qos: u8,
-    payload: Vec<u8>,
+pub(crate) struct WireSample {
+    pub(crate) writer: String,
+    pub(crate) sequence: u64,
+    pub(crate) qos: u8,
+    pub(crate) payload: Vec<u8>,
 }
 
 /// Serializes as a [`WireSample`] whose payload is the archive of `value`,
 /// in one pass: the message is archived in place inside the envelope instead
 /// of on its own and then copied in as a `Vec<u8>`.
-struct Outgoing<'a, T> {
-    writer: &'a str,
-    sequence: u64,
-    qos: u8,
-    value: &'a T,
+pub(crate) struct Outgoing<'a, T> {
+    pub(crate) writer: &'a str,
+    pub(crate) sequence: u64,
+    pub(crate) qos: u8,
+    pub(crate) value: &'a T,
 }
-struct OutgoingResolver {
+pub(crate) struct OutgoingResolver {
     writer: StringResolver,
     payload_pos: usize,
     payload_len: usize,
@@ -134,7 +134,7 @@ where
 
 /// Lends a serialized sample to Zenoh without copying it, so the buffer can be
 /// taken back and reused once Zenoh has written it out.
-struct SharedBuffer(Arc<AlignedVec>);
+pub(crate) struct SharedBuffer(pub(crate) Arc<AlignedVec>);
 impl AsRef<[u8]> for SharedBuffer {
     fn as_ref(&self) -> &[u8] {
         &self.0

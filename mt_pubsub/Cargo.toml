@@ -24,7 +24,16 @@ tokio-util.workspace = true
 rkyv.workspace = true
 bytes.workspace = true
 anyhow.workspace = true
+quinn.workspace = true
+quinn-proto.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+socket2.workspace = true
 futures-lite = { workspace = true, optional = true }
+
+[target.'cfg(all(unix, not(any(target_os = "ios", target_os = "android"))))'.dependencies]
+rustix.workspace = true
+memmap2.workspace = true
 
 [features]
 default = ["image", "zenoh-defaults"]

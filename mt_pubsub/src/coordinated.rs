@@ -23,6 +23,16 @@ pub enum CoordMode {
     External,
 }
 
+/// Transport of coordinator-free peer nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PeerTransport {
+    /// Zenoh peers over TCP and UDP (default).
+    #[default]
+    Zenoh,
+    /// Experimental: QUIC connections between the nodes, without Zenoh.
+    Quic,
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     name: String,
@@ -36,6 +46,8 @@ pub struct NodeConfig {
     options: NodeOptions,
     pub(crate) peer_endpoints: Option<Vec<String>>,
     pub(crate) listen_endpoint: Option<String>,
+    peer_transport: Option<PeerTransport>,
+    quic_encryption: Option<bool>,
 }
 
 impl NodeConfig {
@@ -47,6 +59,8 @@ impl NodeConfig {
             options: NodeOptions::default(),
             peer_endpoints: None,
             listen_endpoint: None,
+            peer_transport: None,
+            quic_encryption: None,
         }
     }
 
@@ -103,6 +117,35 @@ impl NodeConfig {
     pub fn listen_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.listen_endpoint = Some(endpoint.into());
         self
+    }
+
+    /// Peer mode transport. Unset, `MINOT_PEER_TRANSPORT=quic` selects QUIC.
+    pub fn peer_transport(mut self, transport: PeerTransport) -> Self {
+        self.peer_transport = Some(transport);
+        self
+    }
+
+    pub fn transport(&self) -> PeerTransport {
+        self.peer_transport
+            .unwrap_or_else(|| match std::env::var("MINOT_PEER_TRANSPORT") {
+                Ok(value) if value.eq_ignore_ascii_case("quic") => PeerTransport::Quic,
+                _ => PeerTransport::Zenoh,
+            })
+    }
+
+    /// Encrypt the QUIC peer transport (off by default). Unset,
+    /// `MINOT_QUIC_ENCRYPT=1` turns it on. All nodes of a swarm must agree:
+    /// encrypted and plain nodes do not reach each other.
+    pub fn quic_encryption(mut self, encrypt: bool) -> Self {
+        self.quic_encryption = Some(encrypt);
+        self
+    }
+
+    pub(crate) fn quic_encrypted(&self) -> bool {
+        self.quic_encryption.unwrap_or_else(|| {
+            std::env::var("MINOT_QUIC_ENCRYPT")
+                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        })
     }
 
     pub fn name(&self) -> &str {
