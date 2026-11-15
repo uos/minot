@@ -21,6 +21,7 @@
 use super::NodeConfig;
 use crate::peer::{ArchivedWireSample, Outgoing, SharedBuffer, aligned, qos_code, topic_key};
 use crate::quic_shm as shm;
+use crate::quic_stream::{self as stream, QuicStats, Sample, SamplePolicy, SampleStreams, bump};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use bytes::{BufMut, Bytes, BytesMut};
 use mt_sea::{ArchivedMessage, Qos, Reliability, Sendable};
@@ -161,7 +162,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
     }
 }
 
-fn quic_configs(encrypt: bool) -> Result<(quinn::ServerConfig, quinn::ClientConfig)> {
+pub(crate) fn transport_config() -> Result<quinn::TransportConfig> {
     let idle = idle_timeout();
     let mut transport = quinn::TransportConfig::default();
     transport
@@ -173,7 +174,10 @@ fn quic_configs(encrypt: bool) -> Result<(quinn::ServerConfig, quinn::ClientConf
         .send_window(32 << 20)
         .datagram_receive_buffer_size(Some(4 << 20))
         .datagram_send_buffer_size(1 << 20);
-    let transport = Arc::new(transport);
+    Ok(transport)
+}
+pub(crate) fn quic_configs(encrypt: bool) -> Result<(quinn::ServerConfig, quinn::ClientConfig)> {
+    let transport = Arc::new(transport_config()?);
 
     let (mut server, mut client) = if encrypt {
         tls_configs()?
@@ -268,6 +272,10 @@ struct Inner {
     domain: u16,
     mode: u8,
     timeout: Duration,
+    samples: SamplePolicy,
+    counters: Arc<stream::Counters>,
+    /// Traffic of the connections that are closed by now.
+    closed: Mutex<Traffic>,
     endpoint: quinn::Endpoint,
     shutdown: CancellationToken,
     state: Mutex<State>,
@@ -275,32 +283,46 @@ struct Inner {
     shm: Option<Arc<shm::Hub>>,
 }
 
-async fn send_sample_stream(
-    conn: quinn::Connection,
-    hash: u64,
-    bytes: Bytes,
-    budget: Duration,
-) -> Result<()> {
-    let mut stream = conn.open_uni().await?;
-    let sent = tokio::time::timeout(budget, async {
-        stream.write_all(&hash.to_le_bytes()).await?;
-        stream.write_chunk(bytes).await?;
-        stream.finish()?;
-        // Resolves once the peer has acknowledged the whole sample.
-        stream.stopped().await?;
-        anyhow::Ok(())
-    })
-    .await;
-    match sent {
-        Ok(result) => result,
-        Err(_) => {
-            let _ = stream.reset(0u32.into());
-            bail!("sample stream timed out")
-        }
+/// UDP traffic and packet counts of peer connections.
+#[derive(Debug, Default, Clone, Copy)]
+struct Traffic {
+    tx_bytes: u64,
+    rx_bytes: u64,
+    sent_packets: u64,
+    lost_packets: u64,
+}
+impl Traffic {
+    fn add(&mut self, conn: &quinn::Connection) {
+        let stats = conn.stats();
+        self.tx_bytes += stats.udp_tx.bytes;
+        self.rx_bytes += stats.udp_rx.bytes;
+        self.sent_packets += stats.path.sent_packets;
+        self.lost_packets += stats.path.lost_packets;
     }
 }
 
+/// Writer and sequence number of a serialized sample, for the trace.
+fn envelope(bytes: &[u8]) -> Option<(String, u64)> {
+    let mut copy = AlignedVec::<16>::new();
+    copy.extend_from_slice(bytes);
+    let sample = rkyv::access::<ArchivedWireSample, rkyv::rancor::Error>(&copy).ok()?;
+    Some((sample.writer.to_string(), sample.sequence.to_native()))
+}
+
 impl Inner {
+    fn stats(&self) -> QuicStats {
+        let mut traffic = *self.closed.lock().unwrap();
+        for peer in self.state.lock().unwrap().peers.values() {
+            traffic.add(&peer.conn);
+        }
+        QuicStats {
+            udp_tx_bytes: traffic.tx_bytes,
+            udp_rx_bytes: traffic.rx_bytes,
+            sent_packets: traffic.sent_packets,
+            lost_packets: traffic.lost_packets,
+            ..self.counters.snapshot()
+        }
+    }
     fn identifier(&self) -> String {
         format!(
             "{:016x}_{}",
@@ -566,7 +588,19 @@ impl Inner {
                     let node = Arc::clone(self);
                     let nudge = conn.clone();
                     tokio::spawn(async move {
-                        let Ok(bytes) = stream.read_to_end(MAX_SAMPLE).await else { return; };
+                        let accepted = stream::unix_ns();
+                        let Ok(bytes) = stream.read_to_end(MAX_SAMPLE).await else {
+                            bump(&node.counters.incomplete);
+                            stream::trace_line(format_args!(
+                                "{{\"ev\":\"rx\",\"peer\":\"{remote:016x}\",\"accepted\":{accepted},\
+                                 \"end\":{},\"outcome\":\"incomplete\"}}",
+                                stream::unix_ns(),
+                            ));
+                            return;
+                        };
+                        let read = stream::unix_ns();
+                        bump(&node.counters.received);
+                        node.counters.received_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                         // The publisher sends its next sample once this one is
                         // acknowledged, but QUIC may hold the ACK of the last
                         // packet for its delayed-ACK timer (25 ms). Any packet
@@ -574,6 +608,15 @@ impl Inner {
                         let _ = nudge.send_datagram(Bytes::from_static(&[0]));
                         if bytes.len() > 8 {
                             let hash = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+                            if stream::trace().is_some() {
+                                let (writer, sequence) = envelope(&bytes[8..]).unwrap_or_default();
+                                stream::trace_line(format_args!(
+                                    "{{\"ev\":\"rx\",\"peer\":\"{remote:016x}\",\"topic\":\"{hash:016x}\",\
+                                     \"writer\":\"{writer}\",\"seq\":{sequence},\"bytes\":{},\
+                                     \"accepted\":{accepted},\"end\":{read},\"outcome\":\"received\"}}",
+                                    bytes.len() - 8,
+                                ));
+                            }
                             node.deliver_lossy(hash, &Bytes::from(bytes).slice(8..));
                         }
                     });
@@ -586,6 +629,7 @@ impl Inner {
             }
         }
         conn.close(0u32.into(), b"");
+        self.closed.lock().unwrap().add(&conn);
         let lost = {
             let mut state = self.state.lock().unwrap();
             match state.peers.get(&remote) {
@@ -707,12 +751,12 @@ impl Inner {
                             continue;
                         }
                         if let Some(bytes) = sample.lock().unwrap().clone() {
-                            tokio::spawn(send_sample_stream(
-                                conn.clone(),
-                                hash,
-                                bytes,
-                                self.timeout,
-                            ));
+                            let policy = SamplePolicy {
+                                budget: self.timeout,
+                                ..self.samples
+                            };
+                            SampleStreams::new(self.id, policy, Arc::clone(&self.counters))
+                                .offer(Sample::new(conn.clone(), remote, hash, bytes, u64::MAX));
                         }
                     }
                 } else if qos == 0
@@ -862,6 +906,9 @@ impl Drop for QuicNode {
     }
 }
 impl QuicNode {
+    pub(crate) fn stats(&self) -> QuicStats {
+        self.inner.stats()
+    }
     pub(crate) async fn create(config: &NodeConfig) -> Result<Arc<Self>> {
         config.node_options().timing.validate()?;
         let local = mt_sea::network::is_local_only();
@@ -891,6 +938,9 @@ impl QuicNode {
             domain: mt_sea::net::get_domain_id(),
             mode: qos_code(config.node_mode()),
             timeout: config.node_options().timing.registration_timeout(),
+            samples: config.quic_sample_policy(),
+            counters: Arc::default(),
+            closed: Mutex::default(),
             endpoint,
             shutdown: shutdown.clone(),
             state: Mutex::default(),
@@ -955,15 +1005,7 @@ struct Sending {
     /// Ordered stream to every peer with a subscriber.
     channels: HashMap<u64, Channel>,
     /// Large best-effort samples going out to each peer.
-    streams: HashMap<u64, Arc<Mutex<StreamSlot>>>,
-}
-/// One large best-effort sample in flight to a peer, and the newest one
-/// waiting behind it. A waiting sample is replaced by a newer one, so a slow
-/// peer gets the latest sample next instead of a backlog.
-#[derive(Debug, Default)]
-struct StreamSlot {
-    busy: bool,
-    next: Option<(quinn::Connection, Bytes)>,
+    streams: HashMap<u64, SampleStreams>,
 }
 #[derive(Debug)]
 struct PublisherState {
@@ -1045,9 +1087,10 @@ impl<T: Sendable> QuicPublisher<T> {
         let mut sending = state.serial.lock().await;
         let mut buffer = sending.spare.take().unwrap_or_default();
         buffer.clear();
+        let sequence = state.sequence.fetch_add(1, Ordering::Relaxed);
         let sample = Outgoing {
             writer: &state.writer,
-            sequence: state.sequence.fetch_add(1, Ordering::Relaxed),
+            sequence,
             qos: qos_code(state.qos),
             value,
         };
@@ -1056,7 +1099,7 @@ impl<T: Sendable> QuicPublisher<T> {
                 .context("Cannot serialize pub/sub message")?,
         );
         let bytes = Bytes::from_owner(SharedBuffer(buffer.clone()));
-        let result = self.send(&mut sending, bytes).await;
+        let result = self.send(&mut sending, bytes, sequence).await;
         // Ours again unless a retained copy, a local subscriber or a sample
         // stream still holds it; the next publish then allocates.
         if let Ok(buffer) = Arc::try_unwrap(buffer) {
@@ -1064,7 +1107,7 @@ impl<T: Sendable> QuicPublisher<T> {
         }
         result
     }
-    async fn send(&self, sending: &mut Sending, bytes: Bytes) -> Result<()> {
+    async fn send(&self, sending: &mut Sending, bytes: Bytes, sequence: u64) -> Result<()> {
         let state = &self.state;
         let inner = &state.node.inner;
         if state.qos.is_transient_local() {
@@ -1092,32 +1135,11 @@ impl<T: Sendable> QuicPublisher<T> {
                     }
                 }
                 // Datagrams are not fragmented. A larger sample gets a stream
-                // of its own. While the previous one is still going out it
-                // waits, replacing any older sample that was waiting.
-                let slot = Arc::clone(sending.streams.entry(peer).or_default());
-                {
-                    let mut slot = slot.lock().unwrap();
-                    if slot.busy {
-                        slot.next = Some((conn, bytes.clone()));
-                        continue;
-                    }
-                    slot.busy = true;
-                }
-                let (hash, bytes, budget) = (state.hash, bytes.clone(), inner.timeout);
-                tokio::spawn(async move {
-                    let (mut conn, mut bytes) = (conn, bytes);
-                    loop {
-                        let _ = send_sample_stream(conn, hash, bytes, budget).await;
-                        let mut slot = slot.lock().unwrap();
-                        match slot.next.take() {
-                            Some(next) => (conn, bytes) = next,
-                            None => {
-                                slot.busy = false;
-                                break;
-                            }
-                        }
-                    }
+                // of its own, see `quic_stream.rs`.
+                let streams = sending.streams.entry(peer).or_insert_with(|| {
+                    SampleStreams::new(inner.id, inner.samples, Arc::clone(&inner.counters))
                 });
+                streams.offer(Sample::new(conn, peer, state.hash, bytes.clone(), sequence));
             }
             return Ok(());
         }
@@ -1213,6 +1235,7 @@ async fn enqueue<T: Sendable>(
     bytes: &[u8],
     qos: Qos,
     seen: &mut HashMap<String, u64>,
+    counters: &stream::Counters,
     sender: &mpsc::Sender<ArchivedMessage<T>>,
     stop: &CancellationToken,
 ) -> Result<()> {
@@ -1229,6 +1252,7 @@ async fn enqueue<T: Sendable>(
         .get(sample.writer.as_str())
         .is_some_and(|last| *last >= sequence)
     {
+        bump(&counters.stale);
         return Ok(());
     }
     let message = ArchivedMessage::from_aligned_bytes(aligned(
@@ -1295,16 +1319,18 @@ impl<T: Sendable> QuicSubscriber<T> {
         );
         let stop = node.shutdown.child_token();
         let quit = stop.clone();
+        let counters = Arc::clone(&inner.counters);
         tokio::spawn(async move {
             let mut seen = HashMap::new();
             let mut scratch = AlignedVec::new();
+            let counters = Arc::clone(&counters);
             loop {
                 tokio::select! {
                     _ = quit.cancelled() => break,
                     _ = tx.closed() => break,
                     received = incoming.recv() => {
                         let Some(Incoming { bytes, ack }) = received else { break; };
-                        let result = enqueue(&mut scratch, &bytes, qos, &mut seen, &tx, &quit).await;
+                        let result = enqueue(&mut scratch, &bytes, qos, &mut seen, &counters, &tx, &quit).await;
                         if let Some(ack) = ack {
                             let _ = ack.send(result.is_ok());
                         }

@@ -48,6 +48,9 @@ pub struct NodeConfig {
     pub(crate) listen_endpoint: Option<String>,
     peer_transport: Option<PeerTransport>,
     quic_encryption: Option<bool>,
+    quic_sample_budget: Option<std::time::Duration>,
+    quic_sample_scope: Option<crate::BudgetScope>,
+    quic_sample_streams: Option<usize>,
 }
 
 impl NodeConfig {
@@ -61,6 +64,9 @@ impl NodeConfig {
             listen_endpoint: None,
             peer_transport: None,
             quic_encryption: None,
+            quic_sample_budget: None,
+            quic_sample_scope: None,
+            quic_sample_streams: None,
         }
     }
 
@@ -146,6 +152,58 @@ impl NodeConfig {
             std::env::var("MINOT_QUIC_ENCRYPT")
                 .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         })
+    }
+
+    /// Time after which the QUIC peer transport gives up a best-effort sample
+    /// too large for a datagram. Defaults to the registration timeout. Unset,
+    /// `MINOT_QUIC_SAMPLE_BUDGET_MS` sets it.
+    pub fn quic_sample_budget(mut self, budget: std::time::Duration) -> Self {
+        self.quic_sample_budget = Some(budget);
+        self
+    }
+
+    /// What that budget covers: the sample's stream once it is open (default),
+    /// or everything from publication. Unset,
+    /// `MINOT_QUIC_SAMPLE_BUDGET_FROM=publication` selects the latter.
+    pub fn quic_sample_budget_scope(mut self, scope: crate::BudgetScope) -> Self {
+        self.quic_sample_scope = Some(scope);
+        self
+    }
+
+    /// Large best-effort samples in flight per publisher and peer (default 1).
+    /// Unset, `MINOT_QUIC_SAMPLE_STREAMS` sets it. With more than one, a
+    /// sample can arrive after a newer one; subscribers drop it then.
+    pub fn quic_sample_streams(mut self, streams: usize) -> Self {
+        self.quic_sample_streams = Some(streams);
+        self
+    }
+
+    pub(crate) fn quic_sample_policy(&self) -> crate::SamplePolicy {
+        let number = |name: &str| {
+            let value = std::env::var(name).ok()?.parse::<u64>().ok()?;
+            (value > 0).then_some(value)
+        };
+        crate::SamplePolicy {
+            budget: self
+                .quic_sample_budget
+                .or_else(|| {
+                    number("MINOT_QUIC_SAMPLE_BUDGET_MS").map(std::time::Duration::from_millis)
+                })
+                .unwrap_or_else(|| self.options.timing.registration_timeout()),
+            scope: self.quic_sample_scope.unwrap_or_else(|| {
+                match std::env::var("MINOT_QUIC_SAMPLE_BUDGET_FROM") {
+                    Ok(value) if value.eq_ignore_ascii_case("publication") => {
+                        crate::BudgetScope::Publication
+                    }
+                    _ => crate::BudgetScope::Stream,
+                }
+            }),
+            streams: self
+                .quic_sample_streams
+                .or_else(|| number("MINOT_QUIC_SAMPLE_STREAMS").map(|n| n as usize))
+                .unwrap_or(1)
+                .max(1),
+        }
     }
 
     pub fn name(&self) -> &str {

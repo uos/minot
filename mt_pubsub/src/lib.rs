@@ -4,8 +4,10 @@ mod peer;
 mod quic;
 mod quic_plain;
 mod quic_shm;
+mod quic_stream;
 /// Shared memory use of the QUIC peer transport: samples (sent, received).
 pub use quic_shm::shm_samples as peer_shm_samples;
+pub use quic_stream::{BudgetScope, QuicStats, SamplePolicy};
 
 pub use coordinated::{CoordMode, NodeConfig, PeerTransport};
 #[cfg(feature = "image")]
@@ -91,6 +93,13 @@ impl Node {
                     node.create_subscriber(topic, queue_size, qos).await?,
                 ),
             }),
+        }
+    }
+    /// Counters of the QUIC peer transport; `None` on any other transport.
+    pub fn quic_stats(&self) -> Option<QuicStats> {
+        match &self.backend {
+            NodeBackend::Quic(node) => Some(node.stats()),
+            _ => None,
         }
     }
     pub fn mode(&self) -> Qos {
