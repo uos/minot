@@ -202,7 +202,6 @@ mod unix {
         stream: UnixStream,
         /// A frame goes out in one piece.
         gate: Mutex<()>,
-        token: AtomicU64,
         /// macOS is reported to lose a descriptor that its sender closes
         /// before the receiver has read it, so the last few sent are held.
         #[cfg(target_vendor = "apple")]
@@ -228,7 +227,6 @@ mod unix {
             Some(Arc::new(Self {
                 stream,
                 gate: Mutex::default(),
-                token: AtomicU64::new(0),
                 #[cfg(target_vendor = "apple")]
                 held: Mutex::default(),
             }))
@@ -293,8 +291,12 @@ mod unix {
         /// Pass an ordered sample; the returned token goes to the peer on the
         /// publisher's QUIC stream, where the peer picks the sample up in turn.
         pub(crate) async fn ordered(&self, hash: u64, sample: &mut Lazy<'_>) -> io::Result<u64> {
+            // Counted for the whole process, not per link: a link that
+            // replaces one to the same peer must not reuse the tokens of
+            // samples that still wait at the peer's hub.
+            static TOKEN: AtomicU64 = AtomicU64::new(0);
             let (file, len) = sample.get()?;
-            let token = self.token.fetch_add(1, Ordering::Relaxed);
+            let token = TOKEN.fetch_add(1, Ordering::Relaxed);
             loop {
                 self.stream.writable().await?;
                 match self.try_send(ORDERED, token, hash, (file, len)) {
@@ -305,13 +307,16 @@ mod unix {
         }
     }
 
+    /// Ordered samples by peer, token and topic hash, with their arrival.
+    type Waiting = HashMap<(u64, u64, u64), (Instant, Bytes)>;
+
     /// Receiving side: the node's socket and the ordered samples that wait for
     /// their turn on a QUIC stream.
     #[derive(Debug)]
     pub(crate) struct Hub {
         path: PathBuf,
         listener: Mutex<Option<UnixListener>>,
-        waiting: Mutex<HashMap<(u64, u64), (Instant, Bytes)>>,
+        waiting: Mutex<Waiting>,
         arrived: Notify,
     }
     impl Drop for Hub {
@@ -358,9 +363,13 @@ mod unix {
             let Some(listener) = self.listener.lock().unwrap().take() else {
                 return;
             };
+            let mut sweep = tokio::time::interval(UNCLAIMED);
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
+                    // A sample whose token never comes, as when the publisher's
+                    // stream broke, would otherwise keep its memory mapped.
+                    _ = sweep.tick() => self.expire(),
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { continue; };
                         let (hub, deliver, stop) = (Arc::clone(&self), deliver.clone(), shutdown.clone());
@@ -433,10 +442,11 @@ mod unix {
                 match frame[0] {
                     LOSSY => deliver(hash, bytes),
                     ORDERED => {
-                        let mut waiting = self.waiting.lock().unwrap();
-                        waiting.retain(|_, (since, _)| since.elapsed() < UNCLAIMED);
-                        waiting.insert((peer, token), (Instant::now(), bytes));
-                        drop(waiting);
+                        self.expire();
+                        self.waiting
+                            .lock()
+                            .unwrap()
+                            .insert((peer, token, hash), (Instant::now(), bytes));
                         self.arrived.notify_waiters();
                     }
                     _ => return Err(other("unknown frame")),
@@ -444,14 +454,29 @@ mod unix {
             }
         }
 
-        /// The ordered sample `peer` announced under `token` on its stream.
-        pub(crate) async fn take(&self, peer: u64, token: u64, budget: Duration) -> Option<Bytes> {
+        fn expire(&self) {
+            self.waiting
+                .lock()
+                .unwrap()
+                .retain(|_, (since, _)| since.elapsed() < UNCLAIMED);
+        }
+
+        /// The ordered sample of topic `hash` that `peer` announced under
+        /// `token` on its stream.
+        pub(crate) async fn take(
+            &self,
+            peer: u64,
+            token: u64,
+            hash: u64,
+            budget: Duration,
+        ) -> Option<Bytes> {
             let search = async {
                 loop {
                     let arrived = self.arrived.notified();
                     tokio::pin!(arrived);
                     arrived.as_mut().enable();
-                    if let Some((_, bytes)) = self.waiting.lock().unwrap().remove(&(peer, token)) {
+                    let found = self.waiting.lock().unwrap().remove(&(peer, token, hash));
+                    if let Some((_, bytes)) = found {
                         return bytes;
                     }
                     arrived.await;
@@ -567,7 +592,7 @@ mod none {
             _: impl Fn(u64, Bytes) + Clone + Send + Sync + 'static,
         ) {
         }
-        pub(crate) async fn take(&self, _: u64, _: u64, _: Duration) -> Option<Bytes> {
+        pub(crate) async fn take(&self, _: u64, _: u64, _: u64, _: Duration) -> Option<Bytes> {
             None
         }
     }

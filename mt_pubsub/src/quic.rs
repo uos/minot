@@ -19,7 +19,9 @@
 //! Connections are plain by default. With encryption on they are encrypted
 //! but not authenticated: certificates are self-signed and never verified.
 use super::NodeConfig;
-use crate::peer::{ArchivedWireSample, Outgoing, SharedBuffer, aligned, qos_code, topic_key};
+use crate::peer::{
+    ArchivedWireSample, Outgoing, SharedBuffer, aligned, enqueue, qos_code, topic_key,
+};
 use crate::quic_shm as shm;
 use crate::quic_stream::{self as stream, QuicStats, Sample, SamplePolicy, SampleStreams, bump};
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -48,6 +50,9 @@ const BEACON_INTERVAL: Duration = Duration::from_secs(1);
 /// Buffer between the connection tasks and a subscriber's own queue.
 const SINK_DEPTH: usize = 64;
 const MAX_SAMPLE: usize = 1 << 30;
+const DATAGRAM_SEND_BUFFER: usize = 1 << 20;
+/// How long a node that shuts down waits for its queued datagrams to leave.
+const DATAGRAM_FLUSH: Duration = Duration::from_millis(100);
 
 fn env_ms(name: &str, default: u64) -> Duration {
     Duration::from_millis(
@@ -70,11 +75,30 @@ fn key_hash(key: &str) -> u64 {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
-fn parse_endpoint(endpoint: &str) -> Result<SocketAddr> {
+/// The `host:port` of an endpoint such as `udp/10.0.0.2:7447` or
+/// `tcp/robot.local:7447`; the protocol prefix is ignored.
+fn endpoint_address(endpoint: &str) -> Result<&str> {
     let address = endpoint.rsplit('/').next().unwrap_or(endpoint);
-    address
-        .parse()
-        .with_context(|| format!("invalid QUIC endpoint '{endpoint}'"))
+    let valid = address.parse::<SocketAddr>().is_ok()
+        || address
+            .rsplit_once(':')
+            .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok());
+    ensure!(valid, "invalid QUIC endpoint '{endpoint}'");
+    Ok(address)
+}
+/// Resolve an endpoint. A host name may resolve to several addresses; the
+/// first of the family the endpoint socket uses (`ipv4`) is preferred.
+async fn resolve(endpoint: &str, ipv4: bool) -> Result<SocketAddr> {
+    let address = endpoint_address(endpoint)?;
+    let mut found: Vec<_> = tokio::net::lookup_host(address)
+        .await
+        .with_context(|| format!("cannot resolve QUIC endpoint '{endpoint}'"))?
+        .collect();
+    found.sort_by_key(|address| address.is_ipv4() != ipv4);
+    found
+        .into_iter()
+        .next()
+        .with_context(|| format!("QUIC endpoint '{endpoint}' resolves to no address"))
 }
 
 #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Debug, Clone)]
@@ -162,7 +186,8 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
     }
 }
 
-pub(crate) fn transport_config() -> Result<quinn::TransportConfig> {
+/// `initial_window`: see [`NodeConfig::quic_initial_window`].
+pub(crate) fn transport_config(initial_window: Option<u64>) -> Result<quinn::TransportConfig> {
     let idle = idle_timeout();
     let mut transport = quinn::TransportConfig::default();
     transport
@@ -173,11 +198,26 @@ pub(crate) fn transport_config() -> Result<quinn::TransportConfig> {
         .stream_receive_window((8u32 << 20).into())
         .send_window(32 << 20)
         .datagram_receive_buffer_size(Some(4 << 20))
-        .datagram_send_buffer_size(1 << 20);
+        .datagram_send_buffer_size(DATAGRAM_SEND_BUFFER);
+    // A publisher sends its next large sample once the last one is
+    // acknowledged. A receiver acknowledges every other packet, and holds the
+    // ACK of an odd last one for its delayed-ACK timer (25 ms by default):
+    // ask peers to wait at most 1 ms, their timer granularity.
+    let mut acks = quinn::AckFrequencyConfig::default();
+    acks.max_ack_delay(Some(Duration::from_millis(1)));
+    transport.ack_frequency_config(Some(acks));
+    if let Some(window) = initial_window {
+        let mut cubic = quinn::congestion::CubicConfig::default();
+        cubic.initial_window(window);
+        transport.congestion_controller_factory(Arc::new(cubic));
+    }
     Ok(transport)
 }
-pub(crate) fn quic_configs(encrypt: bool) -> Result<(quinn::ServerConfig, quinn::ClientConfig)> {
-    let transport = Arc::new(transport_config()?);
+pub(crate) fn quic_configs(
+    encrypt: bool,
+    initial_window: Option<u64>,
+) -> Result<(quinn::ServerConfig, quinn::ClientConfig)> {
+    let transport = Arc::new(transport_config(initial_window)?);
 
     let (mut server, mut client) = if encrypt {
         tls_configs()?
@@ -238,9 +278,13 @@ struct Peer {
     shm: Option<Arc<shm::Link>>,
 }
 #[derive(Debug)]
-struct Incoming {
-    bytes: Bytes,
-    ack: Option<oneshot::Sender<bool>>,
+enum Incoming {
+    Sample {
+        bytes: Bytes,
+        ack: Option<oneshot::Sender<bool>>,
+    },
+    /// A writer of the topic is gone; its last sequence number is forgotten.
+    Left(String),
 }
 #[derive(Debug)]
 struct Sink {
@@ -258,12 +302,25 @@ const SHARED: u32 = u32::MAX;
 struct State {
     peers: HashMap<u64, Peer>,
     dialing: HashSet<SocketAddr>,
+    /// Addresses that turned out to reach this node itself.
+    myself: HashSet<SocketAddr>,
+    /// Nodes this one waits for to dial it, see [`Inner::learn`].
+    awaited: HashSet<u64>,
     /// Writers and readers of this node, by endpoint identifier.
     decls: HashMap<String, Decl>,
     /// Subscribers of this node, by topic key hash.
     sinks: HashMap<u64, Vec<Sink>>,
     /// Last sample of every transient-local writer of this node.
     retained: HashMap<String, (String, Retained)>,
+}
+/// Tell the local subscribers of an undeclared writer that it is gone.
+fn forget(state: &State, endpoint: &str, decl: &Decl) {
+    if decl.reader {
+        return;
+    }
+    for sink in state.sinks.get(&key_hash(&decl.key)).into_iter().flatten() {
+        let _ = sink.tx.try_send(Incoming::Left(endpoint.to_owned()));
+    }
 }
 
 #[derive(Debug)]
@@ -345,10 +402,11 @@ impl Inner {
     fn undeclare(&self, endpoint: &str) {
         let mut state = self.state.lock().unwrap();
         state.retained.remove(endpoint);
-        if state.decls.remove(endpoint).is_some() {
+        if let Some(decl) = state.decls.remove(endpoint) {
             for peer in state.peers.values() {
                 let _ = peer.control.send(Control::Undeclare(endpoint.to_owned()));
             }
+            forget(&state, endpoint, &decl);
         }
     }
     /// Endpoints declared by this node and by connected peers.
@@ -384,10 +442,17 @@ impl Inner {
     }
     fn deliver_lossy(&self, hash: u64, bytes: &Bytes) {
         for sink in self.sinks(hash) {
-            let _ = sink.try_send(Incoming {
+            let _ = sink.try_send(Incoming::Sample {
                 bytes: bytes.clone(),
                 ack: None,
             });
+        }
+    }
+    /// A datagram: topic hash, then the sample.
+    fn deliver_datagram(&self, bytes: &Bytes) {
+        if bytes.len() > 8 {
+            let hash = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            self.deliver_lossy(hash, &bytes.slice(8..));
         }
     }
     /// Hand a sample to every local subscriber in order. With `ack`, wait until
@@ -396,7 +461,7 @@ impl Inner {
         let mut pending = Vec::new();
         for sink in self.sinks(hash) {
             let (tx, rx) = oneshot::channel();
-            let incoming = Incoming {
+            let incoming = Incoming::Sample {
                 bytes: bytes.clone(),
                 ack: ack.then_some(tx),
             };
@@ -422,9 +487,11 @@ impl Inner {
         self.shutdown.cancel();
     }
 
+    /// Whether `address` needs no dial: connected, being dialed, or this node.
     fn connected(&self, address: SocketAddr) -> bool {
         let state = self.state.lock().unwrap();
         state.dialing.contains(&address)
+            || state.myself.contains(&address)
             || state
                 .peers
                 .values()
@@ -433,12 +500,39 @@ impl Inner {
     /// One socket serves both directions, so the address a peer is seen at is
     /// also the address it can be dialed at.
     fn learn(self: &Arc<Self>, id: u64, address: SocketAddr) {
-        // The lower identifier dials, so two nodes that learn of each other at
-        // the same time open one connection.
-        if self.id >= id || self.state.lock().unwrap().peers.contains_key(&id) {
+        let mut state = self.state.lock().unwrap();
+        if id == self.id || state.peers.contains_key(&id) {
             return;
         }
-        self.dial(address);
+        // The lower identifier dials, so two nodes that learn of each other at
+        // the same time open one connection.
+        if self.id < id {
+            drop(state);
+            self.dial(address);
+            return;
+        }
+        // The other node may not reach this one at the address it learned,
+        // as with one passed on by a third node. Dial it after all if it has
+        // not come by then; should both connect, one connection stays.
+        if !state.awaited.insert(id) {
+            return;
+        }
+        drop(state);
+        let node = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = node.shutdown.cancelled() => return,
+                _ = tokio::time::sleep(idle_timeout()) => {}
+            }
+            let missing = {
+                let mut state = node.state.lock().unwrap();
+                state.awaited.remove(&id);
+                !state.peers.contains_key(&id)
+            };
+            if missing {
+                node.dial(address);
+            }
+        });
     }
     fn dial(self: &Arc<Self>, address: SocketAddr) {
         if self.shutdown.is_cancelled() || !self.state.lock().unwrap().dialing.insert(address) {
@@ -538,7 +632,7 @@ impl Inner {
             "QUIC peer {remote:016x} connected at {}",
             conn.remote_address()
         );
-        self.learn_all(peers);
+        self.learn_all(peers, conn.remote_address());
         if self.shm.is_some() {
             // Not awaited before the peer is registered: until then the
             // connection counts as missing and would be dialed again.
@@ -558,7 +652,7 @@ impl Inner {
         tokio::spawn(async move {
             while let Some(control) = queued.recv().await {
                 if write_control(&mut control_tx, &control).await.is_err() {
-                    writer.close(1u32.into(), b"control");
+                    close(&writer, 1, b"control");
                     break;
                 }
             }
@@ -569,7 +663,7 @@ impl Inner {
             while let Ok(control) = read_control(&mut control_rx).await {
                 node.on_control(remote, &reader, control);
             }
-            reader.close(1u32.into(), b"control");
+            close(&reader, 1, b"control");
         });
 
         loop {
@@ -578,18 +672,14 @@ impl Inner {
                 _ = conn.closed() => break,
                 datagram = conn.read_datagram() => {
                     let Ok(bytes) = datagram else { break; };
-                    if bytes.len() > 8 {
-                        let hash = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-                        self.deliver_lossy(hash, &bytes.slice(8..));
-                    }
+                    self.deliver_datagram(&bytes);
                 }
                 stream = conn.accept_uni() => {
                     let Ok(mut stream) = stream else { break; };
                     let node = Arc::clone(self);
-                    let nudge = conn.clone();
                     tokio::spawn(async move {
                         let accepted = stream::unix_ns();
-                        let Ok(bytes) = stream.read_to_end(MAX_SAMPLE).await else {
+                        let Ok(bytes) = stream.read_to_end(8 + MAX_SAMPLE).await else {
                             bump(&node.counters.incomplete);
                             stream::trace_line(format_args!(
                                 "{{\"ev\":\"rx\",\"peer\":\"{remote:016x}\",\"accepted\":{accepted},\
@@ -601,11 +691,6 @@ impl Inner {
                         let read = stream::unix_ns();
                         bump(&node.counters.received);
                         node.counters.received_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                        // The publisher sends its next sample once this one is
-                        // acknowledged, but QUIC may hold the ACK of the last
-                        // packet for its delayed-ACK timer (25 ms). Any packet
-                        // carries pending ACKs along, so send an empty one.
-                        let _ = nudge.send_datagram(Bytes::from_static(&[0]));
                         if bytes.len() > 8 {
                             let hash = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                             if stream::trace().is_some() {
@@ -628,7 +713,16 @@ impl Inner {
                 }
             }
         }
-        conn.close(0u32.into(), b"");
+        // A peer that shuts down right after publishing closes the connection
+        // behind its last datagrams. quinn keeps them readable; the loop above
+        // may have ended on the close first.
+        while let Some(Ok(bytes)) = now(conn.read_datagram()) {
+            self.deliver_datagram(&bytes);
+        }
+        if self.shutdown.is_cancelled() {
+            flush_datagrams(std::slice::from_ref(&conn)).await;
+        }
+        close(&conn, 0, b"");
         self.closed.lock().unwrap().add(&conn);
         let lost = {
             let mut state = self.state.lock().unwrap();
@@ -691,24 +785,37 @@ impl Inner {
                 bail!("peer did not start with a hello");
             };
             ensure!(domain == self.domain, "peer is in domain {domain}");
-            ensure!(id != self.id, "connected to self");
+            if id == self.id {
+                // As when a node's own address is among its bootstrap peers.
+                let mut state = self.state.lock().unwrap();
+                state.myself.insert(conn.remote_address());
+                bail!("connected to self");
+            }
             Ok((send, recv, id, mode, peers, shm))
         };
         tokio::time::timeout(idle_timeout(), exchange)
             .await
             .context("hello timed out")?
     }
-    fn learn_all(self: &Arc<Self>, peers: Vec<(u64, String)>) {
+    /// Learn the peers that the peer at `via` is connected to, at the
+    /// addresses it sees them at.
+    fn learn_all(self: &Arc<Self>, peers: Vec<(u64, String)>, via: SocketAddr) {
         for (id, address) in peers {
-            if let Ok(address) = address.parse() {
-                self.learn(id, address);
+            let Ok(mut address) = address.parse::<SocketAddr>() else {
+                continue;
+            };
+            // A node the peer reaches over loopback runs on the peer's host,
+            // which this node reaches at the peer's address.
+            if address.ip().is_loopback() && !via.ip().is_loopback() {
+                address.set_ip(via.ip());
             }
+            self.learn(id, address);
         }
     }
     fn on_control(self: &Arc<Self>, remote: u64, conn: &quinn::Connection, control: Control) {
         match control {
             Control::Hello { .. } => {}
-            Control::Peers(peers) => self.learn_all(peers),
+            Control::Peers(peers) => self.learn_all(peers, conn.remote_address()),
             Control::Torpedo(message) => {
                 log::warn!("pub/sub peer failed: {message}");
                 self.shutdown.cancel();
@@ -717,8 +824,9 @@ impl Inner {
                 let mut state = self.state.lock().unwrap();
                 if let Some(peer) = state.peers.get_mut(&remote)
                     && peer.conn.stable_id() == conn.stable_id()
+                    && let Some(decl) = peer.decls.remove(&endpoint)
                 {
-                    peer.decls.remove(&endpoint);
+                    forget(&state, &endpoint, &decl);
                 }
             }
             Control::Declare {
@@ -788,7 +896,7 @@ impl Inner {
                 let token = u64::from_le_bytes(token);
                 // Sent before its token, so normally here already.
                 let hub = self.shm.as_ref().context("no shared memory")?;
-                hub.take(remote, token, self.timeout)
+                hub.take(remote, token, hash, self.timeout)
                     .await
                     .context("shared sample did not arrive")?
             } else {
@@ -819,18 +927,27 @@ impl Inner {
                 }
             }
         }
+        let conns: Vec<_> = {
+            let state = self.state.lock().unwrap();
+            state.peers.values().map(|peer| peer.conn.clone()).collect()
+        };
+        flush_datagrams(&conns).await;
         self.endpoint.close(0u32.into(), b"shutdown");
     }
-    /// Keep a connection to every configured bootstrap peer.
-    async fn bootstrap(self: Arc<Self>, endpoints: Vec<SocketAddr>) {
+    /// Keep a connection to every configured bootstrap peer. Host names are
+    /// resolved on every attempt, as a peer's may not resolve before it is up.
+    async fn bootstrap(self: Arc<Self>, endpoints: Vec<String>) {
+        let ipv4 = self.endpoint.local_addr().is_ok_and(|a| a.is_ipv4());
         let mut tick = tokio::time::interval(BEACON_INTERVAL);
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => break,
                 _ = tick.tick() => {
-                    for address in &endpoints {
-                        if !self.connected(*address) {
-                            self.dial(*address);
+                    for endpoint in &endpoints {
+                        match resolve(endpoint, ipv4).await {
+                            Ok(address) if !self.connected(address) => self.dial(address),
+                            Ok(_) => {}
+                            Err(error) => log::debug!("{error:#}"),
                         }
                     }
                 }
@@ -905,6 +1022,28 @@ impl Drop for QuicNode {
         self.shutdown.cancel();
     }
 }
+/// Socket buffer the QUIC endpoint asks for. The default (about 200 kB on
+/// Linux) overflows when many peers send at once, as at a swarm's start, and
+/// the kernel then drops datagrams. The kernel caps the request at
+/// `net.core.rmem_max` / `wmem_max`.
+const SOCKET_BUFFER: usize = 4 << 20;
+
+fn endpoint_socket(listen: SocketAddr) -> Result<std::net::UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(listen),
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    if let Err(error) = socket.set_recv_buffer_size(SOCKET_BUFFER) {
+        log::debug!("QUIC socket receive buffer: {error}");
+    }
+    if let Err(error) = socket.set_send_buffer_size(SOCKET_BUFFER) {
+        log::debug!("QUIC socket send buffer: {error}");
+    }
+    socket.bind(&listen.into())?;
+    Ok(socket.into())
+}
+
 impl QuicNode {
     pub(crate) fn stats(&self) -> QuicStats {
         self.inner.stats()
@@ -913,13 +1052,21 @@ impl QuicNode {
         config.node_options().timing.validate()?;
         let local = mt_sea::network::is_local_only();
         let listen = match &config.listen_endpoint {
-            Some(endpoint) => parse_endpoint(endpoint)?,
+            Some(endpoint) => resolve(endpoint, true).await?,
             None if local => SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             None => SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
         };
-        let (server, client) = quic_configs(config.quic_encrypted())?;
-        let mut endpoint = quinn::Endpoint::server(server, listen)
+        let (server, client) = quic_configs(config.quic_encrypted(), config.quic_window())?;
+        let socket = endpoint_socket(listen)
             .with_context(|| format!("cannot bind QUIC endpoint {listen}"))?;
+        let runtime = quinn::default_runtime().context("no async runtime for QUIC")?;
+        let mut endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server),
+            socket,
+            runtime,
+        )
+        .with_context(|| format!("cannot start QUIC endpoint {listen}"))?;
         endpoint.set_default_client_config(client);
 
         let shutdown = CancellationToken::new();
@@ -954,21 +1101,10 @@ impl QuicNode {
             tokio::spawn(Arc::clone(hub).run(shutdown.clone(), deliver));
         }
 
-        let endpoints = config.peer_endpoints.clone().or_else(|| {
-            std::env::var("MINOT_PEERS").ok().map(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            })
-        });
-        if let Some(endpoints) = endpoints {
-            let endpoints = endpoints
-                .iter()
-                .map(|endpoint| parse_endpoint(endpoint))
-                .collect::<Result<Vec<_>>>()?;
+        if let Some(endpoints) = config.bootstrap_endpoints() {
+            for endpoint in &endpoints {
+                endpoint_address(endpoint)?;
+            }
             tokio::spawn(Arc::clone(&inner).bootstrap(endpoints));
         } else if !mt_sea::network::is_unicast_only() {
             let port = mt_sea::network::coordinator_port();
@@ -1098,6 +1234,13 @@ impl<T: Sendable> QuicPublisher<T> {
             rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&sample, buffer)
                 .context("Cannot serialize pub/sub message")?,
         );
+        // Peers refuse a larger one, which would fail a reliable delivery
+        // for the whole swarm.
+        ensure!(
+            buffer.len() <= MAX_SAMPLE,
+            "pub/sub sample of {} bytes exceeds the limit of {MAX_SAMPLE}",
+            buffer.len()
+        );
         let bytes = Bytes::from_owner(SharedBuffer(buffer.clone()));
         let result = self.send(&mut sending, bytes, sequence).await;
         // Ours again unless a retained copy, a local subscriber or a sample
@@ -1117,13 +1260,17 @@ impl<T: Sendable> QuicPublisher<T> {
         let mut shared = shm::Lazy::new(&bytes);
         if state.qos.reliability_mode() == Reliability::BestEffort {
             inner.deliver_lossy(state.hash, &bytes);
+            let len = 8 + bytes.len();
+            let mut datagram = None::<Bytes>;
             for (peer, conn, link) in readers {
-                let len = 8 + bytes.len();
                 if conn.max_datagram_size().is_some_and(|max| len <= max) {
-                    let mut datagram = BytesMut::with_capacity(len);
-                    datagram.put_u64_le(state.hash);
-                    datagram.put_slice(&bytes);
-                    let _ = conn.send_datagram(datagram.freeze());
+                    let datagram = datagram.get_or_insert_with(|| {
+                        let mut datagram = BytesMut::with_capacity(len);
+                        datagram.put_u64_le(state.hash);
+                        datagram.put_slice(&bytes);
+                        datagram.freeze()
+                    });
+                    let _ = conn.send_datagram(datagram.clone());
                     continue;
                 }
                 if let Some(link) = link {
@@ -1150,46 +1297,68 @@ impl<T: Sendable> QuicPublisher<T> {
             let mut header = [0u8; 13];
             header[4] = u8::from(ack);
             header[5..].copy_from_slice(&state.hash.to_le_bytes());
+            // Peers that shut down while the sample was on its way: they are
+            // no longer subscribers, so they do not fail the delivery.
+            let mut gone = Vec::new();
             for (peer, conn, link) in &readers {
-                if channels
-                    .get(peer)
-                    .is_none_or(|channel| channel.connection != conn.stable_id())
-                {
-                    let (send, recv) = conn.open_bi().await?;
-                    let channel = Channel {
-                        connection: conn.stable_id(),
-                        send,
-                        recv,
+                let written = async {
+                    if channels
+                        .get(peer)
+                        .is_none_or(|channel| channel.connection != conn.stable_id())
+                    {
+                        let (send, recv) = conn.open_bi().await?;
+                        let channel = Channel {
+                            connection: conn.stable_id(),
+                            send,
+                            recv,
+                        };
+                        channels.insert(*peer, channel);
+                    }
+                    let channel = channels.get_mut(peer).unwrap();
+                    let token = match link {
+                        Some(link) => link.ordered(state.hash, &mut shared).await.ok(),
+                        None => None,
                     };
-                    channels.insert(*peer, channel);
+                    if let Some(token) = token {
+                        header[..4].copy_from_slice(&SHARED.to_le_bytes());
+                        channel.send.write_all(&header).await?;
+                        channel.send.write_all(&token.to_le_bytes()).await?;
+                    } else {
+                        header[..4].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+                        channel.send.write_all(&header).await?;
+                        channel.send.write_all(&bytes).await?;
+                    }
+                    anyhow::Ok(())
                 }
-                let channel = channels.get_mut(peer).unwrap();
-                let token = match link {
-                    Some(link) => link.ordered(state.hash, &mut shared).await.ok(),
-                    None => None,
-                };
-                if let Some(token) = token {
-                    header[..4].copy_from_slice(&SHARED.to_le_bytes());
-                    channel.send.write_all(&header).await?;
-                    channel.send.write_all(&token.to_le_bytes()).await?;
-                } else {
-                    header[..4].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
-                    channel.send.write_all(&header).await?;
-                    channel.send.write_all(&bytes).await?;
+                .await;
+                match written {
+                    Ok(()) => {}
+                    Err(_) if left(conn) => gone.push(*peer),
+                    Err(error) => return Err(error),
                 }
             }
             let mut accepted = inner.deliver_ordered(state.hash, &bytes, ack).await;
             if ack {
-                for (peer, ..) in &readers {
+                for (peer, conn, _) in &readers {
+                    if gone.contains(peer) {
+                        continue;
+                    }
                     let mut reply = [0u8; 1];
-                    channels
+                    let read = channels
                         .get_mut(peer)
                         .unwrap()
                         .recv
                         .read_exact(&mut reply)
-                        .await?;
-                    accepted &= reply[0] == 1;
+                        .await;
+                    match read {
+                        Ok(()) => accepted &= reply[0] == 1,
+                        Err(_) if left(conn) => gone.push(*peer),
+                        Err(error) => return Err(error.into()),
+                    }
                 }
+            }
+            for peer in gone {
+                channels.remove(&peer);
             }
             anyhow::Ok(accepted)
         };
@@ -1210,6 +1379,47 @@ impl<T: Sendable> QuicPublisher<T> {
     }
 }
 
+/// Wait, at most [`DATAGRAM_FLUSH`], until the datagrams queued on `conns`
+/// are sent: closing a connection discards them, and a node that publishes
+/// and then shuts down would lose its last best-effort samples.
+async fn flush_datagrams(conns: &[quinn::Connection]) {
+    let deadline = tokio::time::Instant::now() + DATAGRAM_FLUSH;
+    while conns.iter().any(|conn| {
+        conn.close_reason().is_none() && conn.datagram_send_buffer_space() < DATAGRAM_SEND_BUFFER
+    }) && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+/// The output of `future` if it is ready without waiting.
+fn now<F: std::future::Future>(future: F) -> Option<F::Output> {
+    let future = std::pin::pin!(future);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match future.poll(&mut context) {
+        std::task::Poll::Ready(output) => Some(output),
+        std::task::Poll::Pending => None,
+    }
+}
+
+/// Close `conn` unless it is closed already. quinn's `close` replaces the
+/// reason of a connection the peer closed with `LocallyClosed`, which would
+/// hide from [`left`] that the peer shut down.
+fn close(conn: &quinn::Connection, code: u32, reason: &[u8]) {
+    if conn.close_reason().is_none() {
+        conn.close(code.into(), reason);
+    }
+}
+
+/// Whether the peer closed `conn` on purpose, as a node does that shuts down,
+/// rather than the connection failing.
+fn left(conn: &quinn::Connection) -> bool {
+    matches!(
+        conn.close_reason(),
+        Some(quinn::ConnectionError::ApplicationClosed(close)) if close.error_code == 0u32.into()
+    )
+}
+
 #[derive(Debug)]
 pub struct QuicSubscriber<T: Sendable> {
     node: Arc<QuicNode>,
@@ -1228,50 +1438,6 @@ impl<T: Sendable> Drop for QuicSubscriber<T> {
             sinks.retain(|sink| sink.id != self.reader);
         }
     }
-}
-
-async fn enqueue<T: Sendable>(
-    scratch: &mut AlignedVec,
-    bytes: &[u8],
-    qos: Qos,
-    seen: &mut HashMap<String, u64>,
-    counters: &stream::Counters,
-    sender: &mpsc::Sender<ArchivedMessage<T>>,
-    stop: &CancellationToken,
-) -> Result<()> {
-    // The envelope is only read here, so its buffer is reused across samples.
-    scratch.clear();
-    scratch.extend_from_slice(bytes);
-    let sample = rkyv::access::<ArchivedWireSample, rkyv::rancor::Error>(scratch)
-        .context("Invalid pub/sub envelope")?;
-    let sequence = sample.sequence.to_native();
-    if qos.expects_reliable_delivery() && sample.qos == 0 {
-        bail!("BestEffort publisher cannot satisfy a reliable subscriber");
-    }
-    if seen
-        .get(sample.writer.as_str())
-        .is_some_and(|last| *last >= sequence)
-    {
-        bump(&counters.stale);
-        return Ok(());
-    }
-    let message = ArchivedMessage::from_aligned_bytes(aligned(
-        sample.payload.len(),
-        [sample.payload.as_slice()],
-    ))?;
-    if qos.reliability_mode() == Reliability::BestEffort {
-        match sender.try_send(message) {
-            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => bail!("subscriber closed"),
-        }
-    } else {
-        tokio::select! {
-            _ = stop.cancelled() => bail!("subscriber shut down"),
-            result = sender.send(message) => result.map_err(|_| anyhow!("subscriber closed"))?,
-        }
-    }
-    seen.insert(sample.writer.to_string(), sequence);
-    Ok(())
 }
 
 impl<T: Sendable> QuicSubscriber<T> {
@@ -1300,7 +1466,7 @@ impl<T: Sendable> QuicSubscriber<T> {
                 if *retained_key == key
                     && let Some(bytes) = sample.lock().unwrap().clone()
                 {
-                    let _ = sink.try_send(Incoming { bytes, ack: None });
+                    let _ = sink.try_send(Incoming::Sample { bytes, ack: None });
                 }
             }
             state.sinks.entry(hash).or_default().push(Sink {
@@ -1329,8 +1495,18 @@ impl<T: Sendable> QuicSubscriber<T> {
                     _ = quit.cancelled() => break,
                     _ = tx.closed() => break,
                     received = incoming.recv() => {
-                        let Some(Incoming { bytes, ack }) = received else { break; };
-                        let result = enqueue(&mut scratch, &bytes, qos, &mut seen, &counters, &tx, &quit).await;
+                        let (bytes, ack) = match received {
+                            Some(Incoming::Sample { bytes, ack }) => (bytes, ack),
+                            Some(Incoming::Left(writer)) => {
+                                seen.remove(&writer);
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let result = enqueue(&mut scratch, [&bytes[..]], qos, &mut seen, &tx, &quit).await;
+                        if let Ok(false) = result {
+                            bump(&counters.stale);
+                        }
                         if let Some(ack) = ack {
                             let _ = ack.send(result.is_ok());
                         }

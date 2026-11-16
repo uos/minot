@@ -192,6 +192,39 @@ struct Steps {
     open_start: u64,
     open_done: u64,
     written: u64,
+    /// Sender's view of the path when the stream opened, for the trace.
+    path: Option<quinn::PathStats>,
+    /// Smallest congestion window seen while the sample was on its stream.
+    cwnd_min: u64,
+}
+
+/// The congestion state of a sample's connection as trace fields: window in
+/// bytes and round-trip time in µs at the start (`0`) and end (`1`) of the
+/// stream, smallest window in between, and what the stream's time added to
+/// the connection's congestion events and lost and sent packets.
+struct Path<'a>(&'a Sample, &'a Steps);
+impl std::fmt::Display for Path<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let Some(start) = &self.1.path else {
+            return Ok(());
+        };
+        let end = self.0.conn.stats().path;
+        write!(
+            f,
+            ",\"cwnd0\":{},\"cwnd_min\":{},\"cwnd1\":{},\"rtt0\":{},\"rtt1\":{},\"min_rtt\":{},\
+             \"cong\":{},\"lost\":{},\"sent\":{},\"mtu\":{}",
+            start.cwnd,
+            self.1.cwnd_min.min(end.cwnd),
+            end.cwnd,
+            start.rtt.as_micros(),
+            end.rtt.as_micros(),
+            end.min_rtt.as_micros(),
+            end.congestion_events - start.congestion_events,
+            end.lost_packets - start.lost_packets,
+            end.sent_packets - start.sent_packets,
+            end.current_mtu,
+        )
+    }
 }
 
 #[derive(Debug, Default)]
@@ -285,11 +318,18 @@ impl SampleStreams {
                 return "open_failed";
             };
             steps.open_done = unix_ns();
+            let tracing = trace().is_some();
+            if tracing {
+                let path = sample.conn.stats().path;
+                steps.cwnd_min = path.cwnd;
+                steps.path = Some(path);
+            }
             if !from_publication {
                 deadline = Instant::now() + self.policy.budget;
             }
             let written = &mut steps.written;
-            let sent = tokio::time::timeout_at(deadline, async {
+            let cwnd_min = &mut steps.cwnd_min;
+            let sending = async {
                 stream.write_all(&sample.hash.to_le_bytes()).await?;
                 stream.write_chunk(sample.bytes.clone()).await?;
                 stream.finish()?;
@@ -297,6 +337,17 @@ impl SampleStreams {
                 // Resolves once the peer has acknowledged the whole sample.
                 anyhow::ensure!(stream.stopped().await?.is_none(), "peer stopped reading");
                 anyhow::Ok(())
+            };
+            let sent = tokio::time::timeout_at(deadline, async {
+                tokio::pin!(sending);
+                loop {
+                    tokio::select! {
+                        done = &mut sending => break done,
+                        _ = tokio::time::sleep(Duration::from_millis(20)), if tracing => {
+                            *cwnd_min = (*cwnd_min).min(sample.conn.stats().path.cwnd);
+                        }
+                    }
+                }
             })
             .await;
             match sent {
@@ -329,7 +380,7 @@ impl SampleStreams {
         trace_line(format_args!(
             "{{\"ev\":\"tx\",\"node\":\"{:016x}\",\"peer\":\"{:016x}\",\"topic\":\"{:016x}\",\"seq\":{},\"bytes\":{},\
              \"published\":{},\"waiting\":{},\"open_start\":{},\"open_done\":{},\"written\":{},\
-             \"end\":{},\"outcome\":\"{outcome}\"}}",
+             \"end\":{},\"outcome\":\"{outcome}\"{}}}",
             self.node,
             sample.peer,
             sample.hash,
@@ -341,6 +392,7 @@ impl SampleStreams {
             steps.open_done,
             steps.written,
             unix_ns(),
+            Path(sample, steps),
         ));
     }
 }
@@ -363,8 +415,11 @@ mod tests {
     /// Two connected endpoints with the transport settings of a node. The
     /// receiving side grants `uni` incoming streams.
     async fn pair(uni: u32) -> Pair {
-        let (mut server, client) = crate::quic::quic_configs(false).unwrap();
-        let mut transport = crate::quic::transport_config().unwrap();
+        pair_with(uni, None).await
+    }
+    async fn pair_with(uni: u32, initial_window: Option<u64>) -> Pair {
+        let (mut server, client) = crate::quic::quic_configs(false, initial_window).unwrap();
+        let mut transport = crate::quic::transport_config(initial_window).unwrap();
         transport.max_concurrent_uni_streams(uni.into());
         server.transport_config(Arc::new(transport));
         let any = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
@@ -406,6 +461,14 @@ mod tests {
         let mut stream = conn.accept_uni().await.unwrap();
         let bytes = stream.read_to_end(STUCK + 8).await.ok()?;
         Some(bytes[8])
+    }
+
+    #[tokio::test]
+    async fn a_connection_starts_with_the_configured_window() {
+        let default = pair(1).await.sender.stats().path.cwnd;
+        let set = pair_with(1, Some(1_000_000)).await.sender.stats().path.cwnd;
+        assert!(default < 100_000, "quinn's default window: {default}");
+        assert!(set >= 1_000_000, "configured window: {set}");
     }
 
     #[tokio::test]

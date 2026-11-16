@@ -79,11 +79,18 @@ fn peer_worker() {
         publisher.publish(&format!("peer_{index}")).await.unwrap();
         let mut received = std::collections::HashSet::new();
         for _ in 0..count {
-            let value = tokio::time::timeout(Duration::from_secs(8), subscriber.next())
-                .await
-                .unwrap()
-                .unwrap();
-            received.insert(value);
+            let Ok(value) = tokio::time::timeout(Duration::from_secs(8), subscriber.next()).await
+            else {
+                let mut missing: Vec<usize> = (0..count)
+                    .filter(|i| !received.contains(&format!("peer_{i}")))
+                    .collect();
+                missing.sort();
+                panic!(
+                    "peer_{index} is missing {missing:?}; {:?}",
+                    node.quic_stats()
+                );
+            };
+            received.insert(value.unwrap());
         }
         assert_eq!(
             received,

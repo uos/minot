@@ -26,10 +26,10 @@ pub enum CoordMode {
 /// Transport of coordinator-free peer nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PeerTransport {
-    /// Zenoh peers over TCP and UDP (default).
-    #[default]
+    /// Zenoh peers over TCP and UDP.
     Zenoh,
-    /// Experimental: QUIC connections between the nodes, without Zenoh.
+    /// QUIC connections between the nodes, without Zenoh (default).
+    #[default]
     Quic,
 }
 
@@ -51,6 +51,7 @@ pub struct NodeConfig {
     quic_sample_budget: Option<std::time::Duration>,
     quic_sample_scope: Option<crate::BudgetScope>,
     quic_sample_streams: Option<usize>,
+    quic_initial_window: Option<u64>,
 }
 
 impl NodeConfig {
@@ -67,6 +68,7 @@ impl NodeConfig {
             quic_sample_budget: None,
             quic_sample_scope: None,
             quic_sample_streams: None,
+            quic_initial_window: None,
         }
     }
 
@@ -117,6 +119,20 @@ impl NodeConfig {
         self
     }
 
+    /// Bootstrap peers: those set here, else the comma-separated `MINOT_PEERS`.
+    pub(crate) fn bootstrap_endpoints(&self) -> Option<Vec<String>> {
+        self.peer_endpoints.clone().or_else(|| {
+            std::env::var("MINOT_PEERS").ok().map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+        })
+    }
+
     /// Peer listener endpoint. Defaults to OS-assigned TCP and UDP ports
     /// (best-effort samples over UDP, the rest over TCP); setting one replaces both.
     /// Use a reachable fixed address for a bootstrap peer in a container mesh.
@@ -125,7 +141,8 @@ impl NodeConfig {
         self
     }
 
-    /// Peer mode transport. Unset, `MINOT_PEER_TRANSPORT=quic` selects QUIC.
+    /// Peer mode transport: QUIC by default. Unset, `MINOT_PEER_TRANSPORT=zenoh`
+    /// selects Zenoh. All nodes of a swarm must use the same.
     pub fn peer_transport(mut self, transport: PeerTransport) -> Self {
         self.peer_transport = Some(transport);
         self
@@ -134,8 +151,8 @@ impl NodeConfig {
     pub fn transport(&self) -> PeerTransport {
         self.peer_transport
             .unwrap_or_else(|| match std::env::var("MINOT_PEER_TRANSPORT") {
-                Ok(value) if value.eq_ignore_ascii_case("quic") => PeerTransport::Quic,
-                _ => PeerTransport::Zenoh,
+                Ok(value) if value.eq_ignore_ascii_case("zenoh") => PeerTransport::Zenoh,
+                _ => PeerTransport::Quic,
             })
     }
 
@@ -176,6 +193,28 @@ impl NodeConfig {
     pub fn quic_sample_streams(mut self, streams: usize) -> Self {
         self.quic_sample_streams = Some(streams);
         self
+    }
+
+    /// Congestion window, in bytes, a new QUIC connection starts with. quinn
+    /// starts at about 12 kB and needs many round trips to send a sample of
+    /// megabytes at the link's rate; a window near the sample size sends the
+    /// first ones at once. That suits links with a deep queue, as a rate-limited
+    /// radio link has; on a shallow one the burst may be dropped. Unset,
+    /// `MINOT_QUIC_INITIAL_WINDOW` sets it; otherwise quinn's default applies.
+    pub fn quic_initial_window(mut self, bytes: u64) -> Self {
+        self.quic_initial_window = Some(bytes);
+        self
+    }
+
+    pub(crate) fn quic_window(&self) -> Option<u64> {
+        self.quic_initial_window
+            .or_else(|| {
+                std::env::var("MINOT_QUIC_INITIAL_WINDOW")
+                    .ok()?
+                    .parse()
+                    .ok()
+            })
+            .filter(|bytes| *bytes > 0)
     }
 
     pub(crate) fn quic_sample_policy(&self) -> crate::SamplePolicy {

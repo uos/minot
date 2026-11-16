@@ -26,4 +26,5 @@ repeat() {
 repeat "quic, plain" cargo test -p mt_pubsub --test quic
 MINOT_QUIC_ENCRYPT=1 repeat "quic, encrypted" cargo test -p mt_pubsub --test quic
 MINOT_SHM_DISABLED=1 repeat "quic, no shared memory" cargo test -p mt_pubsub --test quic -- --skip shared_memory
-repeat "zenoh" cargo test -p mt_pubsub --test peer
+MINOT_PEER_TRANSPORT=zenoh repeat "zenoh" cargo test -p mt_pubsub --test peer
+repeat "quic, default" cargo test -p mt_pubsub --test peer

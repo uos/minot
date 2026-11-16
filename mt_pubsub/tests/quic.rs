@@ -77,6 +77,37 @@ async fn peers_exchange_all_delivery_modes_without_a_coordinator() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bootstrap_peers_may_be_host_names_or_the_node_itself() {
+    let (seed, endpoint) = seed().await;
+    let port = endpoint.rsplit(':').next().unwrap();
+    let own = free_endpoint();
+    let node = Node::create(
+        NodeConfig::new("named")
+            .peer_transport(PeerTransport::Quic)
+            .mode(Qos::BestEffort)
+            .local_only(true)
+            .listen_endpoint(own.clone())
+            .peer_endpoints(vec![format!("quic/localhost:{port}"), own]),
+    )
+    .await
+    .unwrap();
+    let mut sub = seed
+        .create_subscriber::<String>("/peer/named".to_owned(), 16, Qos::TryReliable)
+        .await
+        .unwrap();
+    let publisher = node
+        .create_publisher::<String>("/peer/named".to_owned(), Qos::TryReliable)
+        .await
+        .unwrap();
+    publisher
+        .wait_for_subscribers(Duration::from_secs(5))
+        .await
+        .unwrap();
+    publisher.publish(&"named".to_owned()).await.unwrap();
+    assert_eq!(receive(&mut sub).await, "named");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retained_samples_and_new_images_reach_late_subscribers() {
     let (_seed, endpoint) = seed().await;
     let writer = peer("image_writer", &endpoint).await;

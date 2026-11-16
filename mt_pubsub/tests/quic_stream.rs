@@ -48,15 +48,20 @@ async fn a_burst_of_large_samples_ends_with_the_newest() {
         publisher.publish(&large(index)).await.unwrap();
     }
     let mut received = Vec::new();
-    while let Ok(Some(sample)) =
-        tokio::time::timeout(Duration::from_secs(3), sub.next()).await
-    {
+    while let Ok(Some(sample)) = tokio::time::timeout(Duration::from_secs(3), sub.next()).await {
         assert_eq!(sample.len(), large(0).len());
         received.push(sample[..4].parse::<usize>().unwrap());
         if received.last() == Some(&(count - 1)) {
             break;
         }
     }
-    assert!(received.windows(2).all(|w| w[0] < w[1]), "out of order: {received:?}");
-    assert_eq!(received.last(), Some(&(count - 1)), "newest lost: {received:?}");
+    assert!(
+        received.windows(2).all(|w| w[0] < w[1]),
+        "out of order: {received:?}"
+    );
+    assert_eq!(
+        received.last(),
+        Some(&(count - 1)),
+        "newest lost: {received:?}"
+    );
 }

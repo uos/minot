@@ -181,17 +181,7 @@ impl PeerNode {
                 .insert_json5("listen/endpoints", &serde_json::to_string(&[endpoint])?)
                 .map_err(ze)?;
         }
-        let endpoints = config.peer_endpoints.clone().or_else(|| {
-            std::env::var("MINOT_PEERS").ok().map(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            })
-        });
-        if let Some(endpoints) = endpoints {
+        if let Some(endpoints) = config.bootstrap_endpoints() {
             network
                 .insert_json5("connect/endpoints", &serde_json::to_string(&endpoints)?)
                 .map_err(ze)?;
@@ -512,18 +502,19 @@ impl<T: Sendable> Drop for PeerSubscriber<T> {
     }
 }
 
-async fn enqueue<T: Sendable>(
+/// Check a received sample and pass it to the subscriber's queue, unless its
+/// writer sent a newer one already (`Ok(false)`). Shared by both peer transports.
+pub(crate) async fn enqueue<'a, T: Sendable>(
     scratch: &mut AlignedVec,
-    bytes: &ZBytes,
+    slices: impl IntoIterator<Item = &'a [u8]>,
     qos: Qos,
     seen: &mut HashMap<String, u64>,
     sender: &tokio::sync::mpsc::Sender<ArchivedMessage<T>>,
     stop: &CancellationToken,
-) -> Result<()> {
+) -> Result<bool> {
     // The envelope is only read here, so its buffer is reused across samples.
     scratch.clear();
-    scratch.reserve(bytes.len());
-    for slice in bytes.slices() {
+    for slice in slices {
         scratch.extend_from_slice(slice);
     }
     let sample = rkyv::access::<ArchivedWireSample, rkyv::rancor::Error>(scratch)
@@ -536,7 +527,7 @@ async fn enqueue<T: Sendable>(
         .get(sample.writer.as_str())
         .is_some_and(|last| *last >= sequence)
     {
-        return Ok(());
+        return Ok(false);
     }
     let message = ArchivedMessage::from_aligned_bytes(aligned(
         sample.payload.len(),
@@ -550,11 +541,11 @@ async fn enqueue<T: Sendable>(
     } else {
         tokio::select! {
             _ = stop.cancelled() => bail!("subscriber shut down"),
-            result = sender.send(message) => result.map_err(ze)?,
+            result = sender.send(message) => result.map_err(|_| anyhow!("subscriber closed"))?,
         }
     }
     seen.insert(sample.writer.to_string(), sequence);
-    Ok(())
+    Ok(true)
 }
 
 impl<T: Sendable> PeerSubscriber<T> {
@@ -666,19 +657,19 @@ impl<T: Sendable> PeerSubscriber<T> {
                         }
                     },
                     Some(bytes) = snapshot_rx.recv() => {
-                        if let Err(error) = enqueue(&mut scratch, &bytes, qos, &mut seen, &tx, &quit).await {
+                        if let Err(error) = enqueue(&mut scratch, bytes.slices(), qos, &mut seen, &tx, &quit).await {
                             log::warn!("Discovered retained sample rejected: {error}"); break;
                         }
                     },
                     result = subscriber.recv_async() => {
                         let Ok(sample) = result else { break; };
-                        if let Err(error) = enqueue(&mut scratch, sample.payload(), qos, &mut seen, &tx, &quit).await { log::warn!("Peer sample rejected: {error}"); break; }
+                        if let Err(error) = enqueue(&mut scratch, sample.payload().slices(), qos, &mut seen, &tx, &quit).await { log::warn!("Peer sample rejected: {error}"); break; }
                     },
                     result = queryable.recv_async() => {
                         let Ok(query) = result else { break; };
                         if let Some(bytes) = query.payload() {
-                            match enqueue(&mut scratch, bytes, qos, &mut seen, &tx, &quit).await {
-                                Ok(()) => { let _ = query.reply(reader_key.clone(), Vec::<u8>::new()).await; },
+                            match enqueue(&mut scratch, bytes.slices(), qos, &mut seen, &tx, &quit).await {
+                                Ok(_) => { let _ = query.reply(reader_key.clone(), Vec::<u8>::new()).await; },
                                 Err(error) => { let _ = query.reply_err(error.to_string()).await; }
                             }
                         }
