@@ -367,8 +367,7 @@ mod unix {
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
-                    // A sample whose token never comes, as when the publisher's
-                    // stream broke, would otherwise keep its memory mapped.
+                    // Samples whose token never came.
                     _ = sweep.tick() => self.expire(),
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { continue; };

@@ -1,6 +1,6 @@
 # mt_pubsub
 
-Typed Pub/Sub over Zenoh peers, with optional coordinated Minot routing.
+Typed Pub/Sub between peers, with optional coordinated Minot routing.
 
 Part of the [minot](https://minot.steado.tech) family of crates.
 
@@ -11,7 +11,7 @@ Part of the [minot](https://minot.steado.tech) family of crates.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_pubsub = "0.14.1"
+mt_pubsub = "0.15.0"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 

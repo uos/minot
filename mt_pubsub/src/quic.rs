@@ -1,4 +1,4 @@
-//! Experimental peer transport on QUIC (quinn), without Zenoh.
+//! Peer transport on QUIC (quinn), without Zenoh.
 //!
 //! Every node owns one UDP socket and keeps one QUIC connection to every other
 //! node (full mesh). Per connection:
@@ -75,8 +75,8 @@ fn key_hash(key: &str) -> u64 {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
-/// The `host:port` of an endpoint such as `udp/10.0.0.2:7447` or
-/// `tcp/robot.local:7447`; the protocol prefix is ignored.
+/// The `host:port` of an endpoint such as `quic/10.0.0.2:7447` or
+/// `quic/robot.local:7447`. The protocol prefix is ignored.
 fn endpoint_address(endpoint: &str) -> Result<&str> {
     let address = endpoint.rsplit('/').next().unwrap_or(endpoint);
     let valid = address.parse::<SocketAddr>().is_ok()
@@ -86,8 +86,8 @@ fn endpoint_address(endpoint: &str) -> Result<&str> {
     ensure!(valid, "invalid QUIC endpoint '{endpoint}'");
     Ok(address)
 }
-/// Resolve an endpoint. A host name may resolve to several addresses; the
-/// first of the family the endpoint socket uses (`ipv4`) is preferred.
+/// Resolve an endpoint. Of several addresses, the first of the family the
+/// endpoint socket uses (`ipv4`) is taken.
 async fn resolve(endpoint: &str, ipv4: bool) -> Result<SocketAddr> {
     let address = endpoint_address(endpoint)?;
     let mut found: Vec<_> = tokio::net::lookup_host(address)
@@ -200,9 +200,8 @@ pub(crate) fn transport_config(initial_window: Option<u64>) -> Result<quinn::Tra
         .datagram_receive_buffer_size(Some(4 << 20))
         .datagram_send_buffer_size(DATAGRAM_SEND_BUFFER);
     // A publisher sends its next large sample once the last one is
-    // acknowledged. A receiver acknowledges every other packet, and holds the
-    // ACK of an odd last one for its delayed-ACK timer (25 ms by default):
-    // ask peers to wait at most 1 ms, their timer granularity.
+    // acknowledged. Peers are asked to acknowledge within 1 ms instead of
+    // holding the ACK of a last packet for their delayed-ACK timer.
     let mut acks = quinn::AckFrequencyConfig::default();
     acks.max_ack_delay(Some(Duration::from_millis(1)));
     transport.ack_frequency_config(Some(acks));
@@ -283,7 +282,7 @@ enum Incoming {
         bytes: Bytes,
         ack: Option<oneshot::Sender<bool>>,
     },
-    /// A writer of the topic is gone; its last sequence number is forgotten.
+    /// A writer of the topic is gone. Its last sequence number is forgotten.
     Left(String),
 }
 #[derive(Debug)]
@@ -511,9 +510,9 @@ impl Inner {
             self.dial(address);
             return;
         }
-        // The other node may not reach this one at the address it learned,
-        // as with one passed on by a third node. Dial it after all if it has
-        // not come by then; should both connect, one connection stays.
+        // The other node dials. If it has not connected after the idle
+        // timeout, as when the address it learned does not reach this node,
+        // this one dials. If both connect, one connection stays.
         if !state.awaited.insert(id) {
             return;
         }
@@ -714,8 +713,8 @@ impl Inner {
             }
         }
         // A peer that shuts down right after publishing closes the connection
-        // behind its last datagrams. quinn keeps them readable; the loop above
-        // may have ended on the close first.
+        // behind its last datagrams. They are still readable after the loop
+        // above ended on the close.
         while let Some(Ok(bytes)) = now(conn.read_datagram()) {
             self.deliver_datagram(&bytes);
         }
@@ -935,7 +934,7 @@ impl Inner {
         self.endpoint.close(0u32.into(), b"shutdown");
     }
     /// Keep a connection to every configured bootstrap peer. Host names are
-    /// resolved on every attempt, as a peer's may not resolve before it is up.
+    /// resolved on every attempt.
     async fn bootstrap(self: Arc<Self>, endpoints: Vec<String>) {
         let ipv4 = self.endpoint.local_addr().is_ok_and(|a| a.is_ipv4());
         let mut tick = tokio::time::interval(BEACON_INTERVAL);
@@ -1022,10 +1021,9 @@ impl Drop for QuicNode {
         self.shutdown.cancel();
     }
 }
-/// Socket buffer the QUIC endpoint asks for. The default (about 200 kB on
-/// Linux) overflows when many peers send at once, as at a swarm's start, and
-/// the kernel then drops datagrams. The kernel caps the request at
-/// `net.core.rmem_max` / `wmem_max`.
+/// Socket buffer the QUIC endpoint asks for. With the system's default
+/// buffer, the kernel dropped datagrams when many peers started at once. The
+/// kernel caps the request at `net.core.rmem_max` and `wmem_max`.
 const SOCKET_BUFFER: usize = 4 << 20;
 
 fn endpoint_socket(listen: SocketAddr) -> Result<std::net::UdpSocket> {
@@ -1234,8 +1232,7 @@ impl<T: Sendable> QuicPublisher<T> {
             rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&sample, buffer)
                 .context("Cannot serialize pub/sub message")?,
         );
-        // Peers refuse a larger one, which would fail a reliable delivery
-        // for the whole swarm.
+        // Peers refuse a larger sample.
         ensure!(
             buffer.len() <= MAX_SAMPLE,
             "pub/sub sample of {} bytes exceeds the limit of {MAX_SAMPLE}",
@@ -1380,8 +1377,7 @@ impl<T: Sendable> QuicPublisher<T> {
 }
 
 /// Wait, at most [`DATAGRAM_FLUSH`], until the datagrams queued on `conns`
-/// are sent: closing a connection discards them, and a node that publishes
-/// and then shuts down would lose its last best-effort samples.
+/// are sent. Closing a connection discards them.
 async fn flush_datagrams(conns: &[quinn::Connection]) {
     let deadline = tokio::time::Instant::now() + DATAGRAM_FLUSH;
     while conns.iter().any(|conn| {
@@ -1403,8 +1399,8 @@ fn now<F: std::future::Future>(future: F) -> Option<F::Output> {
 }
 
 /// Close `conn` unless it is closed already. quinn's `close` replaces the
-/// reason of a connection the peer closed with `LocallyClosed`, which would
-/// hide from [`left`] that the peer shut down.
+/// reason of a connection the peer closed with `LocallyClosed`, and [`left`]
+/// needs the peer's reason.
 fn close(conn: &quinn::Connection, code: u32, reason: &[u8]) {
     if conn.close_reason().is_none() {
         conn.close(code.into(), reason);

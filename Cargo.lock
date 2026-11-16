@@ -3800,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "minot"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -3937,7 +3937,7 @@ dependencies = [
 
 [[package]]
 name = "mt_action"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "log",
@@ -3952,7 +3952,7 @@ dependencies = [
 
 [[package]]
 name = "mt_bagread"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "camino",
@@ -3973,7 +3973,7 @@ dependencies = [
 
 [[package]]
 name = "mt_coord"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "fs2",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "mt_dataset"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4030,7 +4030,7 @@ dependencies = [
 
 [[package]]
 name = "mt_flow"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -4044,7 +4044,7 @@ dependencies = [
 
 [[package]]
 name = "mt_log"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "env_filter 2.0.0",
  "env_logger",
@@ -4057,7 +4057,7 @@ dependencies = [
 
 [[package]]
 name = "mt_mtc"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -4070,7 +4070,7 @@ dependencies = [
 
 [[package]]
 name = "mt_net"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "image",
@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "mt_pubsub"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4107,7 +4107,7 @@ dependencies = [
 
 [[package]]
 name = "mt_rat"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "log",
@@ -4121,7 +4121,7 @@ dependencies = [
 
 [[package]]
 name = "mt_scope"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -4134,7 +4134,7 @@ dependencies = [
 
 [[package]]
 name = "mt_sea"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4153,7 +4153,7 @@ dependencies = [
 
 [[package]]
 name = "mt_service"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "log",
@@ -4167,7 +4167,7 @@ dependencies = [
 
 [[package]]
 name = "mt_wind"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -28,7 +28,7 @@ pub enum CoordMode {
 pub enum PeerTransport {
     /// Zenoh peers over TCP and UDP.
     Zenoh,
-    /// QUIC connections between the nodes, without Zenoh (default).
+    /// QUIC connections between the nodes, without Zenoh.
     #[default]
     Quic,
 }
@@ -141,8 +141,8 @@ impl NodeConfig {
         self
     }
 
-    /// Peer mode transport: QUIC by default. Unset, `MINOT_PEER_TRANSPORT=zenoh`
-    /// selects Zenoh. All nodes of a swarm must use the same.
+    /// Peer mode transport. Unset, `MINOT_PEER_TRANSPORT=zenoh` selects Zenoh.
+    /// All nodes of a swarm must use the same.
     pub fn peer_transport(mut self, transport: PeerTransport) -> Self {
         self.peer_transport = Some(transport);
         self
@@ -172,35 +172,32 @@ impl NodeConfig {
     }
 
     /// Time after which the QUIC peer transport gives up a best-effort sample
-    /// too large for a datagram. Defaults to the registration timeout. Unset,
-    /// `MINOT_QUIC_SAMPLE_BUDGET_MS` sets it.
+    /// too large for a datagram. Unset, `MINOT_QUIC_SAMPLE_BUDGET_MS` sets it.
     pub fn quic_sample_budget(mut self, budget: std::time::Duration) -> Self {
         self.quic_sample_budget = Some(budget);
         self
     }
 
-    /// What that budget covers: the sample's stream once it is open (default),
-    /// or everything from publication. Unset,
-    /// `MINOT_QUIC_SAMPLE_BUDGET_FROM=publication` selects the latter.
+    /// What that budget covers: the sample's stream once it is open, or
+    /// everything from publication. Unset, `MINOT_QUIC_SAMPLE_BUDGET_FROM`
+    /// sets it.
     pub fn quic_sample_budget_scope(mut self, scope: crate::BudgetScope) -> Self {
         self.quic_sample_scope = Some(scope);
         self
     }
 
-    /// Large best-effort samples in flight per publisher and peer (default 1).
-    /// Unset, `MINOT_QUIC_SAMPLE_STREAMS` sets it. With more than one, a
-    /// sample can arrive after a newer one; subscribers drop it then.
+    /// Large best-effort samples in flight per publisher and peer. Unset,
+    /// `MINOT_QUIC_SAMPLE_STREAMS` sets it. With more than one, a sample can
+    /// arrive after a newer one. Subscribers drop it then.
     pub fn quic_sample_streams(mut self, streams: usize) -> Self {
         self.quic_sample_streams = Some(streams);
         self
     }
 
-    /// Congestion window, in bytes, a new QUIC connection starts with. quinn
-    /// starts at about 12 kB and needs many round trips to send a sample of
-    /// megabytes at the link's rate; a window near the sample size sends the
-    /// first ones at once. That suits links with a deep queue, as a rate-limited
-    /// radio link has; on a shallow one the burst may be dropped. Unset,
-    /// `MINOT_QUIC_INITIAL_WINDOW` sets it; otherwise quinn's default applies.
+    /// Congestion window, in bytes, a new QUIC connection starts with. A
+    /// window near the sample size sends a large sample without waiting for
+    /// the window to grow first. Unset, `MINOT_QUIC_INITIAL_WINDOW` sets it.
+    /// Otherwise quinn's own initial window applies.
     pub fn quic_initial_window(mut self, bytes: u64) -> Self {
         self.quic_initial_window = Some(bytes);
         self

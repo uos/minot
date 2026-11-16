@@ -2,11 +2,11 @@
 //!
 //! Datagrams are not fragmented, so a sample that does not fit one gets a
 //! stream of its own. Per publisher and peer a limited number of such streams
-//! is in flight ([`SamplePolicy::streams`], one by default); a sample
-//! published while all are taken waits, and a newer one replaces it, so a slow
-//! peer gets the latest sample next instead of a backlog.
+//! is in flight ([`SamplePolicy::streams`]). A sample published while all are
+//! taken waits, and a newer one replaces it. A slow peer gets the latest
+//! sample next instead of a backlog.
 //!
-//! A sample that exceeds its budget is given up: its stream is reset, or, with
+//! A sample that exceeds its budget is given up. Its stream is reset, or, with
 //! [`BudgetScope::Publication`], it is discarded while still waiting. The
 //! budget bounds the sender's effort only. A reset cannot take back a sample
 //! the peer has already received in full but not yet acknowledged, so a
@@ -159,7 +159,7 @@ pub(crate) struct Sample {
     pub(crate) peer: u64,
     pub(crate) hash: u64,
     pub(crate) bytes: Bytes,
-    /// Of its writer; `u64::MAX` for a retained sample pushed to a late reader.
+    /// Of its writer. `u64::MAX` for a retained sample pushed to a late reader.
     pub(crate) sequence: u64,
     pub(crate) published: Instant,
     pub(crate) published_ns: u64,
@@ -518,8 +518,7 @@ mod tests {
     async fn a_waiting_sample_expires_with_a_budget_from_publication() {
         let pair = pair(64).await;
         let streams = streams(300, BudgetScope::Publication, 1);
-        // Published first, so its budget is over once the stuck stream gives
-        // up; published later it would have the difference left to start.
+        // Published first, so its budget is over once the stuck stream gives up.
         let waiting = sample(&pair, 1, SMALL);
         streams.offer(sample(&pair, 0, STUCK));
         streams.offer(waiting);
@@ -578,7 +577,7 @@ mod tests {
         let stats = streams.counters.snapshot();
         assert_eq!(stats.outstanding, 0);
         assert_eq!(stats.acked + stats.reset, 0);
-        // The two in flight failed; the waiting one found the connection gone.
+        // The two in flight failed. The waiting one found the connection gone.
         assert_eq!(stats.failed + stats.open_failed, 3);
     }
 }

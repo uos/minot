@@ -95,7 +95,7 @@ impl Node {
             }),
         }
     }
-    /// Counters of the QUIC peer transport; `None` on any other transport.
+    /// Counters of the QUIC peer transport. `None` on any other transport.
     pub fn quic_stats(&self) -> Option<QuicStats> {
         match &self.backend {
             NodeBackend::Quic(node) => Some(node.stats()),

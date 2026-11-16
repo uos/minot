@@ -1,6 +1,6 @@
 # Pub/Sub
 
-An async Publish/Subscribe API running directly over Zenoh peers by default.
+An async Publish/Subscribe API running directly between peers.
 
 !!! tip "Golang Support"
 
@@ -37,17 +37,18 @@ with the same `MINOT_ZENOH_PORT` and `MINOT_DOMAIN_ID`.
 ## Peer Discovery
 
 `NodeConfig::new` selects `CoordMode::Peer`. Nodes declare typed topics directly
-in Zenoh without starting a Minot coordinator or acquiring a lock file.
-Multicast scouting and single-hop gossip connect peers automatically. `MINOT_ZENOH_PORT`
-(default `7447`) selects the peer UDP scouting port and the existing coordinator
-TCP port; use a different value on all Minot nodes to coexist with ROS Zenoh.
-Peer listeners use OS-assigned ports unless explicitly configured: a TCP and a UDP listener (zenoh multilink), so best-effort samples travel as datagrams while declarations, queries and reliable samples stay on TCP. Local-only peers keep a single TCP loopback link.
+to each other without starting a Minot coordinator or acquiring a lock file.
 
-For Docker or routed networks without multicast, supply reachable peers through
-`MINOT_PEERS=tcp/seed:17447` (comma-separated endpoints), or use
-`NodeConfig::peer_endpoints` and `NodeConfig::listen_endpoint`. Explicit peers
-disable multicast; gossip remains enabled. Bootstrap nodes are ordinary peers.
-They must advertise reachable listener addresses for mesh expansion.
+Peers talk over QUIC. `MINOT_PEER_TRANSPORT=zenoh` or
+`NodeConfig::peer_transport(PeerTransport::Zenoh)` selects Zenoh instead. All
+nodes of a swarm must use the same transport.
+
+Nodes find each other by multicast on the port `MINOT_ZENOH_PORT` (default
+`7447`) and pass on the peers they know. For Docker or routed networks without
+multicast, supply reachable peers through `MINOT_PEERS=quic/seed:17447`
+(comma-separated endpoints) or use `NodeConfig::peer_endpoints` and
+`NodeConfig::listen_endpoint`. Explicit peers disable multicast. Bootstrap nodes
+are ordinary peers.
 
 Discovery is asynchronous. Use
 `publisher.wait_for_subscribers(Duration::from_secs(5)).await?` when at least one
@@ -75,10 +76,9 @@ applications across separate containers.
 Peer `Reliable` delivery acknowledges subscriber queue acceptance. Missing
 acknowledgements or loss of a fatal reliable node cancels the peer run.
 Transient-local writers provide retained samples directly to late subscribers.
-Peer loss detection uses Zenoh liveliness; coordinator heartbeat/reconnect
-settings continue to apply to coordinated modes. The peer implementation uses
-owned Zenoh buffers; explicit Minot SHM pool controls remain on the coordinated
-path.
+Peer loss detection uses the QUIC connection or Zenoh liveliness. Coordinator
+heartbeat/reconnect settings continue to apply to coordinated modes. Explicit
+Minot SHM pool controls remain on the coordinated path.
 
 !!! info
 
@@ -96,7 +96,7 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Opens a coordinator-free Zenoh peer session
+    // Opens a coordinator-free peer node
     let node = Node::create(NodeConfig::new("my_node_pub")).await?;     
 
     // Qos can be Reliable or BestEffort
