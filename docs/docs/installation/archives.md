@@ -1,4 +1,4 @@
-# Release Binaries
+# Release binaries
 
 Every [Codeberg Release](https://codeberg.org/stelzo/minot/releases) contains the following files, each with a matching `.sha256` next to it.
 

@@ -20,7 +20,7 @@ After the setup, you can simply run apt.
 sudo apt install librat-dev
 ~~~
 
-### Debian-based Distros
+### Debian-based distros
 
 The PPA mentioned above is specific to Ubuntu the package itself does not require any system dependencies. Therefore it can be installed manually on all debian-based distros.
 
@@ -51,7 +51,7 @@ target_include_directories(my_app PRIVATE ${RAT_INCLUDE_DIRS})
 target_link_libraries(my_app PRIVATE ${RAT_LIBRARIES})
 ~~~
 
-### Prebuilt Files
+### Prebuilt files
 
 Every [release](archives.md) contains `librat-<target>.a`, `librat-<target>.so` or `librat-<target>.dylib`, `rat.h`, `librat.pc` and `libratConfig.cmake`. The [installation script](script.md) installs them with `--with-rat`.
 
@@ -59,7 +59,7 @@ Every [release](archives.md) contains `librat-<target>.a`, `librat-<target>.so` 
 curl -sSLf https://minot.steado.tech/docs/install | sh -s -- --with-rat
 ~~~
 
-### From Source
+### From source
 
 Building from source generates a static and shared library in the `./target/full-release/` folder. You will need to clone the repository first.
 

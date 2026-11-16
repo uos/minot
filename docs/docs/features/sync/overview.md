@@ -1,4 +1,4 @@
-# Minot Sync
+# Minot sync
 
 Minot Sync is the terminal-based interface for interacting with Minot. It functions as a dashboard with commands for controlling the features. It is the primary way you interact with Minot.
 
@@ -24,7 +24,7 @@ The first thing you'll see is the *Logs* window, which displays feedback from al
 
 You can toggle the Logs window with <kbd>?</kbd> or quit Minot with <kbd>q</kbd>. Checkout all keybindings [here](./keybindings.md).
 
-## Bagfile Query
+## Bagfile query
 
 At the bottom of the UI, you'll find the *Compare* indicator, which shows the current mode: *Compare* or *Wind*. Refer to the keybindings page for how to *Switch Mode*. From this point onward, specific key presses or actions won't be explicitly mentioned.
 
@@ -45,7 +45,7 @@ After evaluation, new log messages will appear (at least with _log_level = info)
 
 The screenshot shows an example for the logs while using the Bagfile Query feature (top) along with the Ratsfile code (bottom). The bottom right of the Minot Sync indicates that line 28 was successfully evaluated, playing `/ouster/imu` until a message was found from `/ouster/points`. The logs also show that an embedded MtPubSub publisher was used to distribute the message over a network.
 
-## Variable Sharing (LOG and Compare)
+## Variable sharing (LOG and compare)
 
 Most of the screen in Minot Sync is dedicated to matrix logging and comparison.  All matrices sent to LOG are displayed here.  You can review the history of received matrices or compare matrices from different Rats that share the same variable.
 

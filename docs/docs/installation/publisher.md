@@ -1,4 +1,4 @@
-# Bagfile Publishers
+# Bagfile publishers
 
 Standalone publishers live inside the `wind` module. With `--all-features`, you'll get all binaries but you need to have ROS2 sourced.
 

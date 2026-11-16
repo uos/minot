@@ -1,4 +1,4 @@
-# Sharing Memory Synchronously
+# Sharing memory synchronously
 
 One of the main tasks of the ROS Pub/Sub system (excluding non-sensor pipelines with actions and service) is sharing a new value of something. At development time, when accuracy is at the highest priority, this async model might be in your way.
 

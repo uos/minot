@@ -15,7 +15,7 @@ When used in static and simple environments, it is stable enough for replacing t
     
     To avoid network collisions when multiple independent Minot instances run on the same network, you can use the `MINOT_DOMAIN_ID` environment variable. This is similar to ROS2's `ROS_DOMAIN_ID` concept.
 
-## Several Stacks on One Machine
+## Several stacks on one machine
 
 A program that starts a whole stack of its own (Pelorus replaying a bag, with the
 Minot it spawns) can take a network no other stack on the machine uses:
@@ -34,7 +34,7 @@ it and claims nothing, which is how a parent hands its choice to its children.
 To reach a stack that is not on the defaults from a viewer, start the viewer
 with the same `MINOT_ZENOH_PORT` and `MINOT_DOMAIN_ID`.
 
-## Peer Discovery
+## Peer discovery
 
 `NodeConfig::new` selects `CoordMode::Peer`. Nodes declare typed topics directly
 to each other without starting a Minot coordinator or acquiring a lock file.
@@ -60,7 +60,7 @@ Reliable delivery still requires a complete subscriber snapshot and all ACKs.
 Local-only peers choose one connection initiator per pair to avoid duplicate
 connection attempts.
 
-## Coordinated Compatibility
+## Coordinated compatibility
 
 `mt_rat` variable synchronization and bag-query coordination retain their
 coordinator protocol. Pub/sub applications can explicitly select

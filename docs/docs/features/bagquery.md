@@ -1,4 +1,4 @@
-# Bagfile Query
+# Bagfile query
 
 While developing ROS nodes, Bagfiles are essential for reproducability. With Minot you can query that recording and control each message that is published to your nodes. Bagfile Query is not built for a long stream of data. The idea is to grab specific chunks that fit some query and send them via the Coordinator (like a ROS1 Master) to all connected nodes that care about publishing Bagfile data. It is not meant to be a replacement for `ros2 bag play`. If you *just want to play a Bagfile*, we recommend the usual ROS tooling.
 
@@ -207,7 +207,7 @@ pf! any .. 1.
 
     This command loads the full bag into memory and runs to EOF. Use `minot async` for real-time, interruptible playback.
 
-## Real-time Playback (`minot async`)
+## Real-time playback (`minot async`)
 
 While the script-based approach gives you fine-grained control, sometimes you just want to stream a bag file at real-time speed to your network. For this, you can use the `async` command:
 

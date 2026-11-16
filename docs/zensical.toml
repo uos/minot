@@ -12,7 +12,7 @@ Copyright &copy; 2026 stelzo
 """
 nav = [
   { "Introduction" = "index.md" },
-  { "Getting Started" = [
+  { "Getting started" = [
     "intro/query.md",
     "intro/share.md",
     "intro/pubsub.md",
@@ -23,7 +23,7 @@ nav = [
     "installation/tools.md",
     "installation/packages.md",
     { "Pub/Sub (Rust/Go)" = "installation/pubsub.md" },
-    { "Share Library (C/Rust)" = "installation/librat.md" },
+    { "Share library (C/Rust)" = "installation/librat.md" },
     "installation/publisher.md",
     "installation/archives.md",
   ] },

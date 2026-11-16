@@ -12,7 +12,7 @@ Keybindings for the Sync UI. They cannot be changed after compile time for the m
 | Switch Mode (Wind/Compare)         | <kbd>w</kbd>    |
 
 
-## Wind Cursor
+## Wind cursor
 
 | Command                            | Key         |
 | :--------------------------------- | :---------- |
@@ -37,7 +37,7 @@ Keybindings for the Sync UI. They cannot be changed after compile time for the m
 Adding new ones happens automatically when firing the `.mt` file if it contains some.
 
 
-## Matrix Compare Window
+## Matrix compare window
 
 | Command                             | Key                                   |
 | :---------------------------------- | :------------------------------------ |
@@ -60,7 +60,7 @@ Adding new ones happens automatically when firing the `.mt` file if it contains 
 | Decrease Right Window Column Width  | <kbd>Ctrl</kbd>+<kbd>s</kbd>         |
 
 
-## Difference Tolerance
+## Difference tolerance
 
 | Command                             | Key                                   |
 | :---------------------------------- | :------------------------------------ |

@@ -1,4 +1,4 @@
-# Variable Sharing
+# Variable sharing
 
 When developing your node and choosing a tool to help you with it, you don't want to run through a huge setup or change your existing code a lot. The tool should adapt and move out of your way while still solving your problem.
 
@@ -58,7 +58,7 @@ You can also send everything to the Minot sync to compare them with the `==` ope
 
 ### Setup
 
-#### Standalone Coordinator
+#### Standalone coordinator
 
 Variable Sharing only needs the Coordinator, which can run standalone without the sync command. The subcommand takes a Ratslang file with Rules. It waits for every Rat in that Rule to be connected to the network before un(b)locking all Rats to continue their normal flow after intialisation.
 
@@ -66,7 +66,7 @@ Variable Sharing only needs the Coordinator, which can run standalone without th
 minot coord ./rules.mt
 ~~~
 
-#### Minot sync with embedded Coordinator
+#### Minot sync with embedded coordinator
 
 When using the sync command with integrated Coordinator (the default when building Minot), the Rules should not be defined in the file you give to the sync command at startup. You need to set the `_rules` variable to a Path or String that is relative to the Ratslang file you are defining the variable in.
 

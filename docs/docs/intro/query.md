@@ -1,4 +1,4 @@
-# Query a Bagfile
+# Query a bagfile
 
 With ROS you can record and play everything published to the ROS network. This enables reproducability for nodes and greatly improves the safety of developing real robots. Bagfiles are great! But the ROS tooling for playing the Bagfile is limited. It's still enough for most use cases but there are times where you need complete control over the data that is published to your subscribers. Minot packages its own language for fine grained filtering and cursor control inside your Bagfile for fast iterations. This is called *Bagfile Querying* in Minot.
 
