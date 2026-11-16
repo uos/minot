@@ -380,3 +380,48 @@ async fn large_samples_use_shared_memory_and_keep_their_order() {
         sub.unsubscribe().await.unwrap();
     }
 }
+
+#[test]
+fn publishing_works_outside_of_tokio() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (publisher, mut sub, _nodes) = runtime.block_on(async {
+        let (seed, endpoint) = seed().await;
+        let writer = peer("writer", &endpoint).await;
+        let reader = peer("reader", &endpoint).await;
+        let sub = reader
+            .create_subscriber::<String>("/outside".to_owned(), 16, Qos::Reliable)
+            .await
+            .unwrap();
+        let publisher = writer
+            .create_publisher::<String>("/outside".to_owned(), Qos::Reliable)
+            .await
+            .unwrap();
+        (publisher, sub, (seed, writer, reader))
+    });
+    // A plain thread with an executor that is not Tokio, as a caller without
+    // a runtime of its own uses.
+    std::thread::spawn(move || {
+        futures_lite::future::block_on(async {
+            publisher
+                .wait_for_subscribers(Duration::from_secs(5))
+                .await
+                .unwrap();
+            for index in 0..10 {
+                publisher
+                    .publish(&format!("message-{index}"))
+                    .await
+                    .unwrap();
+            }
+        })
+    })
+    .join()
+    .unwrap();
+    runtime.block_on(async {
+        for index in 0..10 {
+            assert_eq!(receive(&mut sub).await, format!("message-{index}"));
+        }
+    });
+}

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use anyhow::anyhow;
 use log::{debug, error, info, warn};
 use mt_net::SensorTypeMapped;
-use mt_pubsub::{CoordMode, Node, NodeConfig, Qos};
-use mt_sea::{Ship, ShipKind};
+use mt_pubsub::{CoordMode, Node, NodeConfig, Publisher, Qos};
+use mt_sea::{Sendable, Ship, ShipKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub async fn wind(name: &str) -> anyhow::Result<UnboundedReceiver<Vec<mt_sea::WindData>>> {
@@ -68,15 +68,42 @@ pub fn publisher_registers() -> anyhow::Result<bool> {
     Ok(!matches!(publisher_coord_mode()?, CoordMode::Peer))
 }
 
+/// How long a new peer-mode publisher waits for its first subscriber.
+const FIRST_SUBSCRIBER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A publisher for `topic`. Peers only learn about a publisher through
+/// discovery, and a sample sent before that reaches nobody. A synchronized
+/// replay then waits forever for the subscriber to process it, so in peer mode
+/// the first sample waits until a subscriber is there. The coordinator routes
+/// samples in its own modes, so those publish at once.
+async fn publisher<T: Sendable>(
+    node: &Node,
+    coord_mode: CoordMode,
+    topic: &str,
+    qos: Qos,
+) -> anyhow::Result<Publisher<T>> {
+    let publisher = node.create_publisher(topic.to_owned(), qos).await?;
+    if matches!(coord_mode, CoordMode::Peer)
+        && publisher
+            .wait_for_subscribers(FIRST_SUBSCRIBER_WAIT)
+            .await
+            .is_err()
+    {
+        debug!("{topic} has no subscriber yet, publishing anyway");
+    }
+    Ok(publisher)
+}
+
 pub async fn run_dyn_wind(
     wind_name: &str,
     ready: tokio::sync::oneshot::Sender<()>,
 ) -> anyhow::Result<Option<()>> {
     let nh_name = wind_name.to_string() + "_pub";
     let coord_mode = publisher_coord_mode()?;
-    let nh = tokio::spawn(async move {
-        Node::create(NodeConfig::new(nh_name).coord_mode(coord_mode)).await
-    });
+    let nh =
+        tokio::spawn(
+            async move { Node::create(NodeConfig::new(nh_name).coord_mode(coord_mode)).await },
+        );
     let wind_name_owned = wind_name.to_owned();
     let wind_receiver = tokio::spawn(async move { wind(&wind_name_owned).await });
 
@@ -106,7 +133,7 @@ pub async fn run_dyn_wind(
                         } else {
                             Qos::Reliable
                         };
-                        let publisher = node.create_publisher(data.topic.clone(), qos).await?;
+                        let publisher = publisher(&node, coord_mode, &data.topic, qos).await?;
                         image_publishers.insert(data.topic.clone(), publisher);
                     }
                     image_publishers
@@ -123,7 +150,7 @@ pub async fn run_dyn_wind(
                         } else {
                             Qos::Reliable
                         };
-                        let publisher = node.create_publisher(data.topic.clone(), qos).await?;
+                        let publisher = publisher(&node, coord_mode, &data.topic, qos).await?;
                         compressed_image_publishers.insert(data.topic.clone(), publisher);
                     }
                     compressed_image_publishers
@@ -140,7 +167,7 @@ pub async fn run_dyn_wind(
                         } else {
                             Qos::Reliable
                         };
-                        let publisher = node.create_publisher(data.topic.clone(), qos).await?;
+                        let publisher = publisher(&node, coord_mode, &data.topic, qos).await?;
                         camera_info_publishers.insert(data.topic.clone(), publisher);
                     }
                     camera_info_publishers
@@ -152,9 +179,8 @@ pub async fn run_dyn_wind(
                 SensorTypeMapped::Lidar(cloud_msg) => {
                     let mut existing_pubber = cloud_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
-                        let pubber = node
-                            .create_publisher(data.topic.clone(), Qos::Reliable)
-                            .await?;
+                        let pubber =
+                            publisher(&node, coord_mode, &data.topic, Qos::Reliable).await?;
                         cloud_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             cloud_publishers
@@ -170,9 +196,8 @@ pub async fn run_dyn_wind(
                 SensorTypeMapped::Imu(imu_msg) => {
                     let mut existing_pubber = imu_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
-                        let pubber = node
-                            .create_publisher(data.topic.clone(), Qos::Reliable)
-                            .await?;
+                        let pubber =
+                            publisher(&node, coord_mode, &data.topic, Qos::Reliable).await?;
                         imu_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             imu_publishers
@@ -198,7 +223,7 @@ pub async fn run_dyn_wind(
                         } else {
                             Qos::Reliable
                         };
-                        let pubber = node.create_publisher(data.topic.clone(), qos).await?;
+                        let pubber = publisher(&node, coord_mode, &data.topic, qos).await?;
                         tf_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             tf_publishers
@@ -222,9 +247,8 @@ pub async fn run_dyn_wind(
                 SensorTypeMapped::Odometry(odom_msg) => {
                     let mut existing_pubber = odom_publishers.get(&data.topic);
                     if existing_pubber.is_none() {
-                        let pubber = node
-                            .create_publisher(data.topic.clone(), Qos::Reliable)
-                            .await?;
+                        let pubber =
+                            publisher(&node, coord_mode, &data.topic, Qos::Reliable).await?;
                         odom_publishers.insert(data.topic.clone(), pubber);
                         existing_pubber = Some(
                             odom_publishers

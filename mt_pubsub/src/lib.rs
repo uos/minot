@@ -60,14 +60,17 @@ impl Node {
                 backend: PublisherBackend::Peer(
                     peer::PeerPublisher::create(Arc::clone(node), topic, qos).await?,
                 ),
+                runtime: tokio::runtime::Handle::try_current().ok(),
             }),
             NodeBackend::Quic(node) => Ok(Publisher {
                 backend: PublisherBackend::Quic(
                     quic::QuicPublisher::create(Arc::clone(node), topic, qos).await?,
                 ),
+                runtime: tokio::runtime::Handle::try_current().ok(),
             }),
             NodeBackend::Coordinated(node) => Ok(Publisher {
                 backend: PublisherBackend::Coordinated(node.create_publisher(topic, qos).await?),
+                runtime: tokio::runtime::Handle::try_current().ok(),
             }),
         }
     }
@@ -126,9 +129,16 @@ impl Node {
     }
 }
 
+/// Publishes on one topic.
+///
+/// The sends need Tokio's timers. A publisher created inside a Tokio runtime
+/// remembers it, so `publish` also works from another executor, such as
+/// `futures_lite::future::block_on` on a plain thread. The runtime has to keep
+/// running meanwhile, which a multi-thread runtime does on its own.
 #[derive(Debug, Clone)]
 pub struct Publisher<T: Sendable> {
     backend: PublisherBackend<T>,
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,11 +149,24 @@ enum PublisherBackend<T: Sendable> {
 }
 impl<T: Sendable> Publisher<T> {
     pub async fn publish(&self, data: &T) -> anyhow::Result<()> {
-        match &self.backend {
-            PublisherBackend::Peer(publisher) => publisher.publish(data).await,
-            PublisherBackend::Quic(publisher) => publisher.publish(data).await,
-            PublisherBackend::Coordinated(publisher) => publisher.publish(data).await,
-        }
+        self.in_runtime(async move {
+            match &self.backend {
+                PublisherBackend::Peer(publisher) => publisher.publish(data).await,
+                PublisherBackend::Quic(publisher) => publisher.publish(data).await,
+                PublisherBackend::Coordinated(publisher) => publisher.publish(data).await,
+            }
+        })
+        .await
+    }
+
+    /// Runs `future` in the runtime the publisher was created in when the
+    /// caller is outside of Tokio.
+    fn in_runtime<F: std::future::Future>(&self, future: F) -> InRuntime<F> {
+        let handle = match &self.runtime {
+            Some(handle) if tokio::runtime::Handle::try_current().is_err() => Some(handle.clone()),
+            _ => None,
+        };
+        InRuntime { handle, future }
     }
     /// Wait until discovery has observed at least one subscriber. Samples sent
     /// before discovery completes may have no recipients, just as with DDS.
@@ -172,16 +195,44 @@ impl<T: Sendable> Publisher<T> {
         timeout: std::time::Duration,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(minimum > 0, "minimum subscriber count must be positive");
-        tokio::time::timeout(timeout, async {
-            loop {
-                if self.subscriber_count().await? >= minimum {
-                    return Ok(());
+        self.in_runtime(async move {
+            tokio::time::timeout(timeout, async {
+                loop {
+                    if self.subscriber_count().await? >= minimum {
+                        return Ok(());
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for {minimum} subscribers"))?
         })
         .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting for {minimum} subscribers"))?
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Polls a future inside a Tokio runtime, so its timers and I/O work while
+    /// an executor other than Tokio drives it. Without a runtime it polls the
+    /// future as it is. The runtime is entered for each poll only, so the
+    /// wrapper is `Send` and `Sync` exactly when the future is.
+    struct InRuntime<F> {
+        handle: Option<tokio::runtime::Handle>,
+        #[pin]
+        future: F,
+    }
+}
+
+impl<F: std::future::Future> std::future::Future for InRuntime<F> {
+    type Output = F::Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<F::Output> {
+        let this = self.project();
+        let _runtime = this.handle.as_ref().map(tokio::runtime::Handle::enter);
+        this.future.poll(cx)
     }
 }
 
