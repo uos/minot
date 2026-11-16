@@ -191,13 +191,13 @@ pub fn open_zenoh_session_with_config(config: zenoh::Config) -> anyhow::Result<z
                 disable_shm_runtime();
                 let mut fallback = fallback_config;
                 disable_shm_in_config(&mut fallback)?;
-                return zenoh::open(fallback)
+                zenoh::open(fallback)
                     .wait()
                     .map_err(|fallback_error| {
                         anyhow::anyhow!(
                             "Failed to open Zenoh session with SHM ({error}) and without SHM ({fallback_error})"
                         )
-                    });
+                    })
             }
 
             #[cfg(not(feature = "shm"))]
@@ -358,10 +358,7 @@ mod tests {
             unicast.get_json("transport/unicast/max_links").unwrap(),
             "2"
         );
-        assert_eq!(
-            config.get_json("transport/unicast/max_links").unwrap(),
-            "1"
-        );
+        assert_eq!(config.get_json("transport/unicast/max_links").unwrap(), "1");
     }
 
     #[test]

@@ -47,7 +47,7 @@ impl Action<std_msgs::msg::String, (u64, geometry_msgs::msg::Twist), std_msgs::m
         let twist = goal.data.1.clone();
         let mut interval = interval(Duration::from_millis(100));
 
-        info!("Publishing {:?} to /cmd_vel at 100Hz", &twist);
+        info!("Publishing {:?} to /cmd_vel at 100Hz", twist);
         select! {
             // goal cancelled
             _ = stoken.cancelled() => {

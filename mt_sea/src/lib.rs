@@ -761,14 +761,20 @@ mod route_push_tests {
         let before = plan_routes_for_var(rules, "/t");
         rules.register("/t".into(), ship.into(), kind);
         let after = plan_routes_for_var(rules, "/t");
-        ships(&changed_routes(&before, after, Some(ship))).into_iter().map(String::from).collect()
+        ships(&changed_routes(&before, after, Some(ship)))
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     fn unreg(rules: &mut Rules, ship: &str, kind: mt_net::RatPubRegisterKind) -> Vec<String> {
         let before = plan_routes_for_var(rules, "/t");
         rules.unregister("/t", ship, kind);
         let after = plan_routes_for_var(rules, "/t");
-        ships(&changed_routes(&before, after, None)).into_iter().map(String::from).collect()
+        ships(&changed_routes(&before, after, None))
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     #[test]

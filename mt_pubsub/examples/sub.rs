@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
             msg = subber.next() => {
                 match msg {
                     Some(msg) => {
-                        println!("Got: {}", &msg.data);
+                        println!("Got: {}", msg.data);
                         pubber.publish(&msg_out).await.unwrap();
                     }
                     None => break,

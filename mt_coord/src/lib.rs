@@ -288,7 +288,7 @@ fn run_coordinator_with_ready(
                 header: net::Header::default(),
                 data: net::PacketKind::Acknowledge,
             };
-            for (_client_name, client) in clients.iter() {
+            for client in clients.values() {
                 if let Err(e) = client.sender.send(ack.clone()).await {
                     error!("Could not send ack to unlock client: {e}");
                 }
@@ -448,14 +448,13 @@ fn run_coordinator_with_ready(
                                                             }
                                                         }
 
-                                                        if !send_now.is_empty() {
-                                                            if let Err(e) = wind_tx_inner.send(send_now).await {
+                                                        if !send_now.is_empty()
+                                                            && let Err(e) = wind_tx_inner.send(send_now).await {
                                                                 error!(
                                                                     "Could not enqueue wind data from Minot TUI for forwarding: {}",
                                                                     e
                                                                 );
                                                             }
-                                                        }
                                                     }
 
                                                     PacketKind::Heartbeat => {
@@ -568,7 +567,7 @@ fn run_coordinator_with_ready(
 
                                                                                     debug!(
                                                                                         "asking Minot TUI for dyn for {}",
-                                                                                        &variable
+                                                                                        variable
                                                                                     );
                                                                                     let ret = rat_coord_tx.send(
                                                                                             MinotTask::WindDynamicVarReq(
@@ -665,15 +664,14 @@ fn run_coordinator_with_ready(
                                                                         }
                                                                     }
                                                                 }
-                                                                if !send_now.is_empty() {
-                                                                    if let Err(e) = wind_tx_inner.send(send_now).await {
+                                                                if !send_now.is_empty()
+                                                                    && let Err(e) = wind_tx_inner.send(send_now).await {
                                                                         error!(
                                                                             "Could not enqueue wind data from client '{}' for forwarding: {}",
                                                                             inner_name,
                                                                             e
                                                                         );
                                                                     }
-                                                                }
                                                             }
                                                             PacketKind::Torpedo(dead_clients) => {
                                                                 debug!(
@@ -956,7 +954,7 @@ fn run_coordinator_with_ready(
                     info!("locking next");
                     if unlock_first {
                         let clients = coordinator.rat_qs.read().await;
-                        for (c, _) in clients.iter() {
+                        for c in clients.keys() {
                             if let Err(e) = coordinator
                                 .rat_send(c.clone(), PacketKind::Acknowledge)
                                 .await
@@ -971,7 +969,7 @@ fn run_coordinator_with_ready(
                 }
                 MinotTask::Unlock => {
                     let clients = coordinator.rat_qs.read().await;
-                    for (c, _) in clients.iter() {
+                    for c in clients.keys() {
                         if let Err(e) = coordinator
                             .rat_send(c.clone(), PacketKind::Acknowledge)
                             .await
@@ -1070,7 +1068,10 @@ fn run_coordinator_with_ready(
                     let (removed, before) = {
                         let mut current_rules = rules_changer.write().unwrap();
                         let before = mt_sea::plan_routes_for_var(&current_rules, &var);
-                        (current_rules.unregister(&var, &ship, mt_net_kind.clone()), before)
+                        (
+                            current_rules.unregister(&var, &ship, mt_net_kind.clone()),
+                            before,
+                        )
                     };
                     if !removed {
                         debug!("Ship {ship} was not registered for var {var}, nothing to remove");
@@ -1096,7 +1097,7 @@ fn run_coordinator_with_ready(
                     }
                     info!(
                         "Unregistering from topics ({:?}, {:?}, {:?})",
-                        &ship, &var, &mt_net_kind
+                        ship, var, mt_net_kind
                     );
                     let after = mt_sea::plan_routes_for_var(&rules_changer.read().unwrap(), &var);
                     let plans = mt_sea::changed_routes(&before, after, None);
@@ -1173,7 +1174,7 @@ fn run_coordinator_with_ready(
                              Pass Qos::BestEffort to create_subscriber to opt in to best-effort delivery.",
                             var
                         );
-                        error!("{}", &msg);
+                        error!("{}", msg);
                         let _ = coordinator
                             .rat_send(ship, net::PacketKind::RegistrationError(msg))
                             .await;
@@ -1221,7 +1222,7 @@ fn run_coordinator_with_ready(
                     }
                     info!(
                         "Registering for topics ({:?}, {:?}, {:?})",
-                        &ship, &var, &mt_net_kind
+                        ship, var, mt_net_kind
                     );
                     let before = {
                         let mut current_rules = rules_changer.write().unwrap();

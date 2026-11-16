@@ -27,7 +27,6 @@ enum PolicyValue {
     String(String),
 }
 
-
 fn normalize_policy(value: PolicyValue, names: &[(i64, &'static str)]) -> String {
     let unknown = || {
         names

@@ -285,9 +285,10 @@ fn raw_image(
         Ok(build!(packed, ImageLuma8, ImageRgb8, ImageRgba8))
     } else {
         let mut samples: Vec<u16> = packed
-            .chunks_exact(2)
-            .map(|bytes| {
-                let bytes = [bytes[0], bytes[1]];
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&bytes| {
                 if bigendian == 1 {
                     u16::from_be_bytes(bytes)
                 } else {

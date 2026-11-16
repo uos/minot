@@ -619,9 +619,8 @@ impl<T: Sendable> PeerSubscriber<T> {
                         if sample.kind() == SampleKind::Put && qos.expects_reliable_delivery() && sample.key_expr().as_str().ends_with("/0") {
                             log::warn!("BestEffort publisher cannot satisfy a reliable subscriber"); break;
                         }
-                        if sample.kind() == SampleKind::Delete {
-                            if let Some(writer) = sample.key_expr().as_str().rsplit('/').nth(1) { seen.remove(writer); }
-                        }
+                        if sample.kind() == SampleKind::Delete
+                            && let Some(writer) = sample.key_expr().as_str().rsplit('/').nth(1) { seen.remove(writer); }
                     },
                     result = caches.recv_async() => {
                         let Ok(sample) = result else { break; };

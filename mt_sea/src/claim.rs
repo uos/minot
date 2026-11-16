@@ -87,7 +87,10 @@ impl NetworkClaim {
                 self.port, self.domain_id
             )
         } else if self.is_default() {
-            format!("Minot network: default port {}, domain {}", self.port, self.domain_id)
+            format!(
+                "Minot network: default port {}, domain {}",
+                self.port, self.domain_id
+            )
         } else {
             format!(
                 "Minot network: port {} and domain {} are this run's own, the defaults being in use. \

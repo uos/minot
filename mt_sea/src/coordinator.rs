@@ -34,7 +34,9 @@ pub struct CoordinatorImpl {
 pub type BePublishers = HashMap<String, HashSet<String>>;
 
 pub fn add_be_publisher(map: &mut BePublishers, var: &str, ship: &str) {
-    map.entry(var.to_owned()).or_default().insert(ship.to_owned());
+    map.entry(var.to_owned())
+        .or_default()
+        .insert(ship.to_owned());
 }
 
 /// Forget `ship` as a best-effort publisher of `var`, or of every variable if `None`.

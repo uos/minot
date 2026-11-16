@@ -583,7 +583,6 @@ impl NetworkFetcher {
             .expect("the range-fetch thread should start");
         Self { requests }
     }
-
 }
 
 impl RangeFetcher for NetworkFetcher {

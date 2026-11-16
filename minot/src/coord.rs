@@ -29,7 +29,7 @@ pub fn get_clients(eval: &Evaluated) -> anyhow::Result<HashSet<String>> {
     let mut clients = HashSet::new();
 
     // ships from rules
-    for (_, inner_clients) in eval.rules.raw().iter() {
+    for inner_clients in eval.rules.raw().values() {
         inner_clients.iter().for_each(|client| {
             if let Some(strat) = &client.strategy {
                 match strat {

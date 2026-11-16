@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
                 {
                     let mut counter = counter.lock().await;
                     *counter += 1;
-                    info!("Already handled {} requests!", &counter);
+                    info!("Already handled {} requests!", counter);
                 }
 
                 res

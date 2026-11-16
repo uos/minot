@@ -268,15 +268,15 @@ where
                 }
 
                 let executing = current_goal.lock().await;
-                if let Some((id, stoken)) = executing.clone() {
-                    if goal.id == id {
-                        stoken.cancel();
+                if let Some((id, stoken)) = executing.clone()
+                    && goal.id == id
+                {
+                    stoken.cancel();
 
-                        // in this case we expect
-                        // Action::perform_goal() to handle the
-                        // cancellation properly
-                        continue;
-                    }
+                    // in this case we expect
+                    // Action::perform_goal() to handle the
+                    // cancellation properly
+                    continue;
                 }
 
                 if this

@@ -2535,16 +2535,16 @@ fn resolve_struct_in_ns(user_ns: &[(Var, Rhs)], var: &str) -> Option<AnySensor> 
     let mut short_lookup: HashMap<String, String> = HashMap::new();
 
     for (v, rhs) in user_ns.iter() {
-        if let Var::Predef { name, namespace } = v {
-            if (*name).as_str() == "short" {
-                let val = match rhs {
-                    Rhs::Val(Val::StringVal(s)) => s.clone(),
-                    _ => {
-                        return None;
-                    }
-                };
-                short_lookup.insert(val, namespace.first()?.clone());
-            }
+        if let Var::Predef { name, namespace } = v
+            && (*name).as_str() == "short"
+        {
+            let val = match rhs {
+                Rhs::Val(Val::StringVal(s)) => s.clone(),
+                _ => {
+                    return None;
+                }
+            };
+            short_lookup.insert(val, namespace.first()?.clone());
         }
     }
     for (v, rhs) in user_ns.iter() {
@@ -2640,7 +2640,7 @@ fn resolve_sensors(user_ns: &[(Var, Rhs)], sensors: &[String]) -> anyhow::Result
     let mut mapped = vec![];
     for sensor in sensors {
         let any = resolve_struct_in_ns(user_ns, sensor)
-            .ok_or(anyhow!("Could not find sensor: {}", &sensor))?;
+            .ok_or(anyhow!("Could not find sensor: {}", sensor))?;
         mapped.push(any);
     }
     Ok(mapped)

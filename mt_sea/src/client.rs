@@ -15,7 +15,10 @@ use zenoh::shm::{
 
 use crate::{
     ShipKind, ShipName, VariableType,
-    net::{CONTROLLER_CLIENT_ID, Packet, PacketKind, Qos, Reliability, Sea, get_domain_id, sanitize_key},
+    net::{
+        CONTROLLER_CLIENT_ID, Packet, PacketKind, Qos, Reliability, Sea, get_domain_id,
+        sanitize_key,
+    },
 };
 
 pub type CoordSender = tokio::sync::broadcast::Sender<(Packet, Option<std::net::SocketAddr>)>;
@@ -771,9 +774,12 @@ impl Client {
                         std::sync::atomic::Ordering::Relaxed,
                     );
                 }
-                if let Err(reason) =
-                    accept_data_payload(&payload_bytes, &push_recv_buff, &push_updated, &push_notify)
-                {
+                if let Err(reason) = accept_data_payload(
+                    &payload_bytes,
+                    &push_recv_buff,
+                    &push_updated,
+                    &push_notify,
+                ) {
                     // Nobody is waiting on an answer, and one dropped
                     // best-effort sample is not an error.
                     debug!("Best-effort payload discarded: {reason}");
@@ -864,7 +870,7 @@ impl Client {
             .replace(heartbeat_tx);
         tokio::spawn(async move {
             while heartbeat_rx.recv().await.is_some() {
-                if let Err(error) = heartbeat_publisher.put(&[0u8; 1]).wait() {
+                if let Err(error) = heartbeat_publisher.put([0u8; 1]).wait() {
                     debug!("Failed to send dedicated coordinator heartbeat: {error}");
                 }
             }
@@ -925,10 +931,10 @@ impl Client {
                                 let aligned = align_bytes(&payload);
                                 match from_bytes::<Packet, rkyv::rancor::Error>(&aligned) {
                                     Ok(packet) => {
-                                        if matches!(packet.data, PacketKind::Wind(_)) {
-                                            if let Err(e) = wind_sender_clone.send(packet.clone()).await {
-                                                debug!("Failed to forward wind packet: {}", e);
-                                            }
+                                        if matches!(packet.data, PacketKind::Wind(_))
+                                            && let Err(e) = wind_sender_clone.send(packet.clone()).await
+                                        {
+                                            debug!("Failed to forward wind packet: {}", e);
                                         }
                                         if let Err(e) = recv_tx_clone.send((packet, None)) {
                                             debug!("Failed to forward coordinator packet: {}", e);
@@ -1015,10 +1021,10 @@ impl Client {
                                     }
                                     received_first = true;
                                 }
-                                if matches!(packet.data, PacketKind::Wind(_)) {
-                                    if let Err(e) = wind_sender_clone.send(packet.clone()).await {
-                                        debug!("Failed to forward wind packet: {}", e);
-                                    }
+                                if matches!(packet.data, PacketKind::Wind(_))
+                                    && let Err(e) = wind_sender_clone.send(packet.clone()).await
+                                {
+                                    debug!("Failed to forward wind packet: {}", e);
                                 }
                                 if let Err(e) = recv_tx_clone.send((packet, None)) {
                                     debug!("Failed to forward coordinator packet: {}", e);
@@ -1297,7 +1303,7 @@ impl Client {
                     &id_bytes,
                     variable_type,
                     &padded_name,
-                    &data,
+                    data,
                     &data_key,
                     id,
                 )
@@ -1314,7 +1320,7 @@ impl Client {
         payload.extend_from_slice(&id_bytes);
         payload.push(variable_type.into());
         payload.extend_from_slice(&padded_name);
-        payload.extend_from_slice(&data);
+        payload.extend_from_slice(data);
         // Moving the Vec transfers ownership to Zenoh; passing &Vec would hit
         // the cloning conversion and copy the whole payload.
         let payload = zenoh::bytes::ZBytes::from(payload);
@@ -1380,7 +1386,11 @@ pub(crate) fn predeclare_sender(
     target_ship_name: &str,
     mode: Reliability,
 ) {
-    let data_key = format!("minot/{}/data/{}", domain_id, sanitize_key(target_ship_name));
+    let data_key = format!(
+        "minot/{}/data/{}",
+        domain_id,
+        sanitize_key(target_ship_name)
+    );
     let result = match mode {
         Reliability::Reliable => cached_querier(session, &data_key).map(|_| ()),
         other => cached_publisher(session, data_key, other).map(|_| ()),
@@ -1391,7 +1401,10 @@ pub(crate) fn predeclare_sender(
 }
 
 pub(crate) fn forget_session_senders(zid: zenoh::session::ZenohId) {
-    PUBLISHERS.lock().unwrap().retain(|((id, _), _), _| *id != zid);
+    PUBLISHERS
+        .lock()
+        .unwrap()
+        .retain(|((id, _), _), _| *id != zid);
     QUERIERS.lock().unwrap().retain(|(id, _), _| *id != zid);
 }
 

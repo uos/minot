@@ -98,11 +98,8 @@ where
     /// `max_concurrent` bounds the work one client can have running, so it
     /// cannot queue unbounded tasks onto the runtime. One is exactly
     /// [`ServiceServer::start`].
-    pub async fn start_concurrent<F, Fut>(
-        this: Arc<Self>,
-        callback: Arc<F>,
-        max_concurrent: usize,
-    ) where
+    pub async fn start_concurrent<F, Fut>(this: Arc<Self>, callback: Arc<F>, max_concurrent: usize)
+    where
         F: Fn(REQ) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<RES, String>> + Send + 'static,
     {
@@ -116,7 +113,7 @@ where
         while let Some(request) = subber.next_archived().await {
             let client = Uuid::from_u128(request.archived().0.to_native());
             if !clients.contains_key(&client) {
-                debug!("Registering new client: {}", &client);
+                debug!("Registering new client: {}", client);
                 let (tx, rx) = mpsc::channel(100);
                 clients.insert(client.to_owned(), tx);
                 tokio::spawn(Self::client_handler(
@@ -159,10 +156,7 @@ where
         Fut: Future<Output = Result<RES, String>> + Send + 'static,
     {
         let pubber: Publisher<(u64, Result<RES, String>)> = match node
-            .create_publisher(
-                format!("/_service_responders/{}", &client.to_string()),
-                Qos::Reliable,
-            )
+            .create_publisher(format!("/_service_responders/{}", client), Qos::Reliable)
             .await
         {
             Ok(pubber) => pubber,
@@ -201,11 +195,7 @@ where
                 };
                 let response = (seq_num, callback(request).await);
                 if let Err(e) = pubber.publish(&response).await {
-                    error!(
-                        "Error publishing response to {}: {}",
-                        &client.to_string(),
-                        e
-                    );
+                    error!("Error publishing response to {}: {}", client, e);
                 }
             });
         }
@@ -312,11 +302,7 @@ where
         let pubber = node.create_publisher(topic, Qos::Reliable).await?;
         // XXX: again what would be a good queue_size?
         let subber = node
-            .create_subscriber(
-                format!("/_service_responders/{}", &id.to_string()),
-                10,
-                Qos::Reliable,
-            )
+            .create_subscriber(format!("/_service_responders/{}", id), 10, Qos::Reliable)
             .await?;
         let pending = Arc::new(PendingResponses::<RES>::default());
         let dispatcher = tokio::spawn(Self::dispatch(subber, Arc::clone(&pending)));
@@ -379,11 +365,11 @@ where
         let publish = match timeout {
             Some(timeout) => select! {
                 _ = sleep(timeout) => Err("Timeout reached while sending request".to_owned()),
-                res = req_handle => res.map_err(|e| format!("Error sending request: {}", &e)),
+                res = req_handle => res.map_err(|e| format!("Error sending request: {}", e)),
             },
             None => req_handle
                 .await
-                .map_err(|e| format!("Error sending request: {}", &e)),
+                .map_err(|e| format!("Error sending request: {}", e)),
         };
         if let Err(error) = publish {
             self.pending.forget(seq_num).await;

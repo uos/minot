@@ -87,29 +87,29 @@ where
         let server = Self {
             action: None,
             pubber_status: node
-                .create_publisher(format!("{}/_action/status", &topic), Qos::Reliable)
+                .create_publisher(format!("{}/_action/status", topic), Qos::Reliable)
                 .await?,
             pubber_feedback: node
-                .create_publisher(format!("{}/_action/feedback", &topic), feedback_qos)
+                .create_publisher(format!("{}/_action/feedback", topic), feedback_qos)
                 .await?,
             service_send_goal: ServiceServer::new(
                 node.clone(),
-                format!("{}/_action/send_goal", &topic),
+                format!("{}/_action/send_goal", topic),
             )
             .await?,
             service_cancel_goal: ServiceServer::new(
                 node.clone(),
-                format!("{}/_action/cancel_goal", &topic),
+                format!("{}/_action/cancel_goal", topic),
             )
             .await?,
             service_get_result: ServiceServer::new(
                 node.clone(),
-                format!("{}/_action/get_result", &topic),
+                format!("{}/_action/get_result", topic),
             )
             .await?,
             service_internal_server: ServiceServer::new(
                 node.clone(),
-                format!("{}/_action/internal_server", &topic),
+                format!("{}/_action/internal_server", topic),
             )
             .await?,
         };
@@ -311,7 +311,7 @@ where
         Ok(Arc::new(Self {
             subber_status: Mutex::new(
                 node.create_subscriber(
-                    format!("{}/_action/status", &topic),
+                    format!("{}/_action/status", topic),
                     subber_queue_size,
                     Qos::Reliable,
                 )
@@ -319,7 +319,7 @@ where
             ),
             subber_feedback: Mutex::new(
                 node.create_subscriber(
-                    format!("{}/_action/feedback", &topic),
+                    format!("{}/_action/feedback", topic),
                     subber_queue_size,
                     feedback_qos,
                 )
@@ -327,22 +327,22 @@ where
             ),
             service_send_goal: ServiceClient::new(
                 node.clone(),
-                format!("{}/_action/send_goal", &topic),
+                format!("{}/_action/send_goal", topic),
             )
             .await?,
             service_cancel_goal: ServiceClient::new(
                 node.clone(),
-                format!("{}/_action/cancel_goal", &topic),
+                format!("{}/_action/cancel_goal", topic),
             )
             .await?,
             service_get_result: ServiceClient::new(
                 node.clone(),
-                format!("{}/_action/get_result", &topic),
+                format!("{}/_action/get_result", topic),
             )
             .await?,
             service_internal_server: ServiceClient::new(
                 node.clone(),
-                format!("{}/_action/internal_server", &topic),
+                format!("{}/_action/internal_server", topic),
             )
             .await?,
         }))

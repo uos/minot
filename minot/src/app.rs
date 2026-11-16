@@ -460,33 +460,30 @@ impl History {
                     if let Some(sel) = current_buff
                         .iter()
                         .position(|el| matches!(el.state, MatSelectState::Diff))
+                        && sel + 1 < current_buff.len()
                     {
-                        if sel + 1 < current_buff.len() {
-                            current_buff[sel].state = MatSelectState::Hidden;
-                            current_buff[sel + 1].state = MatSelectState::Diff;
-                        }
+                        current_buff[sel].state = MatSelectState::Hidden;
+                        current_buff[sel + 1].state = MatSelectState::Diff;
                     }
                 }
                 VerticalDirection::Down => {
                     if let Some(sel) = current_buff
                         .iter()
                         .position(|el| matches!(el.state, MatSelectState::Diff))
+                        && sel - 1 > 0
                     {
-                        if sel - 1 > 0 {
-                            current_buff[sel].state = MatSelectState::Hidden;
-                            current_buff[sel - 1].state = MatSelectState::Diff;
-                        }
+                        current_buff[sel].state = MatSelectState::Hidden;
+                        current_buff[sel - 1].state = MatSelectState::Diff;
                     }
                 }
                 VerticalDirection::Row(idx) => {
                     if let Some(sel) = current_buff
                         .iter()
                         .position(|el| matches!(el.state, MatSelectState::Diff))
+                        && idx < current_buff.len()
                     {
-                        if idx < current_buff.len() {
-                            current_buff[sel].state = MatSelectState::Hidden;
-                            current_buff[idx].state = MatSelectState::Diff;
-                        }
+                        current_buff[sel].state = MatSelectState::Hidden;
+                        current_buff[idx].state = MatSelectState::Diff;
                     }
                 }
             }
@@ -525,66 +522,66 @@ impl History {
     }
 
     pub fn scroll_history(&mut self, direction: HorizontalDirection) {
-        if let Some(curr_cursor) = self.cursor.as_ref() {
-            if let Some(idx) = self.history.iter().position(|(k, _)| k == curr_cursor) {
-                let new_idx = match direction {
-                    HorizontalDirection::Left => {
-                        if idx == 0 {
-                            idx
-                        } else {
-                            idx - 1
-                        }
+        if let Some(curr_cursor) = self.cursor.as_ref()
+            && let Some(idx) = self.history.iter().position(|(k, _)| k == curr_cursor)
+        {
+            let new_idx = match direction {
+                HorizontalDirection::Left => {
+                    if idx == 0 {
+                        idx
+                    } else {
+                        idx - 1
                     }
-                    HorizontalDirection::Right => {
-                        if idx == self.history.len() - 1 {
-                            idx
-                        } else {
-                            idx + 1
-                        }
-                    }
-                    HorizontalDirection::Col(idx) => idx,
-                };
-
-                self.cursor = Some(
-                    self.history
-                        .get(new_idx)
-                        .expect("new history idx not checked correctly")
-                        .clone()
-                        .0,
-                );
-
-                // enable the first entries from the newly focused buffer if there are none in there
-                let new_ref = self.key_of_ref();
-                let new_diff = self.key_of_diff();
-
-                match (new_ref, new_diff) {
-                    (None, None) => {
-                        let mut next_buff = self.history[new_idx].1.lock().unwrap();
-
-                        if let Some(next_ref) = next_buff.first_mut() {
-                            next_ref.state = MatSelectState::Focused;
-                        }
-
-                        if let Some(next_diff) = next_buff.get_mut(2) {
-                            next_diff.state = MatSelectState::Diff;
-                        }
-                    }
-                    (None, Some(_diff_idx)) => {
-                        unreachable!("Diff exists but no ref");
-                    }
-                    (Some(_ref_idx), None) => {
-                        let mut next_buff = self.history[new_idx].1.lock().unwrap();
-
-                        // find next best non-focused hentry
-                        if let Some(n) = next_buff
-                            .iter_mut()
-                            .find(|hentry| !matches!(hentry.state, MatSelectState::Focused))
-                        {
-                            n.state = MatSelectState::Diff;
-                        }
-                    }
-                    (Some(_ref_idx), Some(_diff_idx)) => {}
                 }
+                HorizontalDirection::Right => {
+                    if idx == self.history.len() - 1 {
+                        idx
+                    } else {
+                        idx + 1
+                    }
+                }
+                HorizontalDirection::Col(idx) => idx,
+            };
+
+            self.cursor = Some(
+                self.history
+                    .get(new_idx)
+                    .expect("new history idx not checked correctly")
+                    .clone()
+                    .0,
+            );
+
+            // enable the first entries from the newly focused buffer if there are none in there
+            let new_ref = self.key_of_ref();
+            let new_diff = self.key_of_diff();
+
+            match (new_ref, new_diff) {
+                (None, None) => {
+                    let mut next_buff = self.history[new_idx].1.lock().unwrap();
+
+                    if let Some(next_ref) = next_buff.first_mut() {
+                        next_ref.state = MatSelectState::Focused;
+                    }
+
+                    if let Some(next_diff) = next_buff.get_mut(2) {
+                        next_diff.state = MatSelectState::Diff;
+                    }
+                }
+                (None, Some(_diff_idx)) => {
+                    unreachable!("Diff exists but no ref");
+                }
+                (Some(_ref_idx), None) => {
+                    let mut next_buff = self.history[new_idx].1.lock().unwrap();
+
+                    // find next best non-focused hentry
+                    if let Some(n) = next_buff
+                        .iter_mut()
+                        .find(|hentry| !matches!(hentry.state, MatSelectState::Focused))
+                    {
+                        n.state = MatSelectState::Diff;
+                    }
+                }
+                (Some(_ref_idx), Some(_diff_idx)) => {}
             }
         }
     }
@@ -675,7 +672,7 @@ impl Display for Coordinator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.locked {
             false => f.write_str(&self.state),
-            true => f.write_fmt(format_args!("🔒{}", &self.state)),
+            true => f.write_fmt(format_args!("🔒{}", self.state)),
         }
     }
 }
@@ -1780,7 +1777,7 @@ impl App {
                         None => {
                             error!(
                                 "Received Dyn Wind request for {} but no data available.",
-                                &var
+                                var
                             );
                             continue;
                         }
@@ -1961,7 +1958,7 @@ impl App {
                                     for (_, msg) in bagmsgs.messages.iter() {
                                         *wc.replayed.entry(msg.topic.clone()).or_default() += 1;
                                     }
-                                    report_ended_streams(&mut wc, &kind);
+                                    report_ended_streams(&mut wc, kind);
                                     format_replayed(&wc.replayed)
                                 };
 
@@ -2608,11 +2605,11 @@ impl App {
     }
 
     pub fn wind_toggle_zen(&mut self) {
-        if self.wind_mode() {
-            if let Mode::Wind { hide_compare } = self.mode {
-                self.mode = Mode::Wind {
-                    hide_compare: !hide_compare,
-                }
+        if self.wind_mode()
+            && let Mode::Wind { hide_compare } = self.mode
+        {
+            self.mode = Mode::Wind {
+                hide_compare: !hide_compare,
             }
         }
     }

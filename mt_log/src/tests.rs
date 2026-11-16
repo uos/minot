@@ -313,7 +313,8 @@ mod tui {
             "{rows:#?}"
         );
         assert!(
-            rows.iter().any(|row| row.contains("↳") && row.contains("subscribe")),
+            rows.iter()
+                .any(|row| row.contains("↳") && row.contains("subscribe")),
             "the wrapped tail of the newest entry is cut off: {rows:#?}"
         );
     }
@@ -329,7 +330,10 @@ mod tui {
 
         assert!(rows[0].contains("Logs"), "{rows:#?}");
         assert!(rows[7].contains("entries"), "{rows:#?}");
-        assert!(rows[6].contains("line 39"), "the tail is the newest entry: {rows:#?}");
+        assert!(
+            rows[6].contains("line 39"),
+            "the tail is the newest entry: {rows:#?}"
+        );
     }
 }
 

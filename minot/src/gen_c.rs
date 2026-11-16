@@ -229,10 +229,11 @@ fn resolve_minot_repo_root() -> Result<PathBuf> {
     let manifest_parent = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(PathBuf::from);
-    if let Some(root) = manifest_parent {
-        if root.join("mt_pubsub").exists() && root.join("mt_sea").exists() {
-            return Ok(root);
-        }
+    if let Some(root) = manifest_parent
+        && root.join("mt_pubsub").exists()
+        && root.join("mt_sea").exists()
+    {
+        return Ok(root);
     }
     bail!(
         "Could not find minot repo root with mt_pubsub and mt_sea. Run from repo root or set MINOT_REPO_ROOT."
@@ -2112,10 +2113,10 @@ impl Resolver {
 
 fn find_struct(file: &File, name: &str) -> Option<syn::ItemStruct> {
     for item in &file.items {
-        if let Item::Struct(st) = item {
-            if st.ident == name {
-                return Some(st.clone());
-            }
+        if let Item::Struct(st) = item
+            && st.ident == name
+        {
+            return Some(st.clone());
         }
     }
     None
@@ -2228,12 +2229,11 @@ fn is_vec(ty: &Type) -> Option<&Type> {
     match ty {
         Type::Path(TypePath { path, .. }) => {
             let last = path.segments.last()?.ident.to_string();
-            if last == "Vec" {
-                if let syn::PathArguments::AngleBracketed(args) = &path.segments.last()?.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                        return Some(inner_ty);
-                    }
-                }
+            if last == "Vec"
+                && let syn::PathArguments::AngleBracketed(args) = &path.segments.last()?.arguments
+                && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+            {
+                return Some(inner_ty);
             }
             None
         }

@@ -164,48 +164,48 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             } as usize;
 
             // render reference
-            if curr_history.shows_ref() {
-                if let Some((_key, lmat)) = app.compare.left.as_ref() {
-                    let ltable = lmat.render(precision).unwrap();
-                    if let Some(ltable) = ltable {
-                        let ltable = ltable
-                            .cell_highlight_style(selected_style)
-                            .highlight_spacing(HighlightSpacing::Always)
-                            .block(
-                                Block::new()
-                                    .border_type(BorderType::Plain)
-                                    .borders(Borders::RIGHT)
-                                    .padding(Padding::horizontal(1)),
-                            );
-                        frame.render_stateful_widget(
-                            ltable,
-                            client_base_area,
-                            &mut app.compare.left_state,
+            if curr_history.shows_ref()
+                && let Some((_key, lmat)) = app.compare.left.as_ref()
+            {
+                let ltable = lmat.render(precision).unwrap();
+                if let Some(ltable) = ltable {
+                    let ltable = ltable
+                        .cell_highlight_style(selected_style)
+                        .highlight_spacing(HighlightSpacing::Always)
+                        .block(
+                            Block::new()
+                                .border_type(BorderType::Plain)
+                                .borders(Borders::RIGHT)
+                                .padding(Padding::horizontal(1)),
                         );
-                    }
-                };
-            }
+                    frame.render_stateful_widget(
+                        ltable,
+                        client_base_area,
+                        &mut app.compare.left_state,
+                    );
+                }
+            };
 
             // render diff
-            if curr_history.shows_diff() {
-                if let Some((_key, rmat)) = app.compare.right.as_ref() {
-                    let rtable = rmat.render(precision).unwrap();
-                    if let Some(rtable) = rtable {
-                        let rtable = rtable
-                            .cell_highlight_style(selected_style)
-                            .highlight_spacing(HighlightSpacing::Always)
-                            .block(
-                                Block::new()
-                                    .border_type(BorderType::Plain)
-                                    .borders(Borders::LEFT)
-                                    .padding(Padding::horizontal(2)),
-                            );
-                        frame.render_stateful_widget(
-                            rtable,
-                            client_diff_area,
-                            &mut app.compare.right_state,
+            if curr_history.shows_diff()
+                && let Some((_key, rmat)) = app.compare.right.as_ref()
+            {
+                let rtable = rmat.render(precision).unwrap();
+                if let Some(rtable) = rtable {
+                    let rtable = rtable
+                        .cell_highlight_style(selected_style)
+                        .highlight_spacing(HighlightSpacing::Always)
+                        .block(
+                            Block::new()
+                                .border_type(BorderType::Plain)
+                                .borders(Borders::LEFT)
+                                .padding(Padding::horizontal(2)),
                         );
-                    }
+                    frame.render_stateful_widget(
+                        rtable,
+                        client_diff_area,
+                        &mut app.compare.right_state,
+                    );
                 }
             }
 

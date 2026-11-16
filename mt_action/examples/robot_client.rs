@@ -109,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Sending some goal request");
     for goal in goals.iter() {
-        info!("Sending: {:?}", &goal);
+        info!("Sending: {:?}", goal);
         match ActionClient::send_goal(
             client.clone(),
             ActionSendGoalRequest {
@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Waiting for the results");
     for goal in goals.iter() {
-        info!("Requesting: {:?}", &goal.0);
+        info!("Requesting: {:?}", goal.0);
         match ActionClient::get_result(client.clone(), ActionGetResultRequest { id: goal.0 }, None)
             .await
         {

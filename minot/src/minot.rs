@@ -37,7 +37,7 @@ const EMBED_HIROZ_TURBINE_NAME: &'static str = "embedded_hiroz_turbine";
 #[cfg(feature = "embed-ros1-turbine")]
 const EMBED_ROS1_TURBINE_NAME: &'static str = "embedded_ros1_turbine";
 #[cfg(feature = "embed-mt-pubsub-turbine")]
-const EMBED_RATPUB_TURBINE_NAME: &'static str = "embedded_ratpub_turbine";
+const EMBED_RATPUB_TURBINE_NAME: &str = "embedded_ratpub_turbine";
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ServeCommand {}
@@ -294,7 +294,7 @@ pub(crate) enum Commands {
 
 async fn tui(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
     let path = args.file;
-    println!("Compiling {:#?}", &path.canonicalize()?);
+    println!("Compiling {:#?}", path.canonicalize()?);
     let eval = mt_mtc::compile_file(&path, None, None)?;
     // remove compile feebback
     print!("\x1b[1A");
@@ -346,7 +346,7 @@ async fn tui(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "embed-mt-pubsub-turbine")]
         {
             let wind_name =
-                mt_wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+                mt_wind::get_env_or_default("ratpub_wind_name", EMBED_RATPUB_TURBINE_NAME)?;
 
             tokio::spawn(async move {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -373,7 +373,7 @@ async fn tui(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
                     .canonicalize()
                     .expect("Should have failed in prev compilation.");
                 let joined = cfg_parent.join(cfpath);
-                println!("Compiling separate wind {:#?}", &joined);
+                println!("Compiling separate wind {:#?}", joined);
 
                 mt_mtc::compile_file(&joined, None, None)?
             }
@@ -414,7 +414,7 @@ async fn tui(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "embed-mt-pubsub-turbine")]
         {
             let wind_name =
-                mt_wind::get_env_or_default("wind_ratpub_name", &EMBED_RATPUB_TURBINE_NAME)?;
+                mt_wind::get_env_or_default("wind_ratpub_name", EMBED_RATPUB_TURBINE_NAME)?;
             if mt_wind::mt_pubsub::publisher_registers()? {
                 clients.insert(wind_name.clone() + "_pub");
             }
@@ -988,8 +988,7 @@ async fn async_play(
 
     #[cfg(feature = "embed-mt-pubsub-turbine")]
     {
-        let wind_name =
-            mt_wind::get_env_or_default("ratpub_wind_name", &EMBED_RATPUB_TURBINE_NAME)?;
+        let wind_name = mt_wind::get_env_or_default("ratpub_wind_name", EMBED_RATPUB_TURBINE_NAME)?;
         if mt_wind::mt_pubsub::publisher_registers()? {
             clients.insert(wind_name.clone() + "_pub");
         }
@@ -1486,7 +1485,7 @@ async fn serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
                                         .canonicalize()
                                         .expect("Should have failed in prev compilation.");
                                     let joined = cfg_parent.join(cfpath);
-                                    println!("Compiling separate wind {:#?}", &joined);
+                                    println!("Compiling separate wind {:#?}", joined);
 
                                     mt_mtc::compile_file(&joined, None, None)?
                                 }
@@ -1536,7 +1535,7 @@ async fn serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 let wind_name = mt_wind::get_env_or_default(
                                     "wind_ratpub_name",
-                                    &EMBED_RATPUB_TURBINE_NAME,
+                                    EMBED_RATPUB_TURBINE_NAME,
                                 )?;
                                 if mt_wind::mt_pubsub::publisher_registers()? {
                                     clients.insert(wind_name.clone() + "_pub");
@@ -1560,7 +1559,7 @@ async fn serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
                         let ratpub_ready_rx = {
                             let wind_name = mt_wind::get_env_or_default(
                                 "ratpub_wind_name",
-                                &EMBED_RATPUB_TURBINE_NAME,
+                                EMBED_RATPUB_TURBINE_NAME,
                             )?;
 
                             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();

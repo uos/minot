@@ -591,13 +591,11 @@ where
                             break;
                         }
                     }
-                    Some(PlayCount::Amount(count)) => {
-                        if rel_since_begin >= *count {
-                            breaked_until = true;
-                            break_log_time = Some(header.log_time);
-                            reached_end_naturally = false;
-                            break;
-                        }
+                    Some(PlayCount::Amount(count)) if rel_since_begin >= *count => {
+                        breaked_until = true;
+                        break_log_time = Some(header.log_time);
+                        reached_end_naturally = false;
+                        break;
                     }
                     _ => {}
                 }
@@ -606,19 +604,19 @@ where
                     .get_topic_meta(&channel.topic)
                     .ok_or(anyhow!("Topic does not exist."))?;
 
-                if let Some((until_sensors, pc)) = &until_sensor {
-                    if check_until_sensor(
+                if let Some((until_sensors, pc)) = &until_sensor
+                    && check_until_sensor(
                         until_sensors,
                         &channel.topic,
                         &topic_meta.topic_type,
                         &mut until_sensor_counter,
                         pc,
-                    )? {
-                        breaked_until = true;
-                        break_log_time = Some(header.log_time);
-                        reached_end_naturally = false;
-                        break;
-                    }
+                    )?
+                {
+                    breaked_until = true;
+                    break_log_time = Some(header.log_time);
+                    reached_end_naturally = false;
+                    break;
                 }
 
                 let (pass, send_type) =
@@ -645,11 +643,11 @@ where
                 }
                 if len_before != msgs.len() {
                     rel_since_begin += 1;
-                    if let Some(PlayCount::Amount(count)) = until {
-                        if rel_since_begin >= *count {
-                            reached_end_naturally = false;
-                            break;
-                        }
+                    if let Some(PlayCount::Amount(count)) = until
+                        && rel_since_begin >= *count
+                    {
+                        reached_end_naturally = false;
+                        break;
                     }
                 }
             }
@@ -891,28 +889,26 @@ fn collect_until_db3(
                     break;
                 }
             }
-            Some(PlayCount::Amount(count)) => {
-                if rel_since_begin >= *count {
-                    breaked_until = true;
-                    reached_end_naturally = false;
-                    break;
-                }
+            Some(PlayCount::Amount(count)) if rel_since_begin >= *count => {
+                breaked_until = true;
+                reached_end_naturally = false;
+                break;
             }
             _ => {}
         }
 
-        if let Some((until_sensors, pc)) = &until_sensor {
-            if check_until_sensor(
+        if let Some((until_sensors, pc)) = &until_sensor
+            && check_until_sensor(
                 until_sensors,
                 &topic_name,
                 &topic_type,
                 &mut until_sensor_counter,
                 pc,
-            )? {
-                breaked_until = true;
-                reached_end_naturally = false;
-                break;
-            }
+            )?
+        {
+            breaked_until = true;
+            reached_end_naturally = false;
+            break;
         }
 
         let (pass, send_type) = match_send_sensor(send_sensor, &topic_name, &topic_type);
@@ -937,11 +933,11 @@ fn collect_until_db3(
         }
         if len_before != msgs.len() {
             rel_since_begin += 1;
-            if let Some(PlayCount::Amount(count)) = until {
-                if rel_since_begin >= *count {
-                    reached_end_naturally = false;
-                    break;
-                }
+            if let Some(PlayCount::Amount(count)) = until
+                && rel_since_begin >= *count
+            {
+                reached_end_naturally = false;
+                break;
             }
         }
     }

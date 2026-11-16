@@ -146,9 +146,11 @@ impl crate::Cannon for NetworkShipImpl {
             Arc::new(to_bytes::<rkyv::rancor::Error>(data).expect("Could not serialize data"));
 
         Self::shoot_bytes(
-            &self.async_sends_in_flight,
-            &self.client,
-            &self.runtime_handle,
+            SendContext {
+                async_sends_in_flight: &self.async_sends_in_flight,
+                client: &self.client,
+                runtime_handle: &self.runtime_handle,
+            },
             targets,
             id,
             data_bytes,
@@ -351,17 +353,27 @@ impl crate::Cannon for NetworkShipImpl {
     }
 }
 
+/// What a send needs from its ship.
+struct SendContext<'a> {
+    async_sends_in_flight: &'a Arc<std::sync::Mutex<HashMap<AsyncSendKey, SendSlots>>>,
+    client: &'a Arc<tokio::sync::Mutex<Client>>,
+    runtime_handle: &'a tokio::runtime::Handle,
+}
+
 impl NetworkShipImpl {
-    async fn shoot_bytes<'b>(
-        async_sends_in_flight: &Arc<std::sync::Mutex<HashMap<AsyncSendKey, SendSlots>>>,
-        client: &Arc<tokio::sync::Mutex<Client>>,
-        runtime_handle: &tokio::runtime::Handle,
-        targets: &'b [crate::NetworkShipAddress],
+    async fn shoot_bytes(
+        context: SendContext<'_>,
+        targets: &[crate::NetworkShipAddress],
         id: u32,
         data_bytes: Arc<AlignedVec>,
         variable_type: VariableType,
         variable_name: &str,
     ) -> anyhow::Result<()> {
+        let SendContext {
+            async_sends_in_flight,
+            client,
+            runtime_handle,
+        } = context;
         // Try every target before returning an error.
         let mut deferred_error: Option<anyhow::Error> = None;
 
@@ -511,11 +523,11 @@ impl crate::Ship for NetworkShipImpl {
         // The coordinator pushes route updates, so the cache is authoritative.
         // ShipKind::Rat bypasses it: TUI catch, the comparison loop and
         // RatAction{Shoot} delivery all need the coordinator to see the request.
-        if !self.bypass_cache {
-            if let Some(cached) = self.route_cache.read().unwrap().get(variable_name).cloned() {
-                debug!("ask_for_action: cache hit for {}", variable_name);
-                return Ok(cached);
-            }
+        if !self.bypass_cache
+            && let Some(cached) = self.route_cache.read().unwrap().get(variable_name).cloned()
+        {
+            debug!("ask_for_action: cache hit for {}", variable_name);
+            return Ok(cached);
         }
 
         debug!(
@@ -1132,7 +1144,7 @@ impl NetworkShipImpl {
         let heartbeat_send = client.heartbeat_channel();
         let client = Arc::new(tokio::sync::Mutex::new(client));
 
-        info!("{:?} Registering for network...", &kind);
+        info!("{:?} Registering for network...", kind);
 
         let try_register = || async {
             timeout(timing.registration_timeout(), async {
@@ -1143,7 +1155,7 @@ impl NetworkShipImpl {
 
         let disconnect_rx = match try_register().await {
             Ok(Ok(handle)) => {
-                info!("{:?} Registered.", &kind);
+                info!("{:?} Registered.", kind);
                 handle
             }
             Ok(Err(e)) => return Err(e),
@@ -1157,14 +1169,14 @@ impl NetworkShipImpl {
                 // the readiness wait.
                 match try_register().await {
                     Ok(Ok(handle)) => {
-                        info!("{:?} Registered.", &kind);
+                        info!("{:?} Registered.", kind);
                         handle
                     }
                     Ok(Err(e)) => return Err(e),
                     Err(_elapsed) => {
                         return Err(anyhow::anyhow!(
                             "{:?} Registration timed out — no coordinator reachable",
-                            &kind
+                            kind
                         ));
                     }
                 }
@@ -1320,9 +1332,11 @@ impl NetworkShipImpl {
                                                     let replay_variable = variable.clone();
                                                     tokio::spawn(async move {
                                                         if let Err(error) = NetworkShipImpl::shoot_bytes(
-                                                            &sends,
-                                                            &client,
-                                                            &runtime_handle,
+                                                            SendContext {
+                                                                async_sends_in_flight: &sends,
+                                                                client: &client,
+                                                                runtime_handle: &runtime_handle,
+                                                            },
                                                             &targets,
                                                             id,
                                                             retained.bytes,
