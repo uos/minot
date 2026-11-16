@@ -11,7 +11,7 @@ Part of the [minot](https://minot.steado.tech) family of crates.
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_pubsub = "0.15.0"
+mt_pubsub = "0.15.1"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 
