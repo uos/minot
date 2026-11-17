@@ -267,3 +267,61 @@ async fn multicast_discovers_default_peers_without_a_tcp_coordinator() {
     publisher.publish(&"discovered".into()).await.unwrap();
     assert_eq!(receive(&mut sub).await, "discovered");
 }
+
+/// Zenoh peers send over the network and report it in the transfer report
+/// that QUIC and the coordinated transport feed as well.
+#[cfg(feature = "shm")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn zenoh_peers_feed_the_transfer_report() {
+    use mt_pubsub::PeerTransport;
+    let zenoh = |name: &str| {
+        NodeConfig::new(name)
+            .peer_transport(PeerTransport::Zenoh)
+            .mode(Qos::Reliable)
+            .local_only(true)
+    };
+    let endpoint = free_endpoint();
+    let _seed = Node::create(
+        zenoh("seed")
+            .listen_endpoint(endpoint.clone())
+            .peer_endpoints(vec![]),
+    )
+    .await
+    .unwrap();
+    let writer = Node::create(zenoh("writer").peer_endpoints(vec![endpoint.clone()]))
+        .await
+        .unwrap();
+    let reader = Node::create(zenoh("reader").peer_endpoints(vec![endpoint]))
+        .await
+        .unwrap();
+    let mut sub = reader
+        .create_subscriber::<String>("/zenoh/report".to_owned(), 16, Qos::Reliable)
+        .await
+        .unwrap();
+    let publisher = writer
+        .create_publisher::<String>("/zenoh/report".to_owned(), Qos::Reliable)
+        .await
+        .unwrap();
+    publisher
+        .wait_for_subscribers(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let before = mt_sea::client::shm_transfer_stats();
+    let large = "x".repeat(2 << 20);
+    publisher.publish(&large).await.unwrap();
+    assert_eq!(receive(&mut sub).await.len(), large.len());
+    publisher.publish(&"small".to_owned()).await.unwrap();
+    assert_eq!(receive(&mut sub).await, "small");
+
+    // The counters belong to the whole process, and the other tests of this
+    // file run alongside, so they only bound the traffic from below.
+    let delta = mt_sea::client::shm_transfer_stats().since(before);
+    assert!(delta.network_sends >= 2, "{delta:?}");
+    assert!(delta.network_send_bytes > large.len() as u64, "{delta:?}");
+    assert!(delta.network_receives >= 2, "{delta:?}");
+    assert!(
+        delta.network_receive_bytes > large.len() as u64,
+        "{delta:?}"
+    );
+}

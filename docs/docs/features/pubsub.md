@@ -77,8 +77,20 @@ Peer `Reliable` delivery acknowledges subscriber queue acceptance. Missing
 acknowledgements or loss of a fatal reliable node cancels the peer run.
 Transient-local writers provide retained samples directly to late subscribers.
 Peer loss detection uses the QUIC connection or Zenoh liveliness. Coordinator
-heartbeat/reconnect settings continue to apply to coordinated modes. Explicit
-Minot SHM pool controls remain on the coordinated path.
+heartbeat/reconnect settings continue to apply to coordinated modes.
+
+### Shared memory
+
+With the `shm` feature, QUIC peers on one machine pass samples of 16 KiB and
+more through shared memory. Zenoh peers send every sample over the network.
+The coordinated transport uses a Zenoh shared memory pool for messages of 1 MiB
+and more (`--shm-threshold`). Zenoh locks that pool in memory, so it takes
+16 MiB, at most half of the memory lock limit (`ulimit -l`), and a message that
+does not fit goes over the network. `--shm-size` sets the pool size.
+
+Every 30 seconds (`MINOT_SHM_STATS_INTERVAL_SECS`), Minot reports how many bytes
+and messages went through shared memory and over the network, the same way for
+every transport.
 
 !!! info
 

@@ -5,6 +5,7 @@ mod quic;
 mod quic_plain;
 mod quic_shm;
 mod quic_stream;
+mod transfer;
 /// Shared memory use of the QUIC peer transport: samples (sent, received).
 pub use quic_shm::shm_samples as peer_shm_samples;
 pub use quic_stream::{BudgetScope, QuicStats, SamplePolicy};

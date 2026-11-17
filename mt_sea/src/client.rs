@@ -145,18 +145,82 @@ pub fn reset_shm_transfer_stats() {
     NETWORK_RECEIVE_BYTES.store(0, Relaxed);
 }
 
+/// Records the payload transfers of a transport other than Zenoh, so every
+/// transport feeds the same [`shm_transfer_stats`] and reports alike.
+#[cfg(feature = "shm")]
+pub mod transfer {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    /// A sample goes to a peer that shares memory with this process.
+    pub fn shm_send_attempt() {
+        super::SHM_SEND_ATTEMPTS.fetch_add(1, Relaxed);
+    }
+
+    /// A sample of `bytes` passed through shared memory.
+    pub fn shm_sent(bytes: usize) {
+        super::SHM_SEND_SUCCESSES.fetch_add(1, Relaxed);
+        super::SHM_SEND_BYTES.fetch_add(bytes as u64, Relaxed);
+    }
+
+    /// Shared memory failed for a sample, which then goes over the network.
+    pub fn shm_send_fallback() {
+        super::SHM_SEND_FALLBACKS.fetch_add(1, Relaxed);
+    }
+
+    /// A sample of `bytes` arrived through shared memory.
+    pub fn shm_received(bytes: usize) {
+        super::SHM_RECEIVES.fetch_add(1, Relaxed);
+        super::SHM_RECEIVE_BYTES.fetch_add(bytes as u64, Relaxed);
+    }
+
+    /// A sample of `bytes` went out over the network.
+    pub fn network_sent(bytes: usize) {
+        super::NETWORK_SENDS.fetch_add(1, Relaxed);
+        super::NETWORK_SEND_BYTES.fetch_add(bytes as u64, Relaxed);
+    }
+
+    /// A sample of `bytes` arrived over the network.
+    pub fn network_received(bytes: usize) {
+        super::NETWORK_RECEIVES.fetch_add(1, Relaxed);
+        super::NETWORK_RECEIVE_BYTES.fetch_add(bytes as u64, Relaxed);
+    }
+}
+
 #[cfg(feature = "shm")]
 fn is_shm_enabled() -> bool {
     crate::network::is_shm_runtime_available() && !crate::network::is_shm_disabled()
 }
 
-/// SHM buffer size from the environment, or the default.
+/// SHM buffer size from `MINOT_SHM_SIZE`, or the default within what this
+/// process may lock.
 #[cfg(feature = "shm")]
 fn get_shm_buffer_size() -> usize {
     std::env::var("MINOT_SHM_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_SHM_BUFFER_SIZE)
+        .unwrap_or_else(|| DEFAULT_SHM_BUFFER_SIZE.min(lockable_shm_size()))
+}
+
+/// The largest pool Zenoh can create here. Zenoh locks its segments in
+/// memory, the publisher's pool and every pool a subscriber maps, so a pool
+/// gets half of the memory lock limit (`ulimit -l`, 8 MiB on most Linux
+/// systems). Without a limit, any size works.
+#[cfg(feature = "shm")]
+fn lockable_shm_size() -> usize {
+    #[cfg(unix)]
+    {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit only writes the limit into `limit`.
+        if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) } == 0
+            && limit.rlim_cur != libc::RLIM_INFINITY
+        {
+            return usize::try_from(limit.rlim_cur / 2).unwrap_or(usize::MAX);
+        }
+    }
+    usize::MAX
 }
 
 #[cfg(feature = "shm")]
@@ -273,9 +337,7 @@ pub struct Client {
     session: std::sync::Arc<zenoh::Session>,
     domain_id: u16,
     #[cfg(feature = "shm")]
-    shm_state: StdRwLock<Option<ShmState>>,
-    #[cfg(feature = "shm")]
-    shm_initialized: std::sync::atomic::AtomicBool,
+    shm: ShmPool,
 }
 
 impl std::fmt::Debug for Client {
@@ -380,27 +442,38 @@ fn format_shm_error(err_str: &str, requested_size: usize) -> String {
     }
 }
 
-impl Client {
+/// Zenoh shared memory for the large messages of one client. It is created on
+/// first use and grows up to `MINOT_SHM_MAX_MESSAGE_SIZE` for a larger message.
+#[cfg(feature = "shm")]
+#[derive(Default)]
+struct ShmPool {
+    state: StdRwLock<Option<ShmState>>,
+    initialized: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(feature = "shm")]
+impl std::fmt::Debug for ShmPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShmPool")
+            .field("capacity", &self.capacity())
+            .finish()
+    }
+}
+
+#[cfg(feature = "shm")]
+impl ShmPool {
     /// Get the SHM provider, creating it on the first call.
     #[cfg(feature = "shm")]
-    fn get_or_init_shm(&self) -> Option<std::sync::Arc<ShmProvider<PosixShmProviderBackend>>> {
+    fn provider(&self) -> Option<std::sync::Arc<ShmProvider<PosixShmProviderBackend>>> {
         if !is_shm_enabled() {
             return None;
         }
 
-        if self
-            .shm_initialized
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return self
-                .shm_state
-                .read()
-                .ok()?
-                .as_ref()
-                .map(|s| s.provider.clone());
+        if self.initialized.load(std::sync::atomic::Ordering::Acquire) {
+            return self.state.read().ok()?.as_ref().map(|s| s.provider.clone());
         }
 
-        let mut state = self.shm_state.write().ok()?;
+        let mut state = self.state.write().ok()?;
         if state.is_none() {
             let initial_size = get_shm_buffer_size();
             match create_shm_provider(initial_size) {
@@ -410,7 +483,7 @@ impl Client {
                         initial_size
                     );
                     *state = Some(shm_state);
-                    self.shm_initialized
+                    self.initialized
                         .store(true, std::sync::atomic::Ordering::Release);
                 }
                 Err(e) => {
@@ -428,17 +501,20 @@ impl Client {
 
     /// Try to grow the SHM pool to fit a larger message.
     #[cfg(feature = "shm")]
-    fn try_grow_shm(
+    fn grow(
         &self,
         required_size: usize,
     ) -> Option<std::sync::Arc<ShmProvider<PosixShmProviderBackend>>> {
-        let mut state = self.shm_state.write().ok()?;
+        let mut state = self.state.write().ok()?;
 
         let current_capacity = state.as_ref().map(|s| s.capacity).unwrap_or(0);
 
-        let new_capacity = required_size
+        let mut new_capacity = required_size
             .max(current_capacity.saturating_mul(2))
             .min(get_shm_max_message_size());
+        if std::env::var_os("MINOT_SHM_SIZE").is_none() {
+            new_capacity = new_capacity.min(lockable_shm_size()).max(required_size);
+        }
 
         debug!(
             "Growing SHM pool from {} to {} bytes",
@@ -464,14 +540,109 @@ impl Client {
 
     /// Current SHM capacity.
     #[cfg(feature = "shm")]
-    fn shm_capacity(&self) -> usize {
-        self.shm_state
+    fn capacity(&self) -> usize {
+        self.state
             .read()
             .ok()
             .and_then(|s| s.as_ref().map(|state| state.capacity))
             .unwrap_or(0)
     }
 
+    /// A shared buffer of `len` bytes that `fill` writes, or `None` when the
+    /// message has to go over the network instead.
+    async fn alloc(&self, len: usize, fill: impl FnOnce(&mut [u8])) -> Option<zenoh::shm::ZShm> {
+        // Over the lock limit a pool cannot be created, so such a message goes
+        // over the network without trying.
+        if len > lockable_shm_size() && std::env::var_os("MINOT_SHM_SIZE").is_none() {
+            debug!(
+                "Message of {} bytes exceeds the lockable shared memory of {} bytes. Using network transport",
+                len,
+                lockable_shm_size()
+            );
+            return None;
+        }
+        let mut provider = self.provider()?;
+
+        let max_message_size = get_shm_max_message_size();
+        if len > max_message_size {
+            warn!(
+                "Message size {} exceeds the {} byte SHM limit. Using network transport",
+                len, max_message_size
+            );
+            return None;
+        }
+
+        if len > self.capacity() {
+            debug!(
+                "Message ({} bytes) exceeds current SHM capacity ({} bytes), growing pool before allocation",
+                len,
+                self.capacity()
+            );
+            provider = match self.grow(len) {
+                Some(provider) => provider,
+                None => {
+                    warn!(
+                        "Could not grow the SHM pool for {} bytes. Using network transport",
+                        len
+                    );
+                    return None;
+                }
+            };
+        }
+
+        // Two attempts: the second runs after the pool has grown.
+        for attempt in 0..2 {
+            let allocated = match tokio::time::timeout(
+                get_shm_allocation_timeout(),
+                provider.alloc(len).with_policy::<BlockOn<GarbageCollect>>(),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    warn!(
+                        "SHM allocation for {} bytes timed out. Using network transport",
+                        len
+                    );
+                    return None;
+                }
+            };
+            match allocated {
+                Ok(mut buffer) => {
+                    fill(&mut buffer[..len]);
+                    return Some(buffer.into());
+                }
+                Err(_) if attempt == 0 => {
+                    if len > self.capacity() {
+                        debug!(
+                            "Message ({} bytes) exceeds current SHM capacity ({} bytes), growing pool",
+                            len,
+                            self.capacity()
+                        );
+                        if let Some(grown) = self.grow(len) {
+                            provider = grown;
+                            continue;
+                        }
+                    }
+                    warn!(
+                        "SHM allocation failed for {} bytes, falling back to network transport",
+                        len
+                    );
+                    return None;
+                }
+                Err(_) => {
+                    warn!(
+                        "SHM allocation failed after pool growth, falling back to network transport"
+                    );
+                    return None;
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Client {
     /// Try to send via SHM with automatic pool growth. Returns:
     /// - Some(Ok(())) if sent successfully via SHM
     /// - Some(Err(e)) if there was an error during sending
@@ -488,131 +659,48 @@ impl Client {
         data_key: &str,
         id: u32,
     ) -> Option<anyhow::Result<()>> {
-        let mut shm_provider = self.get_or_init_shm()?;
+        let shm_immut = self
+            .shm
+            .alloc(total_len, |buffer| {
+                buffer[0..4].copy_from_slice(id_bytes);
+                buffer[4] = variable_type.into();
+                buffer[5..69].copy_from_slice(padded_name);
+                buffer[69..].copy_from_slice(data);
+            })
+            .await?;
+        debug!("Sending {} bytes via SHM to {}", total_len, data_key);
 
-        let max_message_size = get_shm_max_message_size();
-        if total_len > max_message_size {
-            warn!(
-                "Message size {} exceeds the {} byte SHM limit. Using network transport",
-                total_len, max_message_size
-            );
-            return None;
-        }
-
-        let current_capacity = self.shm_capacity();
-        if total_len > current_capacity {
-            debug!(
-                "Message ({} bytes) exceeds current SHM capacity ({} bytes), growing pool before allocation",
-                total_len, current_capacity
-            );
-            shm_provider = match self.try_grow_shm(total_len) {
-                Some(provider) => provider,
-                None => {
-                    warn!(
-                        "Could not grow the SHM pool for {} bytes. Using network transport",
-                        total_len
-                    );
-                    return None;
-                }
-            };
-        }
-
-        // Two attempts: the second runs after the pool has grown.
-        for attempt in 0..2 {
-            let shm_result = match tokio::time::timeout(
-                get_shm_allocation_timeout(),
-                shm_provider
-                    .alloc(total_len)
-                    .with_policy::<BlockOn<GarbageCollect>>(),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => {
-                    warn!(
-                        "SHM allocation for {} bytes timed out. Using network transport",
-                        total_len
-                    );
-                    return None;
+        loop {
+            let replies = match self.session.get(data_key).payload(shm_immut.clone()).wait() {
+                Ok(r) => r,
+                Err(e) => {
+                    return Some(Err(anyhow!("Failed to send data query: {}", e)));
                 }
             };
 
-            match shm_result {
-                Ok(mut shm_buf) => {
-                    shm_buf[0..4].copy_from_slice(id_bytes);
-                    shm_buf[4] = variable_type.into();
-                    shm_buf[5..69].copy_from_slice(padded_name);
-                    shm_buf[69..total_len].copy_from_slice(data);
-
-                    let shm_immut: zenoh::shm::ZShm = shm_buf.into();
-                    debug!("Sending {} bytes via SHM to {}", total_len, data_key);
-
-                    loop {
-                        let replies =
-                            match self.session.get(data_key).payload(shm_immut.clone()).wait() {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    return Some(Err(anyhow!("Failed to send data query: {}", e)));
-                                }
-                            };
-
-                        match replies.recv_async().await {
-                            Ok(reply) => match reply.result() {
-                                Ok(_sample) => {
-                                    SHM_SEND_SUCCESSES
-                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    SHM_SEND_BYTES.fetch_add(
-                                        total_len as u64,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                    );
-                                    debug!(
-                                        "Sent data id {} to {} via SHM (ACK received)",
-                                        id, data_key
-                                    );
-                                    return Some(Ok(()));
-                                }
-                                Err(err) => {
-                                    let err_payload = err.payload().to_bytes();
-                                    let err_msg = String::from_utf8_lossy(&err_payload);
-                                    warn!("Receiver error for id {}: {}", id, err_msg);
-                                    tokio::task::yield_now().await;
-                                    continue;
-                                }
-                            },
-                            Err(_) => {
-                                tokio::task::yield_now().await;
-                                continue;
-                            }
-                        }
+            match replies.recv_async().await {
+                Ok(reply) => match reply.result() {
+                    Ok(_sample) => {
+                        SHM_SEND_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        SHM_SEND_BYTES
+                            .fetch_add(total_len as u64, std::sync::atomic::Ordering::Relaxed);
+                        debug!("Sent data id {} to {} via SHM (ACK received)", id, data_key);
+                        return Some(Ok(()));
                     }
-                }
-                Err(_) if attempt == 0 => {
-                    let current_capacity = self.shm_capacity();
-                    if total_len > current_capacity {
-                        debug!(
-                            "Message ({} bytes) exceeds current SHM capacity ({} bytes), growing pool",
-                            total_len, current_capacity
-                        );
-                        if let Some(new_provider) = self.try_grow_shm(total_len) {
-                            shm_provider = new_provider;
-                            continue;
-                        }
+                    Err(err) => {
+                        let err_payload = err.payload().to_bytes();
+                        let err_msg = String::from_utf8_lossy(&err_payload);
+                        warn!("Receiver error for id {}: {}", id, err_msg);
+                        tokio::task::yield_now().await;
+                        continue;
                     }
-                    warn!(
-                        "SHM allocation failed for {} bytes, falling back to network transport",
-                        total_len
-                    );
-                    return None;
-                }
+                },
                 Err(_) => {
-                    warn!(
-                        "SHM allocation failed after pool growth, falling back to network transport"
-                    );
-                    return None;
+                    tokio::task::yield_now().await;
+                    continue;
                 }
             }
         }
-        None
     }
 
     pub async fn init(
@@ -822,9 +910,7 @@ impl Client {
             session,
             domain_id,
             #[cfg(feature = "shm")]
-            shm_state: StdRwLock::new(None),
-            #[cfg(feature = "shm")]
-            shm_initialized: std::sync::atomic::AtomicBool::new(false),
+            shm: ShmPool::default(),
         })
     }
 

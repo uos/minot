@@ -1,4 +1,5 @@
-//! Shared memory between QUIC peers on one host.
+//! Shared memory between QUIC peers on one host, with the `shm` feature as for
+//! Zenoh. Without it, every sample goes over QUIC.
 //!
 //! A large sample is written once into an anonymous memory object, and its
 //! file descriptor is passed to every subscriber on the same host over a Unix
@@ -17,9 +18,14 @@
 //! everything else, including order and acknowledgements of reliable samples;
 //! see `quic.rs`.
 
-// Without shared memory the settings and counters below go unused.
+// Without shared memory, which needs the `shm` feature and a Unix other than
+// iOS and Android, the settings and counters below go unused.
 #![cfg_attr(
-    not(all(unix, not(any(target_os = "ios", target_os = "android")))),
+    not(all(
+        feature = "shm",
+        unix,
+        not(any(target_os = "ios", target_os = "android"))
+    )),
     allow(dead_code)
 )]
 
@@ -47,13 +53,25 @@ pub fn shm_samples() -> (u64, u64) {
     )
 }
 
-#[cfg(all(unix, not(any(target_os = "ios", target_os = "android"))))]
+#[cfg(all(
+    feature = "shm",
+    unix,
+    not(any(target_os = "ios", target_os = "android"))
+))]
 pub(crate) use unix::{Hub, Lazy, Link};
 
-#[cfg(not(all(unix, not(any(target_os = "ios", target_os = "android")))))]
+#[cfg(not(all(
+    feature = "shm",
+    unix,
+    not(any(target_os = "ios", target_os = "android"))
+)))]
 pub(crate) use none::{Hub, Lazy, Link};
 
-#[cfg(all(unix, not(any(target_os = "ios", target_os = "android"))))]
+#[cfg(all(
+    feature = "shm",
+    unix,
+    not(any(target_os = "ios", target_os = "android"))
+))]
 mod unix {
     use super::disabled;
     use bytes::Bytes;
@@ -184,7 +202,7 @@ mod unix {
             let bytes = self.bytes;
             self.made
                 .get_or_insert_with(|| {
-                    let worth = bytes.len() >= super::threshold() && bytes.len() <= super::MAX;
+                    let worth = super::worth_sharing(bytes.len());
                     let file = worth.then(|| anonymous().and_then(|fd| fill(fd, bytes)))?;
                     file.inspect_err(|error| log::debug!("no shared memory for sample: {error}"))
                         .ok()
@@ -280,6 +298,7 @@ mod unix {
                 held.push_back((Instant::now(), Arc::clone(file)));
             }
             super::SENT.fetch_add(1, Ordering::Relaxed);
+            crate::transfer::shm_sent(len);
             Ok(())
         }
 
@@ -438,6 +457,7 @@ mod unix {
                 let len = usize::try_from(len).map_err(|_| other("oversized shared sample"))?;
                 let bytes = map(fd.ok_or_else(|| other("frame without descriptor"))?, len)?;
                 super::RECEIVED.fetch_add(1, Ordering::Relaxed);
+                crate::transfer::shm_received(len);
                 match frame[0] {
                     LOSSY => deliver(hash, bytes),
                     ORDERED => {
@@ -549,9 +569,19 @@ fn threshold() -> usize {
 /// The transport's own limit for one sample.
 const MAX: usize = 1 << 30;
 
+/// Whether a sample of `len` bytes goes through shared memory when its peer
+/// shares memory with this process. Smaller samples stay on QUIC.
+pub(crate) fn worth_sharing(len: usize) -> bool {
+    len >= threshold() && len <= MAX
+}
+
 /// Windows, and phones, where apps are sandboxed from each other: everything
 /// stays on the network.
-#[cfg(not(all(unix, not(any(target_os = "ios", target_os = "android")))))]
+#[cfg(not(all(
+    feature = "shm",
+    unix,
+    not(any(target_os = "ios", target_os = "android"))
+)))]
 mod none {
     use bytes::Bytes;
     use std::{io, sync::Arc, time::Duration};

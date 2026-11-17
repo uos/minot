@@ -24,6 +24,7 @@ use crate::peer::{
 };
 use crate::quic_shm as shm;
 use crate::quic_stream::{self as stream, QuicStats, Sample, SamplePolicy, SampleStreams, bump};
+use crate::transfer;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use bytes::{BufMut, Bytes, BytesMut};
 use mt_sea::{ArchivedMessage, Qos, Reliability, Sendable};
@@ -450,6 +451,7 @@ impl Inner {
     /// A datagram: topic hash, then the sample.
     fn deliver_datagram(&self, bytes: &Bytes) {
         if bytes.len() > 8 {
+            transfer::network_received(bytes.len() - 8);
             let hash = u64::from_le_bytes(bytes[..8].try_into().unwrap());
             self.deliver_lossy(hash, &bytes.slice(8..));
         }
@@ -690,6 +692,7 @@ impl Inner {
                         let read = stream::unix_ns();
                         bump(&node.counters.received);
                         node.counters.received_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        transfer::network_received(bytes.len().saturating_sub(8));
                         if bytes.len() > 8 {
                             let hash = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                             if stream::trace().is_some() {
@@ -902,6 +905,7 @@ impl Inner {
                 ensure!(len as usize <= MAX_SAMPLE, "oversized sample");
                 let mut bytes = BytesMut::zeroed(len as usize);
                 recv.read_exact(&mut bytes).await?;
+                transfer::network_received(bytes.len());
                 bytes.freeze()
             };
             let accepted = self.deliver_ordered(hash, &bytes, ack).await;
@@ -1267,14 +1271,21 @@ impl<T: Sendable> QuicPublisher<T> {
                         datagram.put_slice(&bytes);
                         datagram.freeze()
                     });
-                    let _ = conn.send_datagram(datagram.clone());
+                    if conn.send_datagram(datagram.clone()).is_ok() {
+                        transfer::network_sent(bytes.len());
+                    }
                     continue;
                 }
                 if let Some(link) = link {
+                    let worth = shm::worth_sharing(bytes.len());
+                    if worth {
+                        transfer::shm_send_attempt();
+                    }
                     match link.lossy(state.hash, &mut shared) {
                         // Passed, or dropped for a subscriber that is behind.
                         Ok(()) => continue,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(_) if worth => transfer::shm_send_fallback(),
                         Err(_) => {}
                     }
                 }
@@ -1284,6 +1295,7 @@ impl<T: Sendable> QuicPublisher<T> {
                     SampleStreams::new(inner.id, inner.samples, Arc::clone(&inner.counters))
                 });
                 streams.offer(Sample::new(conn, peer, state.hash, bytes.clone(), sequence));
+                transfer::network_sent(bytes.len());
             }
             return Ok(());
         }
@@ -1313,7 +1325,17 @@ impl<T: Sendable> QuicPublisher<T> {
                     }
                     let channel = channels.get_mut(peer).unwrap();
                     let token = match link {
-                        Some(link) => link.ordered(state.hash, &mut shared).await.ok(),
+                        Some(link) => {
+                            let worth = shm::worth_sharing(bytes.len());
+                            if worth {
+                                transfer::shm_send_attempt();
+                            }
+                            let token = link.ordered(state.hash, &mut shared).await.ok();
+                            if worth && token.is_none() {
+                                transfer::shm_send_fallback();
+                            }
+                            token
+                        }
                         None => None,
                     };
                     if let Some(token) = token {
@@ -1324,6 +1346,7 @@ impl<T: Sendable> QuicPublisher<T> {
                         header[..4].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
                         channel.send.write_all(&header).await?;
                         channel.send.write_all(&bytes).await?;
+                        transfer::network_sent(bytes.len());
                     }
                     anyhow::Ok(())
                 }

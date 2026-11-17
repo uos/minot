@@ -309,7 +309,7 @@ async fn multicast_discovers_default_peers() {
 
 /// Large samples between nodes on one host go through shared memory, in order
 /// with the small ones that stay on QUIC.
-#[cfg(unix)]
+#[cfg(all(feature = "shm", unix))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn large_samples_use_shared_memory_and_keep_their_order() {
     let (_seed, endpoint) = seed().await;
@@ -424,4 +424,43 @@ fn publishing_works_outside_of_tokio() {
             assert_eq!(receive(&mut sub).await, format!("message-{index}"));
         }
     });
+}
+
+/// QUIC samples show up in the transfer report that Zenoh feeds as well.
+#[cfg(feature = "shm")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quic_transfers_feed_the_shared_transfer_report() {
+    let before = mt_sea::client::shm_transfer_stats();
+    let (_seed, endpoint) = seed().await;
+    let writer = peer("writer", &endpoint).await;
+    let reader = peer("reader", &endpoint).await;
+    let mut sub = reader
+        .create_subscriber::<String>("/transfers".to_owned(), 16, Qos::Reliable)
+        .await
+        .unwrap();
+    let publisher = writer
+        .create_publisher::<String>("/transfers".to_owned(), Qos::Reliable)
+        .await
+        .unwrap();
+    publisher
+        .wait_for_subscribers(Duration::from_secs(5))
+        .await
+        .unwrap();
+    for index in 0..10 {
+        publisher
+            .publish(&format!("message-{index}"))
+            .await
+            .unwrap();
+    }
+    for index in 0..10 {
+        assert_eq!(receive(&mut sub).await, format!("message-{index}"));
+    }
+    let delta = mt_sea::client::shm_transfer_stats().since(before);
+    assert!(delta.has_traffic());
+    assert!(
+        delta.send_successes + delta.network_sends >= 10,
+        "{delta:?}"
+    );
+    assert!(delta.receives + delta.network_receives >= 10, "{delta:?}");
+    assert!(delta.send_bytes + delta.network_send_bytes > 0, "{delta:?}");
 }

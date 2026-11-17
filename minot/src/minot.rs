@@ -63,9 +63,11 @@ pub(crate) struct Args {
     pub no_shm: bool,
 
     /// Size of the shared memory buffer pool (e.g., "16MiB", "64MiB", "1GiB").
+    /// Without it the pool takes 16MiB, at most half of the memory lock limit
+    /// (`ulimit -l`), because Zenoh locks its shared memory.
     #[cfg(feature = "shm")]
-    #[arg(long, global = true, default_value = "16MiB", value_parser = parse_bytesize)]
-    pub shm_size: ByteSize,
+    #[arg(long, global = true, value_parser = parse_bytesize)]
+    pub shm_size: Option<ByteSize>,
 
     /// Minimum payload size for SHM transport.
     #[cfg(feature = "shm")]
@@ -2093,7 +2095,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.no_shm {
             std::env::set_var("MINOT_SHM_DISABLED", "1");
         }
-        std::env::set_var("MINOT_SHM_SIZE", args.shm_size.as_u64().to_string());
+        if let Some(size) = args.shm_size {
+            std::env::set_var("MINOT_SHM_SIZE", size.as_u64().to_string());
+        }
         std::env::set_var(
             "MINOT_SHM_THRESHOLD",
             args.shm_threshold.as_u64().to_string(),

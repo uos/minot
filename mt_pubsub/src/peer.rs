@@ -428,8 +428,14 @@ impl<T: Sendable> PeerPublisher<T> {
             rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&sample, buffer)
                 .context("Cannot serialize pub/sub message")?,
         );
+        let len = buffer.len();
         let bytes = ZBytes::from(bytes::Bytes::from_owner(SharedBuffer(buffer.clone())));
         let result = self.send(bytes).await;
+        // Peer mode sends every sample over the network, so the transfer report
+        // shows it as network traffic, in the same format as QUIC.
+        if result.is_ok() {
+            crate::transfer::network_sent(len);
+        }
         // Zenoh copies the sample into its batches while sending, so the buffer
         // is normally ours again. It is not while a retained copy or a local
         // subscriber still holds it; the next publish then allocates.
@@ -662,11 +668,13 @@ impl<T: Sendable> PeerSubscriber<T> {
                     },
                     result = subscriber.recv_async() => {
                         let Ok(sample) = result else { break; };
+                        crate::transfer::zenoh_received(sample.payload());
                         if let Err(error) = enqueue(&mut scratch, sample.payload().slices(), qos, &mut seen, &tx, &quit).await { log::warn!("Peer sample rejected: {error}"); break; }
                     },
                     result = queryable.recv_async() => {
                         let Ok(query) = result else { break; };
                         if let Some(bytes) = query.payload() {
+                            crate::transfer::zenoh_received(bytes);
                             match enqueue(&mut scratch, bytes.slices(), qos, &mut seen, &tx, &quit).await {
                                 Ok(_) => { let _ = query.reply(reader_key.clone(), Vec::<u8>::new()).await; },
                                 Err(error) => { let _ = query.reply_err(error.to_string()).await; }
