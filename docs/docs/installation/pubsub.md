@@ -7,7 +7,7 @@ For using this library in Go, see the [API guide](../features/api.md).
 
 ~~~toml title="Cargo.toml"
 [dependencies]
-mt_pubsub = "0.15.1"
+mt_pubsub = "0.15.2"
 tokio = { version = "1.49", features = ["full"] }
 ~~~
 
