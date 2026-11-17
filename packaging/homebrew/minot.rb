@@ -8,33 +8,33 @@ class Minot < Formula
 
   on_macos do
     on_arm do
-      url "https://codeberg.org/stelzo/minot/releases/download/v#{version}/minot-aarch64-apple-darwin"
+      url "https://codeberg.org/stelzo/minot/releases/download/vVERSION_PLACEHOLDER/minot-aarch64-apple-darwin"
       sha256 "MINOT_SHA256_PLACEHOLDER"
 
       resource "librat.a" do
-        url "https://codeberg.org/stelzo/minot/releases/download/v#{version}/librat-aarch64-apple-darwin.a"
+        url "https://codeberg.org/stelzo/minot/releases/download/vVERSION_PLACEHOLDER/librat-aarch64-apple-darwin.a"
         sha256 "LIBRAT_A_SHA256_PLACEHOLDER"
       end
 
       resource "librat.dylib" do
-        url "https://codeberg.org/stelzo/minot/releases/download/v#{version}/librat-aarch64-apple-darwin.dylib"
+        url "https://codeberg.org/stelzo/minot/releases/download/vVERSION_PLACEHOLDER/librat-aarch64-apple-darwin.dylib"
         sha256 "LIBRAT_DYLIB_SHA256_PLACEHOLDER"
       end
     end
   end
 
   resource "rat.h" do
-    url "https://codeberg.org/stelzo/minot/releases/download/v#{version}/rat.h"
+    url "https://codeberg.org/stelzo/minot/releases/download/vVERSION_PLACEHOLDER/rat.h"
     sha256 "RAT_H_SHA256_PLACEHOLDER"
   end
 
   resource "librat.pc" do
-    url "https://codeberg.org/stelzo/minot/releases/download/v#{version}/librat.pc"
+    url "https://codeberg.org/stelzo/minot/releases/download/vVERSION_PLACEHOLDER/librat.pc"
     sha256 "LIBRAT_PC_SHA256_PLACEHOLDER"
   end
 
   resource "libratConfig.cmake" do
-    url "https://codeberg.org/stelzo/minot/releases/download/v#{version}/libratConfig.cmake"
+    url "https://codeberg.org/stelzo/minot/releases/download/vVERSION_PLACEHOLDER/libratConfig.cmake"
     sha256 "LIBRAT_CMAKE_SHA256_PLACEHOLDER"
   end
 
