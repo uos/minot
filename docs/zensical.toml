@@ -122,3 +122,14 @@ object = "pymdownx.slugs.slugify"
 kwds = { case = "lower" }
 
 [project.plugins.offline]
+
+# Both code hosts in the footer, so the code stays reachable when one is down.
+[[project.extra.social]]
+icon = "simple/codeberg"
+link = "https://codeberg.org/stelzo/minot"
+name = "Code on Codeberg"
+
+[[project.extra.social]]
+icon = "simple/github"
+link = "https://github.com/uos/minot"
+name = "Mirror on GitHub"
