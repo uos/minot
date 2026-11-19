@@ -27,6 +27,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.deb]
 name = "minot"
+maintainer = "stelzo <stelzo@steado.de>"
 section = "science"
 priority = "optional"
 assets = [

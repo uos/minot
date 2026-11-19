@@ -14,6 +14,7 @@ exclude.workspace = true
 
 [package.metadata.deb]
 name = "librat-dev"
+maintainer = "stelzo <stelzo@steado.de>"
 assets = [
     ["rat.h", "usr/include/rat/rat.h", "644"],
     ["librat.pc", "usr/lib/pkgconfig/librat.pc", "644"],
