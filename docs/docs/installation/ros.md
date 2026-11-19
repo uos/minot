@@ -29,6 +29,27 @@ sudo apt install ros-jazzy-minot
 sudo apt install ros-lyrical-minot
 ~~~
 
+The ROS packages install Minot like any other ROS node to
+`/opt/ros/$ROS_DISTRO/lib/minot/minot`, which is not in your `$PATH`. So instead
+of `minot <command>`, call it through the ROS CLI after sourcing ROS:
+
+~~~bash
+ros2 run minot minot sync <file.mt>
+~~~
+
+!!! tip "Short `minot` command"
+
+    The rest of the documentation writes `minot <command>`. To use it
+    the same way, add an alias to your shell config, e.g. `~/.bashrc`:
+
+    ~~~bash
+    alias minot="ros2 run minot minot"
+    ~~~
+
+    Tools that look for the binary themselves, such as the VS Code extension,
+    need it in your `$PATH` instead:
+    `sudo ln -s /opt/ros/$ROS_DISTRO/lib/minot/minot /usr/local/bin/minot`.
+
 You can also use the installation script after sourcing ROS. It selects the
 release matching `$ROS_DISTRO` when a prebuilt binary is available and falls
 back to a source build otherwise.

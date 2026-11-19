@@ -5,6 +5,9 @@ Minot Sync is the terminal-based interface for interacting with Minot. It functi
 After [installing the binary with your chosen embeddings](../../installation/ros.md), you can run the Sync UI with:
 ~~~bash
 minot sync <path>
+
+# when installed through the ROS packages (ros-$ROS_DISTRO-minot)
+ros2 run minot minot sync <path>
 ~~~
 
 The path defines the configuration file for [Bagfile Querying](../bagquery.md) and [Variable Sharing](../varshare.md#minot-sync-with-embedded-coordinator).

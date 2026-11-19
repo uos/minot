@@ -63,7 +63,7 @@ Building will take a while.
 Now run it like any ROS node.
 
 ~~~bash
-ros2 run minot minot tui <file.mt>
+ros2 run minot minot sync <file.mt>
 ~~~
 
 Building from source will create huge incremental cache artifacts. To save time and space, we recommend the binary installation described in the [install documentation](https://minot.steado.tech/docs/installation/packages.html).
